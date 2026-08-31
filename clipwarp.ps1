@@ -577,6 +577,16 @@ if (-not $Quiet) {
     Write-Host 'path copied to clipboard. Switch to Claude Code and press Ctrl+V.' -ForegroundColor Cyan
 }
 
+# Show the same short-lived, non-blocking calendar prompt in manual and watcher
+# conversions. It never reads or writes the clipboard.
+try {
+    Import-Module (Join-Path $PSScriptRoot 'clipwarp-calendar.psm1') -Force
+    $imageTitle = 'Clipboard image ' + (Get-Date -Format 'yyyy-MM-dd HH:mm')
+    Start-ClipwarpCalendarPopup -Kind Image -Title $imageTitle -ImagePath $r.Path -ScriptRoot $PSScriptRoot
+} catch {
+    if (-not $Quiet) { Write-Host "clipwarp: calendar popup could not be shown - $($_.Exception.Message)" -ForegroundColor Yellow }
+}
+
 # Always emit the raw path last so it is usable in a pipeline too.
 $r.Path
 exit 0

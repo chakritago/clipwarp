@@ -141,7 +141,7 @@ if ($PurgeImages) {
 #    any earlier failure leaves a working `clipwarp` + the uninstaller to retry.
 if ($problems.Count -eq 0) {
     $removeOk = $true
-    foreach ($name in @('clipwarp.ps1', 'clipwarp-watch.ps1', 'clipwarp-watch.pid', 'clipwarp-watch.log')) {
+    foreach ($name in @('clipwarp.ps1', 'clipwarp-watch.ps1', 'clipwarp-calendar.psm1', 'clipwarp-calendar-popup.ps1', 'clipwarp-watch.pid', 'clipwarp-watch.log')) {
         $t = Join-Path $scriptsDir $name
         if (Test-Path -LiteralPath $t) {
             try { Remove-Item -LiteralPath $t -Force -ErrorAction Stop; Write-Host "removed $t" -ForegroundColor Green }

@@ -5,7 +5,7 @@
       * One-command (remote):  irm https://raw.githubusercontent.com/botnick/clipwarp/main/install.ps1 | iex
       * From a clone:          git clone https://github.com/botnick/clipwarp; .\clipwarp\install.ps1
 
-    Installs clipwarp.ps1, clipwarp-watch.ps1 and uninstall.ps1 to
+    Installs the clipwarp scripts and calendar popup helper to
     %USERPROFILE%\.claude\scripts and registers a `clipwarp` function (+ `cw`
     alias) in the all-hosts profile of BOTH PowerShell editions. Idempotent, and
     failure-atomic: a mid-way failure rolls back so you never get a half-updated
@@ -44,7 +44,7 @@ function Get-FileEncoding([string]$Path) {
 }
 
 # --- 1. Install the scripts: stage all to temp, then swap in with backup/rollback. ---
-$files    = @('clipwarp.ps1', 'clipwarp-watch.ps1', 'uninstall.ps1')
+$files    = @('clipwarp.ps1', 'clipwarp-watch.ps1', 'clipwarp-calendar.psm1', 'clipwarp-calendar-popup.ps1', 'uninstall.ps1')
 $staged   = @{}
 $backups  = @{}   # name -> backup path (targets that existed before)
 $created  = @()   # target paths that did NOT exist before (delete these on rollback)

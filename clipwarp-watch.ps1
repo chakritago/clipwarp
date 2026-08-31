@@ -3,10 +3,11 @@
     clipwarp-watch - background clipboard watcher for clipwarp.
 
 .DESCRIPTION
-    Listens for clipboard changes (WM_CLIPBOARDUPDATE). Whenever an image lands
-    on the clipboard - from ANY app: Snipping Tool, Lightshot, a browser's
-    "copy image", Ctrl+C on an image file - it runs clipwarp.ps1 -KeepImage, which
-    rewrites the clipboard as DUAL format:
+    Listens for clipboard changes (WM_CLIPBOARDUPDATE). Whenever meaningful text
+    or an image lands on the clipboard, it offers a clickable Google Calendar
+    prompt near the pointer. Images from any app (Snipping Tool, Lightshot, a
+    browser's "copy image", or Ctrl+C on an image file) are also passed to
+    clipwarp.ps1 -KeepImage, which rewrites the clipboard as DUAL format:
 
         text  = the saved image path   -> Ctrl+V in Claude Code attaches the image
         image = the original bitmap    -> Ctrl+V in Photoshop/Word still pastes the image
@@ -14,8 +15,9 @@
     So with the watcher running the flow is just: Ctrl+C anywhere -> Ctrl+V in
     Claude Code. No manual clipwarp step.
 
-    Clipboards that carry meaningful TEXT alongside an image (e.g. copying a
-    paragraph in Word) are left untouched - only pure image copies convert.
+    Clipboards that carry meaningful text alongside an image (e.g. copying a
+    paragraph in Word) are not image-converted; their text is offered as the
+    calendar event title instead.
 
 .USAGE
     clipwarp watch      # start (detached, hidden)
@@ -35,6 +37,7 @@ $scriptsDir = Join-Path $env:USERPROFILE '.claude\scripts'
 $pidFile    = Join-Path $scriptsDir 'clipwarp-watch.pid'
 $logFile    = Join-Path $scriptsDir 'clipwarp-watch.log'
 $clipwarpPath  = Join-Path $PSScriptRoot 'clipwarp.ps1'
+$calendarPopupPath = Join-Path $PSScriptRoot 'clipwarp-calendar-popup.ps1'
 $startupLnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\clipwarp-watch.lnk'
 
 # Tri-state identity for the pid in the pid file, so a reused/stale PID can never
@@ -167,6 +170,7 @@ $src = @'
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
@@ -178,6 +182,8 @@ namespace ClipwarpWatch
         private static extern bool AddClipboardFormatListener(IntPtr hwnd);
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RemoveClipboardFormatListener(IntPtr hwnd);
+        [DllImport("user32.dll")]
+        private static extern uint GetClipboardSequenceNumber();
 
         private const int WM_CLIPBOARDUPDATE = 0x031D;
         private static readonly Regex ImgExt = new Regex(@"\.(png|jpe?g|gif|webp|bmp)$", RegexOptions.IgnoreCase);
@@ -185,12 +191,16 @@ namespace ClipwarpWatch
 
         private readonly string scriptPath;
         private readonly string logPath;
+        private readonly string popupPath;
         private readonly Timer debounce;
         private System.Diagnostics.Process child;
         private DateTime childStarted;
         private const int ChildTimeoutSec = 15;   // a conversion that runs longer is treated as hung
         private int busyRetries;                  // consecutive "clipboard busy" re-arms in this burst
         private int convFails;                    // consecutive failed conversions of the current clipboard
+        private uint lastHandledSequence;
+        private string lastTextFingerprint;
+        private DateTime lastTextAt;
 
         // Re-check soon instead of dropping the event (clipboard was busy, or a
         // conversion is still running). Bounded so a permanently-locked clipboard
@@ -202,9 +212,10 @@ namespace ClipwarpWatch
             debounce.Start();
         }
 
-        public Watcher(string script, string log)
+        public Watcher(string script, string popup, string log)
         {
             scriptPath = script;
+            popupPath = popup;
             logPath = log;
             CreateParams cp = new CreateParams();
             cp.Parent = (IntPtr)(-3);              // HWND_MESSAGE: message-only window
@@ -241,6 +252,10 @@ namespace ClipwarpWatch
 
         private void Inspect()
         {
+            uint sequence = GetClipboardSequenceNumber();
+            // The same clipboard notification is ignored only when no conversion
+            // child needs watchdog/reaping work.
+            if (child == null && sequence != 0 && sequence == lastHandledSequence) return;
             // Observe any conversion child: keep polling while it runs, reap it if
             // it hangs, and inspect its exit code when it finishes so a failed or
             // hung conversion is retried a bounded number of times (never forever).
@@ -284,12 +299,26 @@ namespace ClipwarpWatch
             {
                 string p = txt.Trim().Trim('"');
                 if (ImgExt.IsMatch(p) && File.Exists(p)) { busyRetries = 0; debounce.Interval = 300; return; }  // our own write / usable path
-                if (txt.Trim().Length > 0) { busyRetries = 0; debounce.Interval = 300; return; }                // rich text+image copy: leave it alone
+                string meaningful = txt.Trim();
+                if (meaningful.Length > 0)
+                {
+                    if (meaningful == lastTextFingerprint && (DateTime.Now - lastTextAt).TotalSeconds < 2)
+                    { lastHandledSequence = sequence; return; }
+                    LaunchTextPopup(meaningful);
+                    lastTextFingerprint = meaningful;
+                    lastTextAt = DateTime.Now;
+                    lastHandledSequence = sequence;
+                    busyRetries = 0;
+                    debounce.Interval = 300;
+                    Log("text on clipboard -> calendar popup");
+                    return;
+                }
             }
 
             int payload = HasImagePayload();
             if (payload < 0) { Rearm(); return; }              // clipboard busy -> retry soon
             if (payload == 0) { busyRetries = 0; debounce.Interval = 300; return; }
+            lastHandledSequence = sequence;
 
             debounce.Interval = 300;
             var psi = new System.Diagnostics.ProcessStartInfo();
@@ -305,6 +334,17 @@ namespace ClipwarpWatch
             debounce.Interval = 300;
             debounce.Start();
             Log("image on clipboard -> converting");
+        }
+
+        private void LaunchTextPopup(string title)
+        {
+            string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(title));
+            var psi = new System.Diagnostics.ProcessStartInfo();
+            psi.FileName = "powershell.exe";
+            psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleBase64 " + encoded;
+            psi.CreateNoWindow = true;
+            psi.UseShellExecute = false;
+            System.Diagnostics.Process.Start(psi);
         }
 
         // Tri-state: 1 = an image payload is present, 0 = none, -1 = clipboard
@@ -356,7 +396,7 @@ namespace ClipwarpWatch
 '@
 Add-Type -TypeDefinition $src -ReferencedAssemblies @('System', 'System.Windows.Forms')
 
-$watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $logFile)
+$watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $logFile)
 try {
     [System.Windows.Forms.Application]::Run()   # message pump; blocks until the process is killed
 }

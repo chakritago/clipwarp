@@ -73,7 +73,8 @@ clipwarp autostart   # optional: also start it at every login
 
 While the watcher runs, **every image that lands on the clipboard is converted
 automatically** — snip, Lightshot, browser "Copy image", `Ctrl+C` on an image file.
-Just `Ctrl+V` in Claude Code and the image attaches.
+Just `Ctrl+V` in Claude Code and the image attaches. Meaningful text copies also
+remain unchanged and offer a small clickable Google Calendar prompt near the mouse.
 
 The clipboard is rewritten as **dual format**, so nothing else breaks:
 
@@ -83,7 +84,27 @@ The clipboard is rewritten as **dual format**, so nothing else breaks:
 | Photoshop, Word, Discord, a browser… | the original **image** |
 
 Copies that carry meaningful text alongside an image (e.g. a paragraph from Word)
-are left untouched — only pure image copies convert.
+are left untouched by image conversion and use that text in the calendar prompt.
+
+### Google Calendar prompt
+
+After a meaningful text copy or a successful image conversion, a topmost prompt
+appears near the current pointer and dismisses itself after 12 seconds. Press
+`Enter` or click its button to open an all-day Google Calendar event for the current
+local date; press `Esc` to dismiss it. Text becomes the event title. The prompt does
+not read, replace, or otherwise disturb the clipboard.
+
+For an image, Google Calendar's template URL cannot upload or attach a local file.
+clipwarp therefore opens the event editor with a sensible image title and today's
+date, then opens Explorer with the preserved image selected. **You must drag that
+selected file into the event or use Calendar's attachment control, then save the
+event.** No upload or attachment is claimed, and no OAuth, Drive API, credentials,
+or browser automation are used.
+
+Image paths produced by clipwarp, empty clipboard content, and duplicate clipboard
+notifications do not create prompts. To disable all automatic clipboard handling
+and prompts, run `clipwarp stop`; also run `clipwarp unautostart` if login startup
+was enabled.
 
 ```powershell
 clipwarp status       # is the watcher running? is autostart on?
@@ -108,12 +129,12 @@ clipwarp unautostart  # remove the login autostart
 
 | Command | What it does |
 |---|---|
-| `clipwarp watch` | Start the background auto-converter. |
+| `clipwarp watch` | Start image auto-conversion and text/image Calendar prompts. |
 | `clipwarp autostart` | Start the watcher automatically at every login. |
 | `clipwarp status` | Is the watcher running? Is autostart on? |
 | `clipwarp stop` | Stop the watcher. |
 | `clipwarp unautostart` | Remove the login autostart. |
-| `cw` | Short alias — convert the clipboard image once, then `Ctrl+V`. |
+| `cw` | Convert one clipboard image, show the Calendar prompt, then `Ctrl+V`. |
 
 ## Supported clipboard formats
 
@@ -135,8 +156,9 @@ the clipboard sequence number, so a slow conversion never overwrites a newer cop
 
 ## Privacy & housekeeping
 
-- **100% local.** The image is written to `%USERPROFILE%\.claude\pasted-images` and
-  only its path is put on your clipboard. Nothing touches the network.
+- **Local by default.** Image conversion and storage stay local. Network access
+  occurs only if you click the optional Calendar prompt, which opens Google's
+  normal Calendar website in your browser; clipwarp itself uploads nothing.
 - **Auto-cleanup.** Saved images older than **7 days are deleted automatically**, so the
   folder never grows unbounded and won't clutter your machine.
 
