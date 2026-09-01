@@ -48,10 +48,10 @@ image is on your clipboard into exactly that, automatically:
 One command in **PowerShell**:
 
 ```powershell
-irm https://raw.githubusercontent.com/botnick/clipwarp/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/chakritago/clipwarp/main/install.ps1 | iex
 ```
 
-<sub>Or from a clone: `git clone https://github.com/botnick/clipwarp; .\clipwarp\install.ps1`</sub>
+<sub>Or from a clone: `git clone https://github.com/chakritago/clipwarp; .\clipwarp\install.ps1`</sub>
 
 The installer copies the scripts to `%USERPROFILE%\.claude\scripts` and registers a
 `clipwarp` command (plus a short **`cw`** alias) in the all-hosts profile of **both**
