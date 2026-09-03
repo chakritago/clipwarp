@@ -2,8 +2,6 @@
     clipwarp installer.
 
     Works two ways:
-      * One-command (remote):  irm https://raw.githubusercontent.com/botnick/clipwarp/main/install.ps1 | iex
-      * From a clone:          git clone https://github.com/botnick/clipwarp; .\clipwarp\install.ps1
       * One-command (remote):  irm https://raw.githubusercontent.com/chakritago/clipwarp/main/install.ps1 | iex
       * From a clone:          git clone https://github.com/chakritago/clipwarp; .\clipwarp\install.ps1
 
@@ -17,7 +15,6 @@
 # GitHub's raw host requires TLS 1.2 on Windows PowerShell 5.1.
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-$RawBaseUrl = if ($env:CLIPWARP_RAW_BASE) { $env:CLIPWARP_RAW_BASE } else { 'https://raw.githubusercontent.com/botnick/clipwarp/main' }
 $RawBaseUrl = if ($env:CLIPWARP_RAW_BASE) { $env:CLIPWARP_RAW_BASE } else { 'https://raw.githubusercontent.com/chakritago/clipwarp/main' }
 $scriptsDir = Join-Path $HOME '.claude\scripts'
 
