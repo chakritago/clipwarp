@@ -184,6 +184,11 @@ namespace ClipwarpWatch
         private static extern bool RemoveClipboardFormatListener(IntPtr hwnd);
         [DllImport("user32.dll")]
         private static extern uint GetClipboardSequenceNumber();
+        [DllImport("user32.dll")]
+        private static extern bool GetCursorPos(out POINT point);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT { public int X; public int Y; }
 
         private const int WM_CLIPBOARDUPDATE = 0x031D;
         private static readonly Regex ImgExt = new Regex(@"\.(png|jpe?g|gif|webp|bmp)$", RegexOptions.IgnoreCase);
@@ -201,14 +206,18 @@ namespace ClipwarpWatch
         private uint lastHandledSequence;
         private string lastTextFingerprint;
         private DateTime lastTextAt;
+        private POINT eventPointer;
+        private bool hasEventPointer;
+        private const int EventDelayMs = 75;
+        private const int WatchdogDelayMs = 200;
 
         // Re-check soon instead of dropping the event (clipboard was busy, or a
         // conversion is still running). Bounded so a permanently-locked clipboard
         // can't spin forever - a genuinely new copy will re-fire the listener.
         private void Rearm()
         {
-            if (++busyRetries > 20) { busyRetries = 0; debounce.Interval = 300; return; }
-            debounce.Interval = Math.Min(300 + busyRetries * 150, 2000);
+            if (++busyRetries > 20) { busyRetries = 0; debounce.Interval = EventDelayMs; return; }
+            debounce.Interval = Math.Min(150 + busyRetries * 100, 2000);
             debounce.Start();
         }
 
@@ -221,9 +230,9 @@ namespace ClipwarpWatch
             cp.Parent = (IntPtr)(-3);              // HWND_MESSAGE: message-only window
             CreateHandle(cp);
             if (!AddClipboardFormatListener(this.Handle))
-                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "AddClipboardFormatListener failed");
+                throw new InvalidOperationException("AddClipboardFormatListener failed with Win32 error " + Marshal.GetLastWin32Error());
             debounce = new Timer();
-            debounce.Interval = 300;               // coalesce the bursts some apps fire per copy
+            debounce.Interval = EventDelayMs;      // coalesce format bursts without delaying the popup noticeably
             debounce.Tick += OnTick;
             Log("watch started, pid " + System.Diagnostics.Process.GetCurrentProcess().Id);
         }
@@ -236,7 +245,10 @@ namespace ClipwarpWatch
                 // budget (don't inherit a previous burst's exhausted counter).
                 busyRetries = 0;
                 convFails = 0;
-                debounce.Interval = 300;
+                POINT captured;
+                hasEventPointer = GetCursorPos(out captured);
+                if (hasEventPointer) eventPointer = captured;
+                debounce.Interval = EventDelayMs;
                 debounce.Stop();
                 debounce.Start();
             }
@@ -265,7 +277,7 @@ namespace ClipwarpWatch
                 {
                     if ((DateTime.Now - childStarted).TotalSeconds < ChildTimeoutSec)
                     {
-                        debounce.Interval = 300;   // watchdog poll until it finishes/hangs
+                        debounce.Interval = WatchdogDelayMs; // watchdog poll until it finishes/hangs
                         debounce.Start();
                         return;
                     }
@@ -298,7 +310,7 @@ namespace ClipwarpWatch
             if (!string.IsNullOrEmpty(txt))
             {
                 string p = txt.Trim().Trim('"');
-                if (ImgExt.IsMatch(p) && File.Exists(p)) { busyRetries = 0; debounce.Interval = 300; return; }  // our own write / usable path
+                if (ImgExt.IsMatch(p) && File.Exists(p)) { busyRetries = 0; debounce.Interval = EventDelayMs; return; }  // our own write / usable path
                 string meaningful = txt.Trim();
                 if (meaningful.Length > 0)
                 {
@@ -309,7 +321,7 @@ namespace ClipwarpWatch
                     lastTextAt = DateTime.Now;
                     lastHandledSequence = sequence;
                     busyRetries = 0;
-                    debounce.Interval = 300;
+                    debounce.Interval = EventDelayMs;
                     Log("text on clipboard -> calendar popup");
                     return;
                 }
@@ -317,13 +329,13 @@ namespace ClipwarpWatch
 
             int payload = HasImagePayload();
             if (payload < 0) { Rearm(); return; }              // clipboard busy -> retry soon
-            if (payload == 0) { busyRetries = 0; debounce.Interval = 300; return; }
+            if (payload == 0) { busyRetries = 0; debounce.Interval = EventDelayMs; return; }
             lastHandledSequence = sequence;
 
-            debounce.Interval = 300;
+            debounce.Interval = EventDelayMs;
             var psi = new System.Diagnostics.ProcessStartInfo();
             psi.FileName = "powershell.exe";
-            psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + scriptPath + "\" -Quiet -KeepImage";
+            psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + scriptPath + "\" -Quiet -KeepImage" + PointerArguments();
             psi.CreateNoWindow = true;
             psi.UseShellExecute = false;
             child = System.Diagnostics.Process.Start(psi);
@@ -331,9 +343,14 @@ namespace ClipwarpWatch
             // Arm the watchdog: re-enter Inspect on the timer so a hung child is
             // reaped after ChildTimeoutSec even if no further clipboard event ever
             // fires (a child that hangs before writing produces no WM_CLIPBOARDUPDATE).
-            debounce.Interval = 300;
+            debounce.Interval = WatchdogDelayMs;
             debounce.Start();
             Log("image on clipboard -> converting");
+        }
+
+        private string PointerArguments()
+        {
+            return hasEventPointer ? " -PointerX " + eventPointer.X + " -PointerY " + eventPointer.Y : "";
         }
 
         private void LaunchTextPopup(string title)
@@ -341,7 +358,7 @@ namespace ClipwarpWatch
             string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(title));
             var psi = new System.Diagnostics.ProcessStartInfo();
             psi.FileName = "powershell.exe";
-            psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleBase64 " + encoded;
+            psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleBase64 " + encoded + PointerArguments();
             psi.CreateNoWindow = true;
             psi.UseShellExecute = false;
             System.Diagnostics.Process.Start(psi);
@@ -394,7 +411,14 @@ namespace ClipwarpWatch
     }
 }
 '@
-Add-Type -TypeDefinition $src -ReferencedAssemblies @('System', 'System.Windows.Forms')
+if ($PSVersionTable.PSEdition -eq 'Core') {
+    $references = @([AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator)
+    $references += [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object Location | ForEach-Object Location
+    Add-Type -TypeDefinition $src -ReferencedAssemblies ($references | Select-Object -Unique)
+}
+else {
+    Add-Type -TypeDefinition $src -ReferencedAssemblies @('System', 'System.Windows.Forms')
+}
 
 $watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $logFile)
 try {

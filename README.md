@@ -56,8 +56,10 @@ irm https://raw.githubusercontent.com/chakritago/clipwarp/main/install.ps1 | iex
 The installer copies the scripts to `%USERPROFILE%\.claude\scripts` and registers a
 `clipwarp` command (plus a short **`cw`** alias) in the all-hosts profile of **both**
 PowerShell editions — Windows PowerShell 5.1 and PowerShell 7 — so it works whichever
-one you open. Idempotent; re-run any time to update. Open a **new** terminal
-afterwards (or run `. $PROFILE`) so the command is found.
+one you open. Idempotent; re-run any time to update. After a successful install,
+the clipboard watcher starts immediately for the current session. This does **not**
+enable login autostart. Open a **new** terminal afterwards (or run `. $PROFILE`) so
+the command is found.
 
 > No admin rights, no services, no dependencies — plain PowerShell and .NET classes
 > that ship with Windows. Everything runs **locally**; images never leave your machine.
@@ -67,7 +69,7 @@ afterwards (or run `. $PROFILE`) so the command is found.
 ### Automatic (recommended) — plain `Ctrl+C` → `Ctrl+V`
 
 ```powershell
-clipwarp watch       # start the background clipboard watcher, once
+clipwarp watch       # start it again if you previously ran `clipwarp stop`
 clipwarp autostart   # optional: also start it at every login
 ```
 
@@ -89,7 +91,8 @@ are left untouched by image conversion and use that text in the calendar prompt.
 ### Google Calendar prompt
 
 After a meaningful text copy or a successful image conversion, a topmost prompt
-appears near the current pointer and dismisses itself after 12 seconds. Press
+appears directly below the pointer position captured when you copied, stays within
+the correct monitor's working area, and dismisses itself after 12 seconds. Press
 `Enter` or click its button to open an all-day Google Calendar event for the current
 local date; press `Esc` to dismiss it. Text becomes the event title. The prompt does
 not read, replace, or otherwise disturb the clipboard.
@@ -129,7 +132,7 @@ clipwarp unautostart  # remove the login autostart
 
 | Command | What it does |
 |---|---|
-| `clipwarp watch` | Start image auto-conversion and text/image Calendar prompts. |
+| `clipwarp watch` | Start image auto-conversion and text/image Calendar prompts again after stopping it. |
 | `clipwarp autostart` | Start the watcher automatically at every login. |
 | `clipwarp status` | Is the watcher running? Is autostart on? |
 | `clipwarp stop` | Stop the watcher. |

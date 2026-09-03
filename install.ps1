@@ -131,24 +131,33 @@ foreach ($profilePath in $profilePaths) {
 # --- 3. Load into the current session so it works immediately. ---
 try { . $cur } catch {}
 
-# --- 4. If a watcher was already running (an update), restart it on the new script. ---
+# --- 4. Start the watcher after a fully successful install. Updates restart an
+# existing watcher so it runs the newly installed script. This does not create a
+# login shortcut; `clipwarp autostart` remains the only opt-in for that behavior.
 $installedWatch = Join-Path $scriptsDir 'clipwarp-watch.ps1'
-& $installedWatch -Status *> $null
-$watchState = $LASTEXITCODE
-if ($watchState -eq 2) {
-    $problems += "a running watcher could not be verified - it was NOT restarted, so it may still run the old version. Stop it manually and run 'clipwarp watch'."
-}
-elseif ($watchState -eq 0) {
-    & $installedWatch -Stop *> $null
-    if ($LASTEXITCODE -ne 0) {
-        $problems += "could not stop the running watcher to update it - it may still run the old version."
+if ($problems.Count -eq 0) {
+    & $installedWatch -Status *> $null
+    $watchState = $LASTEXITCODE
+    if ($watchState -eq 2) {
+        $problems += "a running watcher could not be verified - it was NOT restarted, so it may still run the old version. Stop it manually and run 'clipwarp watch'."
     }
     else {
+        if ($watchState -eq 0) {
+            & $installedWatch -Stop *> $null
+            if ($LASTEXITCODE -ne 0) {
+                $problems += "could not stop the running watcher to update it - it may still run the old version."
+            }
+        }
+    }
+    if ($problems.Count -eq 0) {
         & $installedWatch *> $null
         $startCode = $LASTEXITCODE
         & $installedWatch -Status *> $null
-        if ($startCode -eq 0 -and $LASTEXITCODE -eq 0) { Write-Host "restarted the running watcher on the updated version" -ForegroundColor Green }
-        else { $problems += "the watcher was stopped but did not restart - run 'clipwarp watch' to resume auto mode." }
+        if ($startCode -eq 0 -and $LASTEXITCODE -eq 0) {
+            $verb = if ($watchState -eq 0) { 'restarted' } else { 'started' }
+            Write-Host "$verb the clipboard watcher" -ForegroundColor Green
+        }
+        else { $problems += "the watcher did not start - run 'clipwarp watch' to start it manually." }
     }
 }
 
@@ -166,11 +175,10 @@ if ($problems.Count -gt 0) {
     exit 1
 }
 
-Write-Host "clipwarp installed. Usage:" -ForegroundColor Cyan
+Write-Host "clipwarp installed and the clipboard watcher is running." -ForegroundColor Cyan
 Write-Host "  1) snip or Ctrl+C an image anywhere (Win+Shift+S, Lightshot, browser...)"
-Write-Host "  2) run             clipwarp   (or just: cw)"
-Write-Host "  3) in Claude Code  press Ctrl+V"
+Write-Host "  2) in Claude Code, press Ctrl+V"
 Write-Host ""
-Write-Host "Auto mode (no step 2): run 'clipwarp watch' once - then plain Ctrl+C -> Ctrl+V." -ForegroundColor Cyan
+Write-Host "Login autostart remains off. Run 'clipwarp autostart' only if you want it." -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Open a NEW terminal (or run '. `$PROFILE') if 'clipwarp' isn't found yet." -ForegroundColor DarkGray

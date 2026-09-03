@@ -25,6 +25,7 @@
     convert (default) - do one clipboard conversion now.
     watch | stop | status - control the background watcher (clipwarp-watch.ps1)
     that converts automatically on every copy, so plain Ctrl+C -> Ctrl+V works.
+    A successful install starts the watcher once; autostart remains explicit.
 
 .PARAMETER OutDir
     Folder for saved PNGs. Default: %USERPROFILE%\.claude\pasted-images
@@ -53,7 +54,9 @@ param(
     [string]$Command = 'convert',
     [string]$OutDir = (Join-Path $env:USERPROFILE '.claude\pasted-images'),
     [switch]$Quiet,
-    [switch]$KeepImage
+    [switch]$KeepImage,
+    [Nullable[int]]$PointerX,
+    [Nullable[int]]$PointerY
 )
 
 if ($Command -ne 'convert') {
@@ -582,7 +585,7 @@ if (-not $Quiet) {
 try {
     Import-Module (Join-Path $PSScriptRoot 'clipwarp-calendar.psm1') -Force
     $imageTitle = 'Clipboard image ' + (Get-Date -Format 'yyyy-MM-dd HH:mm')
-    Start-ClipwarpCalendarPopup -Kind Image -Title $imageTitle -ImagePath $r.Path -ScriptRoot $PSScriptRoot
+    Start-ClipwarpCalendarPopup -Kind Image -Title $imageTitle -ImagePath $r.Path -PointerX $PointerX -PointerY $PointerY -ScriptRoot $PSScriptRoot
 } catch {
     if (-not $Quiet) { Write-Host "clipwarp: calendar popup could not be shown - $($_.Exception.Message)" -ForegroundColor Yellow }
 }
