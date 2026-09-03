@@ -9,6 +9,7 @@
 <meta name="robots" content="index, follow">
 <meta name="theme-color" content="#FFF5EC">
 <link rel="canonical" href="https://botnick.github.io/clipwarp/">
+<link rel="canonical" href="https://chakritago.github.io/clipwarp/">
 <link rel="icon" href="assets/favicon.png" type="image/png">
 <link rel="apple-touch-icon" href="assets/favicon.png">
 <meta property="og:type" content="website">
@@ -17,6 +18,8 @@
 <meta property="og:description" content="Copy an image anywhere, press Ctrl+V in Claude Code, and it attaches. A tiny local PowerShell utility.">
 <meta property="og:url" content="https://botnick.github.io/clipwarp/">
 <meta property="og:image" content="https://botnick.github.io/clipwarp/assets/og.png">
+<meta property="og:url" content="https://chakritago.github.io/clipwarp/">
+<meta property="og:image" content="https://chakritago.github.io/clipwarp/assets/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:locale" content="en_US">
@@ -25,11 +28,13 @@
 <meta name="twitter:title" content="clipwarp — Paste screenshots into Claude Code on Windows">
 <meta name="twitter:description" content="Copy an image anywhere, press Ctrl+V in Claude Code, and it attaches.">
 <meta name="twitter:image" content="https://botnick.github.io/clipwarp/assets/og.png">
+<meta name="twitter:image" content="https://chakritago.github.io/clipwarp/assets/og.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800;900&family=Noto+Sans+Thai:wght@500;600;700;800&display=swap" rel="stylesheet">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"SoftwareApplication","name":"clipwarp","description":"Paste clipboard images into Claude Code on native Windows.","url":"https://botnick.github.io/clipwarp/","image":"https://botnick.github.io/clipwarp/assets/og.png","applicationCategory":"DeveloperApplication","operatingSystem":"Windows 10, Windows 11","softwareRequirements":"Windows PowerShell 5.1 or PowerShell 7","license":"https://opensource.org/licenses/MIT","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"clipwarp","description":"Paste clipboard images into Claude Code on native Windows.","url":"https://chakritago.github.io/clipwarp/","image":"https://chakritago.github.io/clipwarp/assets/og.png","applicationCategory":"DeveloperApplication","operatingSystem":"Windows 10, Windows 11","softwareRequirements":"Windows PowerShell 5.1 or PowerShell 7","license":"https://opensource.org/licenses/MIT","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
 </script>
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
@@ -194,6 +199,7 @@
     <a class="brand" href="#top"><img src="assets/favicon.png" alt="" width="30" height="30"><span>clip<b>warp</b></span></a>
     <div class="nav-right">
       <a class="ghlink" href="https://github.com/botnick/clipwarp">
+      <a class="ghlink" href="https://github.com/chakritago/clipwarp">
         <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" style="stroke:none;fill:currentColor"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.36 1.09 2.94.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></svg>
         <span class="ghtxt">GitHub</span>
       </a>
@@ -229,6 +235,7 @@
     <div class="cmd">
       <span class="ps">PS&gt;</span>
       <code id="cmd">irm https://raw.githubusercontent.com/botnick/clipwarp/main/install.ps1 | iex</code>
+      <code id="cmd">irm https://raw.githubusercontent.com/chakritago/clipwarp/main/install.ps1 | iex</code>
       <button class="copy" id="copyBtn" type="button"><span id="copyLabel"><span data-lang-en>Copy</span><span data-lang-th>คัดลอก</span></span></button>
     </div>
     <p class="hint"><span data-lang-en>Then run <code>clipwarp watch</code> once — and you're done.</span><span data-lang-th>แล้วรัน <code>clipwarp watch</code> ครั้งเดียว — จบ</span></p>
@@ -323,6 +330,7 @@
   <div class="wrap foot">
     <div class="fb"><img src="assets/favicon.png" alt="" width="26" height="26">clipwarp</div>
     <div class="lx"><a href="https://github.com/botnick/clipwarp">GitHub</a><a href="https://github.com/botnick/clipwarp/blob/main/LICENSE">MIT License</a><a href="https://claude.com/claude-code">Claude Code</a></div>
+    <div class="lx"><a href="https://github.com/chakritago/clipwarp">GitHub</a><a href="https://github.com/chakritago/clipwarp/blob/main/LICENSE">MIT License</a><a href="https://claude.com/claude-code">Claude Code</a></div>
     <p style="font-size:.9rem"><span data-lang-en>Made for Claude Code on Windows.</span><span data-lang-th>ทำเพื่อ Claude Code บน Windows</span></p>
   </div>
 </footer>
