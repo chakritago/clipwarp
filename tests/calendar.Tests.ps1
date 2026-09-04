@@ -65,6 +65,7 @@ Assert-Equal $false ($nullPointerArgs -contains '-PointerX') 'popup arguments pr
 
 $timed = ConvertFrom-ClipwarpCalendarText -Text 'Review 2026-09-15 14:30' -LocalDate $date
 Assert-Equal 'Review' $timed.Title 'strict parser removes an explicit ISO date and time from the title'
+Assert-Equal 'Review 2026-09-15 14:30' $timed.OriginalText 'strict parser retains the complete original clipboard text for details'
 Assert-Equal ([datetime]::new(2026, 9, 15, 14, 30, 0, [DateTimeKind]::Local)) $timed.Start 'strict parser reads an explicit ISO date and 24-hour time'
 Assert-Equal ([datetime]::new(2026, 9, 15, 15, 30, 0, [DateTimeKind]::Local)) $timed.End 'timed events default to one hour'
 $timedUrl = New-ClipwarpCalendarUrl -Title $timed.Title -Start $timed.Start -End $timed.End
@@ -83,6 +84,15 @@ $payload = Format-ClipwarpCalendarPayload -Title ((('A' * 90) + "`r`n") + ('B' *
 Assert-Equal 80 $payload.Title.Length 'payload formatter limits normalized title'
 Assert-Equal $true $payload.Details.StartsWith('existing') 'payload formatter preserves supplied details before overflow'
 Assert-Equal $true $payload.Details.Contains('BBBB') 'payload formatter partitions title overflow into details'
+$multilineOriginal = "First line`r`nSecond line with caf$([char]0x00E9) and $([char]::ConvertFromUtf32(0x1F680)) " + ('tail ' * 30)
+$multilinePayload = Format-ClipwarpCalendarPayload -Title $multilineOriginal -MaxTitleLength 60
+Assert-Equal $true ($multilinePayload.Title.Length -le 60) 'long multiline clipboard text gets a concise title'
+Assert-Equal $false ($multilinePayload.Title -match "`r|`n") 'calendar title is single-line safe text'
+Assert-Equal $multilineOriginal $multilinePayload.Details 'details preserve the complete original Unicode and multiline text'
+$multilineUrl = New-ClipwarpCalendarUrl -Title $multilineOriginal -LocalDate $date
+Assert-Equal $true ($multilineUrl.Length -le 1900) 'multiline details preserve the existing URL bound'
+$encodedMultilineDetails = ($multilineUrl -split '&details=', 2)[1]
+Assert-Equal $multilineOriginal ([Uri]::UnescapeDataString($encodedMultilineDetails)) 'Google Calendar URL details contain the complete original text when within the bound'
 $boundedUrl = New-ClipwarpCalendarUrl -Title ('x' * 5000) -LocalDate $date
 Assert-Equal $true ($boundedUrl.Length -le 1900) 'calendar URL is bounded for oversized copied text'
 $surrogateSafeUrl = New-ClipwarpCalendarUrl -Title ('x' + (([char]::ConvertFromUtf32(0x1F680)) * 1000)) -LocalDate $date

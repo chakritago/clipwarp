@@ -55,9 +55,15 @@ Add-Type -AssemblyName System.Drawing
 
 $duration = Get-ClipwarpCalendarDefaultDuration
 $event = if ($Kind -eq 'Text') { ConvertFrom-ClipwarpCalendarText -Text $Title -LocalDate (Get-Date) -DefaultDurationMinutes $duration } else { [pscustomobject]@{ Title=$Title; IsTimed=$false; LocalDate=(Get-Date).Date } }
-$details = if ($Kind -eq 'Image') { Get-ClipwarpImageCalendarDetails -ImagePath $ImagePath -Mode (Get-ClipwarpCalendarImageDetails) } else { $null }
+$calendarTitle = $event.Title
+$details = if ($Kind -eq 'Image') {
+    Get-ClipwarpImageCalendarDetails -ImagePath $ImagePath -Mode (Get-ClipwarpCalendarImageDetails)
+} elseif ($Title.Length -gt 120 -or $Title -match "`r|`n") {
+    $calendarTitle = (Format-ClipwarpCalendarPayload -Title $event.Title).Title
+    $Title
+} else { $null }
 $zone = Get-ClipwarpCalendarTimeZone
-$url = if ($event.IsTimed) { New-ClipwarpCalendarUrl -Title $event.Title -Start $event.Start -End $event.End -Details $details -TimeZone $zone } else { New-ClipwarpCalendarUrl -Title $event.Title -LocalDate $event.LocalDate -Details $details }
+$url = if ($event.IsTimed) { New-ClipwarpCalendarUrl -Title $calendarTitle -Start $event.Start -End $event.End -Details $details -TimeZone $zone } else { New-ClipwarpCalendarUrl -Title $calendarTitle -LocalDate $event.LocalDate -Details $details }
 $preview = Get-ClipwarpCalendarPreview -Event $event
 $calendarUri = $null
 if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$calendarUri) -or

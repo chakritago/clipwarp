@@ -118,10 +118,13 @@ was enabled.
 Calendar prompting defaults to enabled. Its setting is stored in
 `%USERPROFILE%\.claude\clipwarp.json`; a missing or unreadable/corrupt file safely
 falls back to enabled. Use `clipwarp calendar enable|disable|status` instead of
-editing the file by hand. Very long Unicode titles use a temporary UTF-8 file so
-they do not exceed Windows command-line limits; the popup consumes and removes it.
-Calendar URLs cap and split long titles into event details, include a mapped IANA
-timezone for timed events when available, and remain bounded. Image paths are never
+editing the file by hand. Very long Unicode text uses a temporary UTF-8 file so
+it does not exceed Windows command-line limits; the popup consumes and removes it.
+Long or multiline clipboard text gets a concise, single-line event title and the
+complete original text is placed in event details when it fits the bounded Google
+Calendar URL transport. Timed-event parsing retains the original clipboard text for
+those details. Calendar URLs include a mapped IANA timezone for timed events and
+remain bounded. Image paths are never
 included by default. `clipwarp calendar image-details enable` opts into sending only
 the filename to Google when a prompt is accepted; `full-path` is a separate, less
 private opt-in. Use `clipwarp calendar duration 45` to change the single-time default

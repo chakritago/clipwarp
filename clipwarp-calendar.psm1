@@ -22,25 +22,19 @@ function Format-ClipwarpCalendarPayload {
         [ValidateRange(256, 8192)][int]$MaxUrlLength = 1900,
         [int]$UrlOverhead = 160
     )
-    $clean = ($Title -replace '\r\n?', "`n").Trim()
+    $original = $Title
+    $clean = ($Title -replace '\s+', ' ').Trim()
     if ([string]::IsNullOrWhiteSpace($clean)) { $clean = 'Clipboard event' }
     $eventTitle = $clean
-    $overflow = $null
     if ($clean.Length -gt $MaxTitleLength) {
         $cut = $MaxTitleLength
         if ($cut -gt 0 -and $cut -lt $clean.Length -and [char]::IsHighSurrogate($clean[$cut - 1]) -and [char]::IsLowSurrogate($clean[$cut])) { $cut-- }
         $eventTitle = $clean.Substring(0, $cut).TrimEnd()
-        $overflow = $clean.Substring($cut).TrimStart()
     }
-    $parts = @($Details, $overflow) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $isLongText = $clean.Length -gt $MaxTitleLength -or $original -match "`r|`n"
+    $parts = @($Details, $(if ($isLongText) { $original })) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     $eventDetails = ($parts -join "`n`n")
-    $budget = [Math]::Max(0, $MaxUrlLength - $UrlOverhead - [Uri]::EscapeDataString($eventTitle).Length)
-    while ($eventDetails.Length -gt 0 -and [Uri]::EscapeDataString($eventDetails).Length -gt $budget) {
-        $remove = 1
-        if ($eventDetails.Length -gt 1 -and [char]::IsLowSurrogate($eventDetails[$eventDetails.Length - 1]) -and [char]::IsHighSurrogate($eventDetails[$eventDetails.Length - 2])) { $remove = 2 }
-        $eventDetails = $eventDetails.Substring(0, $eventDetails.Length - $remove).TrimEnd()
-    }
-    [pscustomobject]@{ Title=$eventTitle; Details=if($eventDetails){$eventDetails}else{$null}; WasTruncated=($clean.Length -gt $MaxTitleLength -or $parts.Count -gt 0 -and -not $eventDetails) }
+    [pscustomobject]@{ Title=$eventTitle; Details=if($eventDetails){$eventDetails}else{$null}; WasTruncated=($clean.Length -gt $MaxTitleLength) }
 }
 
 function Get-ClipwarpCalendarTimeZone {
@@ -108,10 +102,10 @@ function ConvertFrom-ClipwarpCalendarText {
             if ($m.Groups['end'].Success) {
                 $candidate = [datetime]::MinValue
                 [void][datetime]::TryParseExact(($m.Groups['date'].Value + ' ' + $m.Groups['end'].Value), 'yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeLocal, [ref]$candidate)
-                if ($candidate -le $parsed) { return [pscustomobject]@{ Title=$trimmed; IsTimed=$false; Start=$null; End=$null; LocalDate=$LocalDate.Date } }
+                if ($candidate -le $parsed) { return [pscustomobject]@{ Title=$trimmed; OriginalText=$Text; IsTimed=$false; Start=$null; End=$null; LocalDate=$LocalDate.Date } }
                 $end = $candidate
             }
-            return [pscustomobject]@{ Title=$title; IsTimed=$true; Start=$parsed; End=$end }
+            return [pscustomobject]@{ Title=$title; OriginalText=$Text; IsTimed=$true; Start=$parsed; End=$end }
         }
     }
     $dateMatch = [regex]::Match($trimmed, '(?<!\d)(?<date>\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))(?![\dT])')
@@ -120,10 +114,10 @@ function ConvertFrom-ClipwarpCalendarText {
         if ([datetime]::TryParseExact($dateMatch.Groups['date'].Value, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeLocal, [ref]$parsedDate)) {
             $title = ($trimmed.Remove($dateMatch.Index, $dateMatch.Length) -replace '^[\s\-–—,:]+|[\s\-–—,:]+$', '').Trim()
             if ([string]::IsNullOrWhiteSpace($title)) { $title = $trimmed }
-            return [pscustomobject]@{ Title=$title; IsTimed=$false; Start=$null; End=$null; LocalDate=$parsedDate.Date }
+            return [pscustomobject]@{ Title=$title; OriginalText=$Text; IsTimed=$false; Start=$null; End=$null; LocalDate=$parsedDate.Date }
         }
     }
-    [pscustomobject]@{ Title=$trimmed; IsTimed=$false; Start=$null; End=$null; LocalDate=$LocalDate.Date }
+    [pscustomobject]@{ Title=$trimmed; OriginalText=$Text; IsTimed=$false; Start=$null; End=$null; LocalDate=$LocalDate.Date }
 }
 
 function Get-ClipwarpImageCalendarDetails {
