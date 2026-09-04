@@ -77,6 +77,8 @@ While the watcher runs, **every image that lands on the clipboard is converted
 automatically** — snip, Lightshot, browser "Copy image", `Ctrl+C` on an image file.
 Just `Ctrl+V` in Claude Code and the image attaches. Meaningful text copies also
 remain unchanged and offer a small clickable Google Calendar prompt near the mouse.
+Calendar prompts can be disabled independently with `clipwarp calendar disable`;
+image conversion continues normally.
 
 The clipboard is rewritten as **dual format**, so nothing else breaks:
 
@@ -93,9 +95,13 @@ are left untouched by image conversion and use that text in the calendar prompt.
 After a meaningful text copy or a successful image conversion, a topmost prompt
 appears directly below the pointer position captured when you copied, stays within
 the correct monitor's working area, and dismisses itself after 12 seconds. Press
-`Enter` or click its button to open an all-day Google Calendar event for the current
-local date; press `Esc` to dismiss it. Text becomes the event title. The prompt does
-not read, replace, or otherwise disturb the clipboard.
+`Enter` or click its button to open Google Calendar; press `Esc` to dismiss it.
+Copied text containing an explicit ISO local date and 24-hour time, such as
+`Review 2026-09-15 14:30`, creates a timed event; a range such as
+`Meeting 2026-09-15 14:00-15:30` sets an explicit end. An ISO date without a
+time creates an all-day event on that date. Strict parsing deliberately rejects
+ambiguous natural language and falls back to the existing all-day event for the
+current local date. The prompt does not read, replace, or otherwise disturb the clipboard.
 
 For an image, Google Calendar's template URL cannot upload or attach a local file.
 clipwarp therefore opens the event editor with a sensible image title and today's
@@ -108,6 +114,30 @@ Image paths produced by clipwarp, empty clipboard content, and duplicate clipboa
 notifications do not create prompts. To disable all automatic clipboard handling
 and prompts, run `clipwarp stop`; also run `clipwarp unautostart` if login startup
 was enabled.
+
+Calendar prompting defaults to enabled. Its setting is stored in
+`%USERPROFILE%\.claude\clipwarp.json`; a missing or unreadable/corrupt file safely
+falls back to enabled. Use `clipwarp calendar enable|disable|status` instead of
+editing the file by hand. Very long Unicode titles use a temporary UTF-8 file so
+they do not exceed Windows command-line limits; the popup consumes and removes it.
+Calendar URLs cap and split long titles into event details, include a mapped IANA
+timezone for timed events when available, and remain bounded. Image paths are never
+included by default. `clipwarp calendar image-details enable` opts into sending only
+the filename to Google when a prompt is accepted; `full-path` is a separate, less
+private opt-in. Use `clipwarp calendar duration 45` to change the single-time default
+(1–1440 minutes), or `duration status` to inspect it.
+
+`clipwarp calendar export -Title 'Planning 2026-09-15 14:00-15:00' [-Details '...'] [-Path event.ics] [-TimeZone 'SE Asia Standard Time']`
+creates a local RFC 5545 `.ics` file. It does not open Google or change the clipboard;
+only the explicit `-Clipboard` switch copies the exported file path as text. Export
+uses the same strict ISO parser and configured default duration as the popup, and
+accepts either a Windows or IANA timezone ID. `SE Asia Standard Time` maps to
+`Asia/Bangkok`; unknown Windows IDs safely omit timezone metadata. Popup previews
+show only the event title and parsed date/time. The watcher replaces a prior text
+popup it owns, and a process-wide popup guard prevents independently launched text
+and image prompts from accumulating concurrently. Bounded cleanup removes only old
+`clipwarp-title-<GUID>.txt` transport files. In-process image conversion remains
+future work.
 
 ```powershell
 clipwarp status       # is the watcher running? is autostart on?
@@ -137,6 +167,14 @@ clipwarp unautostart  # remove the login autostart
 | `clipwarp status` | Is the watcher running? Is autostart on? |
 | `clipwarp stop` | Stop the watcher. |
 | `clipwarp unautostart` | Remove the login autostart. |
+| `clipwarp calendar enable\|disable\|status` | Configure Calendar prompts without changing image conversion or watcher state. |
+| `clipwarp calendar image-details enable\|full-path\|disable\|status` | Control whether image event details expose nothing (default), a filename, or a full local path. |
+| `clipwarp calendar duration <minutes>\|status` | Set or inspect the default duration for a single explicit time. |
+| `clipwarp calendar export -Title <text> [-Details <text>] [-Path <file>] [-TimeZone <id>] [-Clipboard]` | Parse strict ISO date/time text and export a local `.ics`; only `-Clipboard` copies its path as text. |
+| `clipwarp history -Limit 20` | List saved clipwarp images newest-first (maximum 100). Never changes the clipboard. |
+| `clipwarp recopy [index\|path]` | Explicitly copy the newest saved image path, a 1-based history index, or a named managed image path to the clipboard. |
+| `clipwarp clean -Before <date>` | Delete only direct-child `clip-*` image files older than the cutoff (default 7 days). |
+| `clipwarp doctor` | Read-only diagnostics for scripts, profiles, watcher/autostart indicators, PowerShell policy, config, output path, and repository URL drift. |
 | `cw` | Convert one clipboard image, show the Calendar prompt, then `Ctrl+V`. |
 
 ## Supported clipboard formats
@@ -164,6 +202,12 @@ the clipboard sequence number, so a slow conversion never overwrites a newer cop
   normal Calendar website in your browser; clipwarp itself uploads nothing.
 - **Auto-cleanup.** Saved images older than **7 days are deleted automatically**, so the
   folder never grows unbounded and won't clutter your machine.
+- **Safe history tools.** `history` is bounded and read-only. `clean` refuses a drive
+  root and only deletes matching managed files directly inside `-OutDir`; `recopy` is
+  the only history command that writes to the clipboard.
+- **Performance roadmap.** Image conversion still uses an isolated PowerShell child
+  process for compatibility with the multi-format decoder and both PowerShell editions;
+  an in-process conversion path remains future work and requires separate benchmarking.
 
 ## Scripting
 

@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory = $true)][ValidateSet('Text', 'Image')][string]$Kind,
     [string]$Title,
     [string]$TitleBase64,
+    [string]$TitleFileBase64,
+    [string]$TitleFile,
     [string]$ImagePath,
     [string]$ImagePathBase64,
     [Nullable[int]]$PointerX,
@@ -10,11 +12,20 @@ param(
     [int]$TimeoutSeconds = 12
 )
 
-if ($TitleBase64) { $Title = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($TitleBase64)) }
+if ($TitleFileBase64) { $TitleFile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($TitleFileBase64)) }
+if ($TitleFile) {
+    try { $Title = [IO.File]::ReadAllText($TitleFile, [Text.Encoding]::UTF8) }
+    finally { Remove-Item -LiteralPath $TitleFile -Force -ErrorAction SilentlyContinue }
+} elseif ($TitleBase64) { $Title = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($TitleBase64)) }
 if ($ImagePathBase64) { $ImagePath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ImagePathBase64)) }
 if ([string]::IsNullOrWhiteSpace($Title)) { exit 1 }
 
 Import-Module (Join-Path $PSScriptRoot 'clipwarp-calendar.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
+$popupMutex = New-Object Threading.Mutex($false, 'Local\clipwarp-calendar-popup')
+$ownsPopupMutex = $false
+try { $ownsPopupMutex = $popupMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $ownsPopupMutex = $true }
+if (-not $ownsPopupMutex) { $popupMutex.Dispose(); exit 0 }
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -42,7 +53,12 @@ public static class ClipwarpPopupNative {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-$url = New-ClipwarpCalendarUrl -Title $Title -LocalDate (Get-Date)
+$duration = Get-ClipwarpCalendarDefaultDuration
+$event = if ($Kind -eq 'Text') { ConvertFrom-ClipwarpCalendarText -Text $Title -LocalDate (Get-Date) -DefaultDurationMinutes $duration } else { [pscustomobject]@{ Title=$Title; IsTimed=$false; LocalDate=(Get-Date).Date } }
+$details = if ($Kind -eq 'Image') { Get-ClipwarpImageCalendarDetails -ImagePath $ImagePath -Mode (Get-ClipwarpCalendarImageDetails) } else { $null }
+$zone = Get-ClipwarpCalendarTimeZone
+$url = if ($event.IsTimed) { New-ClipwarpCalendarUrl -Title $event.Title -Start $event.Start -End $event.End -Details $details -TimeZone $zone } else { New-ClipwarpCalendarUrl -Title $event.Title -LocalDate $event.LocalDate -Details $details }
+$preview = Get-ClipwarpCalendarPreview -Event $event
 $calendarUri = $null
 if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$calendarUri) -or
     $calendarUri.Scheme -ne 'https' -or $calendarUri.Host -ne 'calendar.google.com') { exit 1 }
@@ -108,7 +124,7 @@ $message.AutoSize = $false
 $message.Location = New-Object Drawing.Point $metrics.Padding, $metrics.MessageTop
 $message.Size = New-Object Drawing.Size $contentWidth, $metrics.MessageHeight
 $message.ForeColor = [Drawing.Color]::FromArgb(71, 85, 105)
-$message.Text = if ($Kind -eq 'Image') { 'Create today''s event, then attach the selected image file manually.' } else { 'Create an all-day event today using the copied text as its title.' }
+$message.Text = $preview
 $message.AccessibleName = $message.Text
 $form.Controls.Add($message)
 
@@ -121,7 +137,7 @@ $button.BackColor = [Drawing.Color]::FromArgb(37, 99, 235)
 $button.ForeColor = [Drawing.Color]::White
 $button.Font = New-Object Drawing.Font 'Segoe UI Semibold', 9
 $button.Cursor = [Windows.Forms.Cursors]::Hand
-$button.Text = if ($Kind -eq 'Image') { 'Create event and select image' } else { 'Create all-day event' }
+$button.Text = if ($Kind -eq 'Image') { 'Create event and select image' } elseif ($event.IsTimed) { 'Create timed event' } else { 'Create all-day event' }
 $button.AccessibleName = $button.Text
 $button.TabIndex = 0
 $form.AcceptButton = $button
@@ -155,3 +171,4 @@ $form.Add_Shown({
 [void]$form.ShowDialog()
 $timer.Dispose()
 $form.Dispose()
+try { $popupMutex.ReleaseMutex() } finally { $popupMutex.Dispose() }

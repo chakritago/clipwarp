@@ -26,6 +26,12 @@
     watch | stop | status - control the background watcher (clipwarp-watch.ps1)
     that converts automatically on every copy, so plain Ctrl+C -> Ctrl+V works.
     A successful install starts the watcher once; autostart remains explicit.
+    calendar enable|disable|status - configure Calendar prompts independently.
+    calendar image-details enable|full-path|disable|status - image path privacy.
+    calendar duration <minutes>|status - timed-event default (1-1440 minutes).
+    calendar export -Title <text> [-Details <text>] [-Path <file>] [-TimeZone <id>] - local ICS.
+    history | recopy | clean - inspect, explicitly recopy, or prune saved images.
+    doctor - run read-only installation and environment diagnostics.
 
 .PARAMETER OutDir
     Folder for saved PNGs. Default: %USERPROFILE%\.claude\pasted-images
@@ -38,6 +44,12 @@
     (dual format): Claude Code pastes the path, image editors still paste the
     image. Used by the watcher; harmless to use manually.
 
+.PARAMETER Limit
+    Maximum history rows (1-100; default 20).
+
+.PARAMETER Before
+    Clean only managed clipwarp images older than this date (default 7 days ago).
+
 .EXAMPLE
     # snip with Win+Shift+S / Lightshot / anything, then:
     clipwarp
@@ -46,18 +58,115 @@
 .EXAMPLE
     clipwarp watch
     # -> from now on just Ctrl+C an image anywhere, then Ctrl+V in Claude Code
+
+.EXAMPLE
+    clipwarp calendar disable
+    # -> suppress Calendar prompts without stopping image conversion
+
+.EXAMPLE
+    clipwarp history -Limit 10
+    clipwarp recopy 1
+    clipwarp recopy
+    clipwarp clean -Before (Get-Date).AddDays(-30)
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('convert', 'watch', 'stop', 'status', 'autostart', 'unautostart')]
+    [ValidateSet('convert', 'watch', 'stop', 'status', 'autostart', 'unautostart', 'calendar', 'history', 'recopy', 'clean', 'doctor', 'help')]
     [string]$Command = 'convert',
+    [Parameter(Position = 1)][string]$Action,
+    [Parameter(Position = 2)][string]$Setting,
+    [string]$Title,
+    [string]$Details,
+    [string]$Path,
+    [string]$TimeZone,
+    [switch]$Clipboard,
     [string]$OutDir = (Join-Path $env:USERPROFILE '.claude\pasted-images'),
+    [ValidateRange(1, 100)][int]$Limit = 20,
+    [datetime]$Before = (Get-Date).AddDays(-7),
     [switch]$Quiet,
     [switch]$KeepImage,
     [Nullable[int]]$PointerX,
     [Nullable[int]]$PointerY
 )
+
+if ($Command -in @('calendar','history','recopy','clean','doctor','help')) {
+    Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
+    switch ($Command) {
+        'calendar' {
+            $configPath = Get-ClipwarpDefaultConfigPath
+            switch ($Action) {
+                'enable'  { [void](Set-ClipwarpCalendarEnabled -Enabled $true -ConfigPath $configPath); Write-Host 'clipwarp calendar: enabled' -ForegroundColor Green }
+                'disable' { [void](Set-ClipwarpCalendarEnabled -Enabled $false -ConfigPath $configPath); Write-Host 'clipwarp calendar: disabled (image conversion remains active)' -ForegroundColor Green }
+                'status'  { $state = if (Get-ClipwarpCalendarEnabled -ConfigPath $configPath) { 'enabled' } else { 'disabled' }; Write-Host "clipwarp calendar: $state" }
+                'image-details' {
+                    switch($Setting){
+                        'enable' {[void](Set-ClipwarpCalendarImageDetails -Mode Filename -ConfigPath $configPath); Write-Host 'clipwarp calendar image details: filename enabled (sent to Google only when the prompt is accepted)' -ForegroundColor Green}
+                        'full-path' {[void](Set-ClipwarpCalendarImageDetails -Mode FullPath -ConfigPath $configPath); Write-Host 'clipwarp calendar image details: full path enabled (sent to Google only when the prompt is accepted)' -ForegroundColor Yellow}
+                        'disable' {[void](Set-ClipwarpCalendarImageDetails -Mode Disabled -ConfigPath $configPath); Write-Host 'clipwarp calendar image details: disabled' -ForegroundColor Green}
+                        'status' {Write-Host "clipwarp calendar image details: $(Get-ClipwarpCalendarImageDetails -ConfigPath $configPath)"}
+                        default {throw 'usage: clipwarp calendar image-details enable|full-path|disable|status'}
+                    }
+                }
+                'duration' {
+                    if($Setting -eq 'status') { Write-Host "clipwarp calendar default duration: $(Get-ClipwarpCalendarDefaultDuration -ConfigPath $configPath) minutes" }
+                    else {
+                        $minutes = 0
+                        if (-not [int]::TryParse($Setting, [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$minutes) -or $minutes -lt 1 -or $minutes -gt 1440) {
+                            throw 'usage: clipwarp calendar duration <minutes 1-1440>|status'
+                        }
+                        [void](Set-ClipwarpCalendarDefaultDuration -Minutes $minutes -ConfigPath $configPath)
+                        Write-Host "clipwarp calendar default duration: $minutes minutes" -ForegroundColor Green
+                    }
+                }
+                'export' {
+                    if ([string]::IsNullOrWhiteSpace($Title)) { throw 'calendar export requires -Title.' }
+                    Import-Module (Join-Path $PSScriptRoot 'clipwarp-calendar.psm1') -Force
+                    $target = if($Path){$Path}else{Join-Path (Get-Location) ('clipwarp-event-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'.ics')}
+                    $duration = Get-ClipwarpCalendarDefaultDuration -ConfigPath $configPath
+                    $event = ConvertFrom-ClipwarpCalendarText -Text $Title -LocalDate (Get-Date) -DefaultDurationMinutes $duration
+                    $zone = if($TimeZone){$TimeZone}else{Get-ClipwarpCalendarTimeZone}
+                    $export = @{ Title=$event.Title; Details=$Details; Path=$target; TimeZone=$zone }
+                    if($event.IsTimed){$export.Start=$event.Start; $export.End=$event.End}else{$export.LocalDate=$event.LocalDate}
+                    $item = Export-ClipwarpIcsEvent @export
+                    if($Clipboard){ Set-ClipwarpClipboardText -Value $item.FullName }
+                    Write-Host "clipwarp calendar export: $($item.FullName)" -ForegroundColor Green
+                }
+                default {
+                    Write-Host 'usage: clipwarp calendar enable|disable|status|image-details enable|full-path|disable|status|duration <minutes>|status|export' -ForegroundColor Yellow; exit 1
+                }
+            }
+        }
+        'history' {
+            $historyIndex = 0
+            Get-ClipwarpHistory -OutDir $OutDir -Limit $Limit |
+                ForEach-Object {
+                    $historyIndex++
+                    [pscustomobject]@{ Index = $historyIndex; LastWriteTime = $_.LastWriteTime; Length = $_.Length; FullName = $_.FullName }
+                } | Format-Table -AutoSize
+        }
+        'clean' {
+            $removed = @(Clear-ClipwarpHistory -OutDir $OutDir -Before $Before -Confirm:$false)
+            Write-Host "clipwarp clean: removed $($removed.Count) saved image(s) older than $($Before.ToString('s'))." -ForegroundColor Green
+        }
+        'recopy' {
+            $item = if ($Action -match '^\d+$') {
+                Get-ClipwarpRecopyTarget -OutDir $OutDir -Index ([int]$Action)
+            } else {
+                Get-ClipwarpRecopyTarget -OutDir $OutDir -Path $Action
+            }
+            $path = $item.FullName
+            $copyWork = { param($p); Add-Type -AssemblyName System.Windows.Forms; [Windows.Forms.Clipboard]::SetText($p) }
+            $copyRunspace = [runspacefactory]::CreateRunspace(); $copyRunspace.ApartmentState='STA'; $copyRunspace.Open()
+            $copyPs = [powershell]::Create(); $copyPs.Runspace=$copyRunspace; [void]$copyPs.AddScript($copyWork).AddArgument($path)
+            try { [void]$copyPs.Invoke(); if ($copyPs.HadErrors) { throw "$($copyPs.Streams.Error[0])" } } finally { $copyPs.Dispose(); $copyRunspace.Dispose() }
+            Write-Host "clipwarp recopy: $path" -ForegroundColor Green
+        }
+        'doctor' { Test-ClipwarpEnvironment -ScriptRoot $PSScriptRoot -OutDir $OutDir | Format-Table Name, Status, Detail -AutoSize }
+        'help' { Get-Help $PSCommandPath -Detailed }
+    }
+    exit 0
+}
 
 if ($Command -ne 'convert') {
     $watcherScript = Join-Path $PSScriptRoot 'clipwarp-watch.ps1'
@@ -583,11 +692,13 @@ if (-not $Quiet) {
 # Show the same short-lived, non-blocking calendar prompt in manual and watcher
 # conversions. It never reads or writes the clipboard.
 try {
+    Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
+    if (-not (Get-ClipwarpCalendarEnabled)) { throw 'calendar-disabled' }
     Import-Module (Join-Path $PSScriptRoot 'clipwarp-calendar.psm1') -Force
     $imageTitle = 'Clipboard image ' + (Get-Date -Format 'yyyy-MM-dd HH:mm')
     Start-ClipwarpCalendarPopup -Kind Image -Title $imageTitle -ImagePath $r.Path -PointerX $PointerX -PointerY $PointerY -ScriptRoot $PSScriptRoot
 } catch {
-    if (-not $Quiet) { Write-Host "clipwarp: calendar popup could not be shown - $($_.Exception.Message)" -ForegroundColor Yellow }
+    if ($_.Exception.Message -ne 'calendar-disabled' -and -not $Quiet) { Write-Host "clipwarp: calendar popup could not be shown - $($_.Exception.Message)" -ForegroundColor Yellow }
 }
 
 # Always emit the raw path last so it is usable in a pipeline too.

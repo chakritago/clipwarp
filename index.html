@@ -8,7 +8,6 @@
 <meta name="keywords" content="Claude Code, paste image, clipboard, Windows, Ctrl+V, screenshot, PowerShell, clipwarp">
 <meta name="robots" content="index, follow">
 <meta name="theme-color" content="#FFF5EC">
-<link rel="canonical" href="https://botnick.github.io/clipwarp/">
 <link rel="canonical" href="https://chakritago.github.io/clipwarp/">
 <link rel="icon" href="assets/favicon.png" type="image/png">
 <link rel="apple-touch-icon" href="assets/favicon.png">
@@ -16,8 +15,6 @@
 <meta property="og:site_name" content="clipwarp">
 <meta property="og:title" content="clipwarp — Paste screenshots into Claude Code on Windows">
 <meta property="og:description" content="Copy an image anywhere, press Ctrl+V in Claude Code, and it attaches. A tiny local PowerShell utility.">
-<meta property="og:url" content="https://botnick.github.io/clipwarp/">
-<meta property="og:image" content="https://botnick.github.io/clipwarp/assets/og.png">
 <meta property="og:url" content="https://chakritago.github.io/clipwarp/">
 <meta property="og:image" content="https://chakritago.github.io/clipwarp/assets/og.png">
 <meta property="og:image:width" content="1200">
@@ -27,14 +24,12 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="clipwarp — Paste screenshots into Claude Code on Windows">
 <meta name="twitter:description" content="Copy an image anywhere, press Ctrl+V in Claude Code, and it attaches.">
-<meta name="twitter:image" content="https://botnick.github.io/clipwarp/assets/og.png">
 <meta name="twitter:image" content="https://chakritago.github.io/clipwarp/assets/og.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800;900&family=Noto+Sans+Thai:wght@500;600;700;800&display=swap" rel="stylesheet">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareApplication","name":"clipwarp","description":"Paste clipboard images into Claude Code on native Windows.","url":"https://botnick.github.io/clipwarp/","image":"https://botnick.github.io/clipwarp/assets/og.png","applicationCategory":"DeveloperApplication","operatingSystem":"Windows 10, Windows 11","softwareRequirements":"Windows PowerShell 5.1 or PowerShell 7","license":"https://opensource.org/licenses/MIT","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
-{"@context":"https://schema.org","@type":"SoftwareApplication","name":"clipwarp","description":"Paste clipboard images into Claude Code on native Windows.","url":"https://chakritago.github.io/clipwarp/","image":"https://chakritago.github.io/clipwarp/assets/og.png","applicationCategory":"DeveloperApplication","operatingSystem":"Windows 10, Windows 11","softwareRequirements":"Windows PowerShell 5.1 or PowerShell 7","license":"https://opensource.org/licenses/MIT","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+{"@context":"https://***@type":"SoftwareApplication","name":"clipwarp","description":"Paste clipboard images into Claude Code on native Windows.","url":"https://chakritago.github.io/clipwarp/","image":"https://chakritago.github.io/clipwarp/assets/og.png","applicationCategory":"DeveloperApplication","operatingSystem":"Windows 10, Windows 11","softwareRequirements":"Windows PowerShell 5.1 or PowerShell 7","license":"https://opensource.org/licenses/MIT","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
 </script>
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
@@ -198,7 +193,6 @@
   <div class="nav-in">
     <a class="brand" href="#top"><img src="assets/favicon.png" alt="" width="30" height="30"><span>clip<b>warp</b></span></a>
     <div class="nav-right">
-      <a class="ghlink" href="https://github.com/botnick/clipwarp">
       <a class="ghlink" href="https://github.com/chakritago/clipwarp">
         <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" style="stroke:none;fill:currentColor"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.36 1.09 2.94.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></svg>
         <span class="ghtxt">GitHub</span>
@@ -234,11 +228,10 @@
   <div class="wrap">
     <div class="cmd">
       <span class="ps">PS&gt;</span>
-      <code id="cmd">irm https://raw.githubusercontent.com/botnick/clipwarp/main/install.ps1 | iex</code>
       <code id="cmd">irm https://raw.githubusercontent.com/chakritago/clipwarp/main/install.ps1 | iex</code>
       <button class="copy" id="copyBtn" type="button"><span id="copyLabel"><span data-lang-en>Copy</span><span data-lang-th>คัดลอก</span></span></button>
     </div>
-    <p class="hint"><span data-lang-en>Then run <code>clipwarp watch</code> once — and you're done.</span><span data-lang-th>แล้วรัน <code>clipwarp watch</code> ครั้งเดียว — จบ</span></p>
+    <p class="hint"><span data-lang-en>The watcher starts immediately. Login autostart stays off unless you enable it.</span><span data-lang-th>watcher เริ่มทำงานทันที ส่วนการเปิดอัตโนมัติตอนล็อกอินจะยังปิดอยู่จนกว่าคุณจะเปิดใช้</span></p>
   </div>
 </section>
 
@@ -311,7 +304,9 @@
       <details><summary><span><span data-lang-en>Does it work with WSL?</span><span data-lang-th>ใช้กับ WSL ได้ไหม</span></span><span class="pm" aria-hidden="true">+</span></summary>
         <div class="ans"><span data-lang-en>Under WSL, Claude Code's own <code>Alt+V</code> usually works. clipwarp targets native Windows — Windows Terminal, PowerShell, cmd, VS Code terminal.</span><span data-lang-th>บน WSL ปกติ <code>Alt+V</code> ของ Claude Code ใช้ได้อยู่แล้ว clipwarp ทำมาเพื่อ Windows แท้</span></div></details>
       <details><summary><span><span data-lang-en>Is my screenshot uploaded anywhere?</span><span data-lang-th>รูปถูกอัปโหลดไปไหนไหม</span></span><span class="pm" aria-hidden="true">+</span></summary>
-        <div class="ans"><span data-lang-en>No. clipwarp is a local PowerShell script. The image stays in your user profile and only its path is put on your clipboard. Nothing touches the network.</span><span data-lang-th>ไม่ clipwarp เป็นสคริปต์ในเครื่อง รูปอยู่ในโปรไฟล์ของคุณ วางแค่ path ลง clipboard ไม่ออกเน็ต</span></div></details>
+        <div class="ans"><span data-lang-en>No. Image conversion and ICS export stay local. The optional Calendar prompt opens Google only when accepted; image paths are excluded unless you explicitly enable filename or full-path details.</span><span data-lang-th>ไม่ การแปลงรูปและส่งออก ICS อยู่ในเครื่อง ป๊อปอัป Calendar จะเปิด Google เมื่อคุณยืนยันเท่านั้น และไม่ส่ง path รูปเว้นแต่เปิดใช้เอง</span></div></details>
+      <details><summary><span><span data-lang-en>What can the Calendar prompt understand?</span><span data-lang-th>ป๊อปอัป Calendar เข้าใจอะไรบ้าง</span></span><span class="pm" aria-hidden="true">+</span></summary>
+        <div class="ans"><span data-lang-en>It accepts strict ISO dates, single 24-hour times, and ranges such as <code>Meeting 2026-09-15 14:00-15:30</code>. Ambiguous natural language safely falls back to an all-day event. Long titles are bounded, timed events include a mapped timezone when available (including Bangkok), and <code>clipwarp calendar export</code> uses the same parser to create a local ICS file.</span><span data-lang-th>รองรับวันที่ ISO เวลา 24 ชั่วโมง และช่วงเวลา เช่น <code>Meeting 2026-09-15 14:00-15:30</code> ภาษาธรรมชาติที่กำกวมจะกลับไปเป็นกิจกรรมทั้งวันอย่างปลอดภัย</span></div></details>
       <details><summary><span><span data-lang-en>Will it clutter my disk?</span><span data-lang-th>รูปจะรกเครื่องไหม</span></span><span class="pm" aria-hidden="true">+</span></summary>
         <div class="ans"><span data-lang-en>No. Saved images go to <code>%USERPROFILE%\.claude\pasted-images</code>, and anything older than <b>7 days is cleaned up automatically</b> — the folder never grows unbounded.</span><span data-lang-th>ไม่ รูปที่เซฟไปเก็บที่ <code>%USERPROFILE%\.claude\pasted-images</code> และไฟล์ที่เก่ากว่า <b>7 วันจะถูกลบอัตโนมัติ</b> — โฟลเดอร์ไม่บวมไม่รกเครื่อง</span></div></details>
     </div>
@@ -329,7 +324,6 @@
 <footer>
   <div class="wrap foot">
     <div class="fb"><img src="assets/favicon.png" alt="" width="26" height="26">clipwarp</div>
-    <div class="lx"><a href="https://github.com/botnick/clipwarp">GitHub</a><a href="https://github.com/botnick/clipwarp/blob/main/LICENSE">MIT License</a><a href="https://claude.com/claude-code">Claude Code</a></div>
     <div class="lx"><a href="https://github.com/chakritago/clipwarp">GitHub</a><a href="https://github.com/chakritago/clipwarp/blob/main/LICENSE">MIT License</a><a href="https://claude.com/claude-code">Claude Code</a></div>
     <p style="font-size:.9rem"><span data-lang-en>Made for Claude Code on Windows.</span><span data-lang-th>ทำเพื่อ Claude Code บน Windows</span></p>
   </div>

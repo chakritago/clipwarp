@@ -58,9 +58,118 @@ Assert-Equal $true ($popupArgs -contains '-ImagePathBase64') 'image paths use a 
 Assert-Equal $false ($popupArgs -contains 'C:\shots\one image.png') 'raw image paths are not placed on the command line'
 
 $fallbackArgs = New-ClipwarpCalendarPopupArguments -PopupPath 'C:\clipwarp\popup.ps1' -Kind Text -Title 'Agenda'
+Assert-Equal $true ($fallbackArgs -contains '-TitleBase64') 'normal short titles preserve command-line transport'
 Assert-Equal $false ($fallbackArgs -contains '-PointerX') 'popup arguments omit coordinates when no event-time pointer was captured'
 $nullPointerArgs = New-ClipwarpCalendarPopupArguments -PopupPath 'C:\clipwarp\popup.ps1' -Kind Text -Title 'Agenda' -PointerX $null -PointerY $null
 Assert-Equal $false ($nullPointerArgs -contains '-PointerX') 'popup arguments preserve current-pointer fallback through the launcher'
+
+$timed = ConvertFrom-ClipwarpCalendarText -Text 'Review 2026-09-15 14:30' -LocalDate $date
+Assert-Equal 'Review' $timed.Title 'strict parser removes an explicit ISO date and time from the title'
+Assert-Equal ([datetime]::new(2026, 9, 15, 14, 30, 0, [DateTimeKind]::Local)) $timed.Start 'strict parser reads an explicit ISO date and 24-hour time'
+Assert-Equal ([datetime]::new(2026, 9, 15, 15, 30, 0, [DateTimeKind]::Local)) $timed.End 'timed events default to one hour'
+$timedUrl = New-ClipwarpCalendarUrl -Title $timed.Title -Start $timed.Start -End $timed.End
+Assert-Equal 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=Review&dates=20260915T143000%2F20260915T153000' $timedUrl 'timed URL uses local floating calendar time'
+
+$range = ConvertFrom-ClipwarpCalendarText -Text 'Meeting 2026-09-15 14:00-15:30' -LocalDate $date
+Assert-Equal 'Meeting' $range.Title 'strict range parser removes both times from title'
+Assert-Equal ([datetime]'2026-09-15 15:30') $range.End 'strict range parser uses explicit end time'
+$shortDefault = ConvertFrom-ClipwarpCalendarText -Text 'Standup 2026-09-15 09:00' -LocalDate $date -DefaultDurationMinutes 25
+Assert-Equal ([datetime]'2026-09-15 09:25') $shortDefault.End 'single time uses configurable default duration'
+$badRange = ConvertFrom-ClipwarpCalendarText -Text 'Meeting 2026-09-15 15:30-14:00' -LocalDate $date
+Assert-Equal $false $badRange.IsTimed 'backwards explicit range preserves fallback behavior'
+Assert-Equal 'Meeting 2026-09-15 15:30-14:00' $badRange.Title 'invalid range leaves copied title intact'
+
+$payload = Format-ClipwarpCalendarPayload -Title ((('A' * 90) + "`r`n") + ('B' * 400)) -Details 'existing' -MaxTitleLength 80 -MaxUrlLength 600
+Assert-Equal 80 $payload.Title.Length 'payload formatter limits normalized title'
+Assert-Equal $true $payload.Details.StartsWith('existing') 'payload formatter preserves supplied details before overflow'
+Assert-Equal $true $payload.Details.Contains('BBBB') 'payload formatter partitions title overflow into details'
+$boundedUrl = New-ClipwarpCalendarUrl -Title ('x' * 5000) -LocalDate $date
+Assert-Equal $true ($boundedUrl.Length -le 1900) 'calendar URL is bounded for oversized copied text'
+$surrogateSafeUrl = New-ClipwarpCalendarUrl -Title ('x' + (([char]::ConvertFromUtf32(0x1F680)) * 1000)) -LocalDate $date
+Assert-Equal $true ($surrogateSafeUrl.Length -le 1900) 'calendar URL truncation never splits a Unicode surrogate pair'
+Assert-Equal $false $surrogateSafeUrl.Contains('%EF%BF%BD') 'calendar URL truncation does not insert a Unicode replacement character'
+$detailsUrl = New-ClipwarpCalendarUrl -Title 'Review' -LocalDate $date -Details 'Line 1 & 2'
+Assert-Equal $true $detailsUrl.Contains('&details=Line%201%20%26%202') 'optional details are safely encoded'
+
+Assert-Equal 'America/Los_Angeles' (Get-ClipwarpCalendarTimeZone -TimeZoneId 'Pacific Standard Time') 'Windows timezone maps to Google IANA ctz'
+Assert-Equal 'Asia/Bangkok' (Get-ClipwarpCalendarTimeZone -TimeZoneId 'SE Asia Standard Time') 'Windows Bangkok timezone maps to Google IANA ctz'
+Assert-Equal 'Europe/London' (Get-ClipwarpCalendarTimeZone -TimeZoneId 'Europe/London') 'IANA timezone passes through safely'
+Assert-Equal $null (Get-ClipwarpCalendarTimeZone -TimeZoneId 'Unknown Zone') 'unknown timezone has safe no-ctz fallback'
+$tzUrl = New-ClipwarpCalendarUrl -Title 'Review' -Start $timed.Start -End $timed.End -TimeZone 'Pacific Standard Time'
+Assert-Equal $true $tzUrl.EndsWith('&ctz=America%2FLos_Angeles') 'timed URL includes mapped ctz'
+$boundedTimedUrl = New-ClipwarpCalendarUrl -Title (([char]::ConvertFromUtf32(0x1F680)) * 1000) -Details (([char]::ConvertFromUtf32(0x1F4C5)) * 1000) -Start $timed.Start -End $timed.End -TimeZone 'SE Asia Standard Time'
+Assert-Equal $true ($boundedTimedUrl.Length -le 1900) 'timed URL with Unicode details and ctz remains bounded'
+Assert-Equal $true $boundedTimedUrl.EndsWith('&ctz=Asia%2FBangkok') 'bounded timed URL retains ctz'
+$allDayTz = New-ClipwarpCalendarUrl -Title 'Review' -LocalDate $date -TimeZone 'Pacific Standard Time'
+Assert-Equal $false $allDayTz.Contains('ctz=') 'all-day URL remains unchanged when timezone is supplied'
+
+$imagePrivate = Get-ClipwarpImageCalendarDetails -ImagePath 'C:\private\shots\secret.png' -Mode Disabled
+Assert-Equal $null $imagePrivate 'image details default keeps local path out of event'
+Assert-Equal 'Image file: secret.png' (Get-ClipwarpImageCalendarDetails -ImagePath 'C:\private\shots\secret.png' -Mode Filename) 'filename mode exposes only safe leaf name'
+Assert-Equal 'Image file: C:\private\shots\secret.png' (Get-ClipwarpImageCalendarDetails -ImagePath 'C:\private\shots\secret.png' -Mode FullPath) 'full-path mode is explicit'
+
+$preview = Get-ClipwarpCalendarPreview -Event $range -MaxTitleLength 24
+Assert-Equal $true $preview.Contains('Meeting') 'popup preview includes concise event title'
+Assert-Equal $true $preview.Contains('2026-09-15') 'popup preview includes event date'
+Assert-Equal $true $preview.Contains('14:00') 'popup preview includes event time'
+
+$ics = Export-ClipwarpIcsEvent -Title 'Review\folder, plan; next' -Details "one`r`ntwo\three" -Start $timed.Start -End $timed.End -TimeZone 'America/Los_Angeles' -Uid 'fixed@example' -CreatedUtc ([datetime]'2026-01-02T03:04:05Z')
+Assert-Equal $true $ics.Contains("UID:fixed@example`r`n") 'ICS includes deterministic UID'
+Assert-Equal $true $ics.Contains("SUMMARY:Review\\folder\, plan\; next`r`n") 'ICS escapes backslashes and summary punctuation'
+Assert-Equal $true $ics.Contains("DESCRIPTION:one\ntwo\\three`r`n") 'ICS escapes CRLF and backslashes in details'
+Assert-Equal $true $ics.Contains("DTSTART;TZID=America/Los_Angeles:20260915T143000`r`n") 'ICS emits timezone-aware local DTSTART'
+$icsAllDay = Export-ClipwarpIcsEvent -Title 'Day' -LocalDate $date -Uid 'day@example' -CreatedUtc ([datetime]'2026-01-02T03:04:05Z')
+Assert-Equal $true $icsAllDay.Contains("DTSTART;VALUE=DATE:20260831`r`nDTEND;VALUE=DATE:20260901") 'ICS all-day end is exclusive'
+$originalCulture = [Threading.Thread]::CurrentThread.CurrentCulture
+try {
+    [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo('th-TH')
+    $cultureIcs = Export-ClipwarpIcsEvent -Title 'Culture' -LocalDate ([datetime]'2026-08-31') -Uid 'culture@example' -CreatedUtc ([datetime]'2026-01-02T03:04:05Z')
+    Assert-Equal $true $cultureIcs.Contains("DTSTART;VALUE=DATE:20260831") 'ICS dates are invariant under a non-Gregorian current culture'
+} finally { [Threading.Thread]::CurrentThread.CurrentCulture = $originalCulture }
+$foldedIcs = Export-ClipwarpIcsEvent -Title (([string][char]0x4F60) * 80) -LocalDate $date -Uid 'fold@example' -CreatedUtc ([datetime]'2026-01-02T03:04:05Z')
+$tooWide = @($foldedIcs -split "`r`n" | Where-Object { [Text.Encoding]::UTF8.GetByteCount($_) -gt 75 })
+Assert-Equal 0 $tooWide.Count 'ICS folds every content line at 75 UTF-8 octets'
+
+$combiningIcs = Export-ClipwarpIcsEvent -Title ('A' + ([string][char]0x0301) * 80) -LocalDate $date -Uid 'combining@test' -CreatedUtc ([datetime]'2026-08-31T00:00:00Z')
+$combiningTooWide = @($combiningIcs -split "`r`n" | Where-Object { [Text.Encoding]::UTF8.GetByteCount($_) -gt 75 })
+Assert-Equal 0 $combiningTooWide.Count 'ICS folding bounds a single long combining sequence by UTF-8 octets'
+
+$clipboardValue = $null
+Set-ClipwarpClipboardText -Value 'C:\events\review.ics' -Writer { param($value) $script:clipboardValue = $value }
+Assert-Equal 'C:\events\review.ics' $clipboardValue 'clipboard helper passes the exported path as text through an injected writer'
+
+$staProbe = Join-Path ([IO.Path]::GetTempPath()) ('clipwarp-sta-' + [guid]::NewGuid().ToString('N') + '.txt')
+try {
+    $calendarModule = Get-Module clipwarp-calendar
+    & $calendarModule {
+        param($probePath)
+        Invoke-ClipwarpStaClipboardWrite -Value $probePath -Writer {
+            param($value)
+            [IO.File]::WriteAllText($value, [Threading.Thread]::CurrentThread.GetApartmentState().ToString())
+        }
+    } $staProbe
+    Assert-Equal 'STA' ([IO.File]::ReadAllText($staProbe)) 'real clipboard path marshals its writer onto an STA runspace'
+} finally { Remove-Item -LiteralPath $staProbe -Force -ErrorAction SilentlyContinue }
+
+$ambiguous = ConvertFrom-ClipwarpCalendarText -Text 'Review next Tuesday at 2' -LocalDate $date
+Assert-Equal $false $ambiguous.IsTimed 'ambiguous natural language falls back to an all-day event'
+Assert-Equal 'Review next Tuesday at 2' $ambiguous.Title 'fallback preserves the complete title'
+
+$dated = ConvertFrom-ClipwarpCalendarText -Text 'Submit report 2026-09-20' -LocalDate $date
+Assert-Equal $false $dated.IsTimed 'explicit ISO date without a time remains all-day'
+Assert-Equal ([datetime]'2026-09-20') $dated.LocalDate 'explicit ISO date selects the all-day event date'
+Assert-Equal 'Submit report' $dated.Title 'date-only parser removes the explicit date from the title'
+
+$longTitle = ([string][char]0x4F60) * 5000
+$transportRoot = Join-Path ([IO.Path]::GetTempPath()) ('clipwarp title test ' + [guid]::NewGuid().ToString('N'))
+try {
+    $longArgs = New-ClipwarpCalendarPopupArguments -PopupPath 'C:\clipwarp\popup.ps1' -Kind Text -Title $longTitle -TransportDirectory $transportRoot
+    Assert-Equal $true ($longArgs -contains '-TitleFileBase64') 'oversized titles use file transport'
+    Assert-Equal $false ($longArgs -contains '-TitleBase64') 'oversized titles are not placed on the command line'
+    $titleFileIndex = [array]::IndexOf($longArgs, '-TitleFileBase64')
+    $titleFile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($longArgs[$titleFileIndex + 1]))
+    Assert-Equal $longTitle ([IO.File]::ReadAllText($titleFile, [Text.Encoding]::UTF8)) 'file transport preserves Unicode exactly'
+} finally { if (Test-Path -LiteralPath $transportRoot) { Remove-Item -LiteralPath $transportRoot -Recurse -Force } }
 
 if ($failures) { throw "$failures calendar test(s) failed" }
 Write-Host 'All calendar tests passed.' -ForegroundColor Cyan

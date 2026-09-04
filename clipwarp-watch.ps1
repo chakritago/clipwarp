@@ -38,6 +38,7 @@ $pidFile    = Join-Path $scriptsDir 'clipwarp-watch.pid'
 $logFile    = Join-Path $scriptsDir 'clipwarp-watch.log'
 $clipwarpPath  = Join-Path $PSScriptRoot 'clipwarp.ps1'
 $calendarPopupPath = Join-Path $PSScriptRoot 'clipwarp-calendar-popup.ps1'
+$configPath = Join-Path $env:USERPROFILE '.claude\clipwarp.json'
 $startupLnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\clipwarp-watch.lnk'
 
 # Tri-state identity for the pid in the pid file, so a reused/stale PID can never
@@ -197,8 +198,10 @@ namespace ClipwarpWatch
         private readonly string scriptPath;
         private readonly string logPath;
         private readonly string popupPath;
+        private readonly string configPath;
         private readonly Timer debounce;
         private System.Diagnostics.Process child;
+        private System.Diagnostics.Process popupChild;
         private DateTime childStarted;
         private const int ChildTimeoutSec = 15;   // a conversion that runs longer is treated as hung
         private int busyRetries;                  // consecutive "clipboard busy" re-arms in this burst
@@ -221,10 +224,11 @@ namespace ClipwarpWatch
             debounce.Start();
         }
 
-        public Watcher(string script, string popup, string log)
+        public Watcher(string script, string popup, string config, string log)
         {
             scriptPath = script;
             popupPath = popup;
+            configPath = config;
             logPath = log;
             CreateParams cp = new CreateParams();
             cp.Parent = (IntPtr)(-3);              // HWND_MESSAGE: message-only window
@@ -355,13 +359,62 @@ namespace ClipwarpWatch
 
         private void LaunchTextPopup(string title)
         {
-            string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(title));
+            if (!CalendarEnabled()) return;
+            CloseOwnedPopup();
+            CleanupTitleFiles();
             var psi = new System.Diagnostics.ProcessStartInfo();
             psi.FileName = "powershell.exe";
-            psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleBase64 " + encoded + PointerArguments();
+            byte[] titleBytes = Encoding.UTF8.GetBytes(title);
+            string titleFile = null;
+            if (titleBytes.Length > 6000)
+            {
+                titleFile = Path.Combine(Path.GetDirectoryName(configPath), "clipwarp-title-" + Guid.NewGuid().ToString("N") + ".txt");
+                Directory.CreateDirectory(Path.GetDirectoryName(configPath));
+                File.WriteAllText(titleFile, title);
+                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleFile \"" + titleFile + "\"" + PointerArguments();
+            }
+            else
+            {
+                string encoded = Convert.ToBase64String(titleBytes);
+                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleBase64 " + encoded + PointerArguments();
+            }
             psi.CreateNoWindow = true;
             psi.UseShellExecute = false;
-            System.Diagnostics.Process.Start(psi);
+            try { popupChild = System.Diagnostics.Process.Start(psi); }
+            catch { if (titleFile != null) { try { File.Delete(titleFile); } catch { } } throw; }
+        }
+
+        private void CloseOwnedPopup()
+        {
+            try { if (popupChild != null && !popupChild.HasExited) { popupChild.Kill(); popupChild.WaitForExit(1000); Log("replaced previous calendar popup"); } } catch { }
+            try { if (popupChild != null) popupChild.Dispose(); } catch { }
+            popupChild = null;
+        }
+
+        private void CleanupTitleFiles()
+        {
+            try {
+                string dir = Path.GetDirectoryName(configPath); if (!Directory.Exists(dir)) return;
+                int examined = 0, removed = 0;
+                foreach (string path in Directory.GetFiles(dir, "clipwarp-title-*.txt")) {
+                    if (++examined > 100) break;
+                    string name = Path.GetFileName(path);
+                    if (Regex.IsMatch(name, "^clipwarp-title-[0-9a-f]{32}\\.txt$") && File.GetLastWriteTimeUtc(path) < DateTime.UtcNow.AddDays(-1)) { try { File.Delete(path); removed++; } catch { } }
+                }
+                if (removed > 0) Log("removed " + removed + " orphaned calendar title file(s)");
+            } catch { }
+        }
+
+        private bool CalendarEnabled()
+        {
+            try
+            {
+                if (!File.Exists(configPath)) return true;
+                string json = File.ReadAllText(configPath, Encoding.UTF8);
+                Match m = Regex.Match(json, "\\\"calendar\\\"\\s*:\\s*\\{[^}]*\\\"enabled\\\"\\s*:\\s*(true|false)", RegexOptions.IgnoreCase);
+                return !m.Success || !string.Equals(m.Groups[1].Value, "false", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return true; }
         }
 
         // Tri-state: 1 = an image payload is present, 0 = none, -1 = clipboard
@@ -396,6 +449,7 @@ namespace ClipwarpWatch
         public void Shutdown()
         {
             try { RemoveClipboardFormatListener(this.Handle); } catch { }
+            CloseOwnedPopup();
             Log("watch stopped");
         }
 
@@ -420,7 +474,7 @@ else {
     Add-Type -TypeDefinition $src -ReferencedAssemblies @('System', 'System.Windows.Forms')
 }
 
-$watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $logFile)
+$watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $configPath, $logFile)
 try {
     [System.Windows.Forms.Application]::Run()   # message pump; blocks until the process is killed
 }
