@@ -94,7 +94,7 @@ are left untouched by image conversion and use that text in the calendar prompt.
 
 After a meaningful text copy or a successful image conversion, a topmost prompt
 appears directly below the pointer position captured when you copied, stays within
-the correct monitor's working area, and dismisses itself after 12 seconds. Press
+the correct monitor's working area, and dismisses itself after 10 seconds. Press
 `Enter` or click its button to open Google Calendar; press `Esc` to dismiss it.
 Copied text containing an explicit ISO local date and 24-hour time, such as
 `Review 2026-09-15 14:30`, creates a timed event; a range such as

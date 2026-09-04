@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $module = Join-Path (Split-Path $PSScriptRoot -Parent) 'clipwarp-calendar.psm1'
 Import-Module $module -Force
+$root = Split-Path $PSScriptRoot -Parent
 
 $failures = 0
 function Assert-Equal($Expected, $Actual, [string]$Name) {
@@ -9,6 +10,14 @@ function Assert-Equal($Expected, $Actual, [string]$Name) {
         Write-Host "FAIL: $Name`n  expected: $Expected`n  actual:   $Actual" -ForegroundColor Red
     } else { Write-Host "PASS: $Name" -ForegroundColor Green }
 }
+
+$popupPath = Join-Path $root 'clipwarp-calendar-popup.ps1'
+$popupTokens = $null
+$popupErrors = $null
+$popupAst = [Management.Automation.Language.Parser]::ParseFile($popupPath, [ref]$popupTokens, [ref]$popupErrors)
+Assert-Equal 0 $popupErrors.Count 'calendar popup script parses without errors'
+$timeoutParameter = @($popupAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'TimeoutSeconds' })[0]
+Assert-Equal 10 ([int]$timeoutParameter.DefaultValue.SafeGetValue()) 'text and image popups default to a 10-second timeout'
 
 $date = [datetime]::new(2026, 8, 31, 22, 15, 0, [DateTimeKind]::Local)
 $textUrl = New-ClipwarpCalendarUrl -Title 'Plan A & B / review' -LocalDate $date
@@ -50,6 +59,7 @@ Assert-Equal 234 $scaled.Height '150 percent DPI scales popup height to physical
 Assert-Equal 18 $scaled.Gap '150 percent DPI scales the cursor gap to physical pixels'
 
 $popupArgs = New-ClipwarpCalendarPopupArguments -PopupPath 'C:\Program Files\clipwarp\popup.ps1' -Kind Image -Title 'Quarterly review' -ImagePath 'C:\shots\one image.png' -PointerX 321 -PointerY 654
+Assert-Equal $false ($popupArgs -contains '-TimeoutSeconds') 'image launcher inherits the popup timeout default'
 Assert-Equal $true ($popupArgs -contains '-PointerX') 'popup arguments include captured pointer x'
 Assert-Equal $true ($popupArgs -contains '321') 'popup arguments preserve pointer x value'
 Assert-Equal $true ($popupArgs -contains '-PointerY') 'popup arguments include captured pointer y'
@@ -58,6 +68,7 @@ Assert-Equal $true ($popupArgs -contains '-ImagePathBase64') 'image paths use a 
 Assert-Equal $false ($popupArgs -contains 'C:\shots\one image.png') 'raw image paths are not placed on the command line'
 
 $fallbackArgs = New-ClipwarpCalendarPopupArguments -PopupPath 'C:\clipwarp\popup.ps1' -Kind Text -Title 'Agenda'
+Assert-Equal $false ($fallbackArgs -contains '-TimeoutSeconds') 'text launcher inherits the popup timeout default'
 Assert-Equal $true ($fallbackArgs -contains '-TitleBase64') 'normal short titles preserve command-line transport'
 Assert-Equal $false ($fallbackArgs -contains '-PointerX') 'popup arguments omit coordinates when no event-time pointer was captured'
 $nullPointerArgs = New-ClipwarpCalendarPopupArguments -PopupPath 'C:\clipwarp\popup.ps1' -Kind Text -Title 'Agenda' -PointerX $null -PointerY $null

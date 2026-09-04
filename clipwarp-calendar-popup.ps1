@@ -9,7 +9,7 @@ param(
     [string]$ImagePathBase64,
     [Nullable[int]]$PointerX,
     [Nullable[int]]$PointerY,
-    [int]$TimeoutSeconds = 12
+    [int]$TimeoutSeconds = 10
 )
 
 if ($TitleFileBase64) { $TitleFile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($TitleFileBase64)) }
