@@ -127,6 +127,7 @@ if ($Command -in @('calendar','history','recopy','clean','doctor','help')) {
                     $event = ConvertFrom-ClipwarpCalendarText -Text $Title -LocalDate (Get-Date) -DefaultDurationMinutes $duration
                     $zone = if($TimeZone){$TimeZone}else{Get-ClipwarpCalendarTimeZone}
                     $export = @{ Title=$event.Title; Details=$Details; Path=$target; TimeZone=$zone }
+                    if ($event.Location) { $export.Location = $event.Location }
                     if($event.IsTimed){$export.Start=$event.Start; $export.End=$event.End}else{$export.LocalDate=$event.LocalDate}
                     $item = Export-ClipwarpIcsEvent @export
                     if($Clipboard){ Set-ClipwarpClipboardText -Value $item.FullName }

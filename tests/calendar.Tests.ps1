@@ -17,7 +17,7 @@ $popupErrors = $null
 $popupAst = [Management.Automation.Language.Parser]::ParseFile($popupPath, [ref]$popupTokens, [ref]$popupErrors)
 Assert-Equal 0 $popupErrors.Count 'calendar popup script parses without errors'
 $timeoutParameter = @($popupAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'TimeoutSeconds' })[0]
-Assert-Equal 10 ([int]$timeoutParameter.DefaultValue.SafeGetValue()) 'text and image popups default to a 10-second timeout'
+Assert-Equal 3 ([int]$timeoutParameter.DefaultValue.SafeGetValue()) 'text and image popups default to a 3-second timeout'
 
 $date = [datetime]::new(2026, 8, 31, 22, 15, 0, [DateTimeKind]::Local)
 $textUrl = New-ClipwarpCalendarUrl -Title 'Plan A & B / review' -LocalDate $date
@@ -191,6 +191,119 @@ try {
     $titleFile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($longArgs[$titleFileIndex + 1]))
     Assert-Equal $longTitle ([IO.File]::ReadAllText($titleFile, [Text.Encoding]::UTF8)) 'file transport preserves Unicode exactly'
 } finally { if (Test-Path -LiteralPath $transportRoot) { Remove-Item -LiteralPath $transportRoot -Recurse -Force } }
+
+# Meeting Link & Location tests
+$meetText = 'Sync https://meet.google.com/abc-defg-hij 2026-09-15 14:00'
+$meetParsed = ConvertFrom-ClipwarpCalendarText -Text $meetText -LocalDate $date
+Assert-Equal 'https://meet.google.com/abc-defg-hij' $meetParsed.Location 'Google Meet URL is extracted as location'
+Assert-Equal 'Sync' $meetParsed.Title 'Google Meet URL is stripped from event title'
+Assert-Equal $meetText $meetParsed.OriginalText 'original text preserves full meeting URL for details'
+
+$zoomText = 'Zoom review https://us02web.zoom.us/j/123456789 2026-09-15 14:00'
+$zoomParsed = ConvertFrom-ClipwarpCalendarText -Text $zoomText -LocalDate $date
+Assert-Equal 'https://us02web.zoom.us/j/123456789' $zoomParsed.Location 'Zoom URL is extracted as location'
+Assert-Equal 'Zoom review' $zoomParsed.Title 'Zoom URL is stripped from event title'
+
+$locUrl = New-ClipwarpCalendarUrl -Title 'Meet' -LocalDate $date -Location 'https://meet.google.com/abc-defg-hij'
+Assert-Equal $true ($locUrl.Contains('&location=https%3A%2F%2Fmeet.google.com%2Fabc-defg-hij')) 'calendar URL includes encoded location parameter'
+
+$boundedLocUrl = New-ClipwarpCalendarUrl -Title 'Meet' -LocalDate $date -Details ('D' * 5000) -Location 'https://meet.google.com/abc-defg-hij'
+Assert-Equal $true ($boundedLocUrl.Length -le 1900) 'calendar URL with location remains bounded under 1900 chars'
+Assert-Equal $true ($boundedLocUrl.Contains('&location=')) 'bounded URL retains location'
+
+$icsLoc = Export-ClipwarpIcsEvent -Title 'Meet' -LocalDate $date -Location 'https://meet.google.com/abc-defg-hij'
+Assert-Equal $true ($icsLoc.Contains("LOCATION:https://meet.google.com/abc-defg-hij`r`n")) 'ICS includes LOCATION property'
+
+# Thai date tests
+$thaiAbbr = ConvertFrom-ClipwarpCalendarText -Text 'ประชุมทีม 15 ก.ย. 2569 14:30' -LocalDate $date
+Assert-Equal $true $thaiAbbr.IsTimed 'Thai date with month abbreviation is recognized as timed'
+Assert-Equal ([datetime]'2026-09-15 14:30') $thaiAbbr.Start 'Thai Buddhist Era 2569 is converted to 2026'
+Assert-Equal 'ประชุมทีม' $thaiAbbr.Title 'Thai title is cleanly extracted'
+
+$thaiFull = ConvertFrom-ClipwarpCalendarText -Text 'ประชุมใหญ่ 15 กันยายน 69 10:00' -LocalDate $date
+Assert-Equal $true $thaiFull.IsTimed 'Thai date with full month and 2-digit BE year is recognized'
+Assert-Equal ([datetime]'2026-09-15 10:00') $thaiFull.Start 'Thai 2-digit BE 69 is converted to 2026'
+Assert-Equal 'ประชุมใหญ่' $thaiFull.Title 'Thai title with full month is cleanly extracted'
+
+$thaiDayOnly = ConvertFrom-ClipwarpCalendarText -Text 'วันหยุด 15 ก.ย. 2569' -LocalDate $date
+Assert-Equal $false $thaiDayOnly.IsTimed 'Thai date without time is all-day event'
+Assert-Equal ([datetime]'2026-09-15') $thaiDayOnly.LocalDate 'Thai date selects correct all-day date'
+Assert-Equal 'วันหยุด' $thaiDayOnly.Title 'Thai all-day title is clean'
+
+# DD/MM/YYYY tests
+$dmy = ConvertFrom-ClipwarpCalendarText -Text 'Sprint planning 15/09/2026 14:00-15:30' -LocalDate $date
+Assert-Equal $true $dmy.IsTimed 'DD/MM/YYYY is recognized as timed'
+Assert-Equal ([datetime]'2026-09-15 14:00') $dmy.Start 'DD/MM/YYYY start time is correct'
+Assert-Equal ([datetime]'2026-09-15 15:30') $dmy.End 'DD/MM/YYYY end time is correct'
+Assert-Equal 'Sprint planning' $dmy.Title 'DD/MM/YYYY title is clean'
+
+$dmyBe = ConvertFrom-ClipwarpCalendarText -Text 'Review 15/09/2569 14:00' -LocalDate $date
+Assert-Equal ([datetime]'2026-09-15 14:00') $dmyBe.Start 'DD/MM/YYYY with BE year converts to CE'
+
+# AM/PM tests
+$ampmSingle = ConvertFrom-ClipwarpCalendarText -Text 'Call client 15/09/2026 2:30 PM' -LocalDate $date
+Assert-Equal ([datetime]'2026-09-15 14:30') $ampmSingle.Start '12-hour PM is converted to 24-hour'
+Assert-Equal ([datetime]'2026-09-15 15:30') $ampmSingle.End '12-hour PM defaults to 1 hour duration'
+
+$ampmRange = ConvertFrom-ClipwarpCalendarText -Text 'Interview 15/09/2026 10:00 AM - 11:30 AM' -LocalDate $date
+Assert-Equal ([datetime]'2026-09-15 10:00') $ampmRange.Start 'AM range start is correct'
+Assert-Equal ([datetime]'2026-09-15 11:30') $ampmRange.End 'AM range end is correct'
+
+# พรุ่งนี้ (Tomorrow) tests
+$tmrwTimed = ConvertFrom-ClipwarpCalendarText -Text 'วางแผนงาน พรุ่งนี้ 14:00-15:30' -LocalDate $date
+Assert-Equal $true $tmrwTimed.IsTimed 'พรุ่งนี้ with time is timed event'
+Assert-Equal ($date.Date.AddDays(1).AddHours(14)) $tmrwTimed.Start 'พรุ่งนี้ starts tomorrow at parsed time'
+Assert-Equal ($date.Date.AddDays(1).AddHours(15).AddMinutes(30)) $tmrwTimed.End 'พรุ่งนี้ ends tomorrow at parsed end time'
+Assert-Equal 'วางแผนงาน' $tmrwTimed.Title 'พรุ่งนี้ keyword is stripped from title'
+
+$tmrwAllDay = ConvertFrom-ClipwarpCalendarText -Text 'ประชุมพรุ่งนี้' -LocalDate $date
+Assert-Equal $false $tmrwAllDay.IsTimed 'พรุ่งนี้ without time is all-day event'
+Assert-Equal ($date.Date.AddDays(1)) $tmrwAllDay.LocalDate 'พรุ่งนี้ date is tomorrow'
+Assert-Equal 'ประชุม' $tmrwAllDay.Title 'attached พรุ่งนี้ is stripped from title'
+
+# Time-only defaults to tomorrow
+$timeOnly24 = ConvertFrom-ClipwarpCalendarText -Text 'ประชุม 14:00 น.' -LocalDate $date
+Assert-Equal $true $timeOnly24.IsTimed 'time-only 24h is timed'
+Assert-Equal ($date.Date.AddDays(1).AddHours(14)) $timeOnly24.Start 'time-only date defaults to tomorrow'
+Assert-Equal 'ประชุม' $timeOnly24.Title 'time and น. stripped from title'
+
+$timeOnly12 = ConvertFrom-ClipwarpCalendarText -Text 'Standup 10:00 AM' -LocalDate $date
+Assert-Equal ($date.Date.AddDays(1).AddHours(10)) $timeOnly12.Start 'time-only 12h date defaults to tomorrow'
+
+# Combined meeting link + พรุ่งนี้ + time
+$combo = ConvertFrom-ClipwarpCalendarText -Text 'นัดคุย https://meet.google.com/xyz-uvwx-rst พรุ่งนี้ 10:30 AM' -LocalDate $date
+Assert-Equal 'https://meet.google.com/xyz-uvwx-rst' $combo.Location 'combo extracts meeting URL'
+Assert-Equal ($date.Date.AddDays(1).AddHours(10).AddMinutes(30)) $combo.Start 'combo starts tomorrow at 10:30'
+Assert-Equal 'นัดคุย' $combo.Title 'combo cleans title of URL and date/time'
+
+# Default start date is tomorrow for undated text & default URL
+$undated = ConvertFrom-ClipwarpCalendarText -Text 'Meeting notes' -LocalDate $date
+Assert-Equal ($date.Date.AddDays(1)) $undated.LocalDate 'undated text defaults start date to tomorrow'
+
+$defaultUrl = New-ClipwarpCalendarUrl -Title 'Default start'
+$tomorrowStr = ((Get-Date).Date.AddDays(1)).ToString('yyyyMMdd')
+# CLI command detection tests
+Assert-Equal $true (Test-ClipwarpCommandLine -Text "npm install -D tailwindcss") 'npm command is recognized'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text "git commit -m 'initial commit'") 'git command is recognized'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text "Get-Process | Stop-Process") 'PowerShell pipeline is recognized'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text "PS C:\Users\Admin> winget install Microsoft.PowerToys") 'Prompt-prefixed command is recognized'
+Assert-Equal 'winget install Microsoft.PowerToys' (Get-ClipwarpCommandText -Text "PS C:\Users\Admin> winget install Microsoft.PowerToys") 'PS prompt is stripped from command'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text '$ git clone https://github.com/user/repo.git') 'Bash prompt prefixed command is recognized'
+Assert-Equal 'git clone https://github.com/user/repo.git' (Get-ClipwarpCommandText -Text '$ git clone https://github.com/user/repo.git') 'Dollar prompt is stripped from command'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text '> docker run -d -p 80:80 nginx') 'Chevron prompt prefixed command is recognized'
+Assert-Equal 'docker run -d -p 80:80 nginx' (Get-ClipwarpCommandText -Text '> docker run -d -p 80:80 nginx') 'Chevron prompt is stripped from command'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text 'pip install requests') 'pip command is recognized'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text 'cargo build --release') 'cargo command is recognized'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text 'dir /s /b') 'CMD builtin dir is recognized'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text 'curl -fsSL https://example.com') 'curl command is recognized'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text '$env:PATH += ";C:\tools"') 'PowerShell variable assignment is recognized'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text 'irm https://raw.githubusercontent.com/chakritago/clipwarp/main/install.ps1 | iex') 'irm install pipeline is recognized'
+Assert-Equal $true (Test-ClipwarpCommandLine -Text '.\build.ps1 -Target Deploy') 'Local script invocation is recognized'
+Assert-Equal $false (Test-ClipwarpCommandLine -Text 'Meeting tomorrow at 10:00 AM') 'Calendar meeting is not treated as command'
+Assert-Equal $false (Test-ClipwarpCommandLine -Text 'นัดคุยงาน 15 ก.ย. 2569') 'Thai calendar text is not treated as command'
+Assert-Equal $false (Test-ClipwarpCommandLine -Text 'Hello world this is a normal sentence.') 'Plain sentence is not treated as command'
+Assert-Equal $false (Test-ClipwarpCommandLine -Text 'Sprint planning 14:00-15:30') 'Timed title is not treated as command'
+Assert-Equal $false (Test-ClipwarpCommandLine -Text '   ') 'Whitespace is not treated as command'
 
 if ($failures) { throw "$failures calendar test(s) failed" }
 Write-Host 'All calendar tests passed.' -ForegroundColor Cyan

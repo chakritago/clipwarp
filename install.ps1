@@ -158,6 +158,15 @@ if ($problems.Count -eq 0) {
             Write-Host "$verb the clipboard watcher" -ForegroundColor Green
         }
         else { $problems += "the watcher did not start - run 'clipwarp watch' to start it manually." }
+
+        # Enable autostart on Windows logon
+        & $installedWatch -Autostart *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "enabled autostart on Windows logon" -ForegroundColor Green
+        }
+        else {
+            $problems += "could not enable login autostart - run 'clipwarp autostart' manually."
+        }
     }
 }
 
@@ -179,6 +188,6 @@ Write-Host "clipwarp installed and the clipboard watcher is running." -Foregroun
 Write-Host "  1) snip or Ctrl+C an image anywhere (Win+Shift+S, Lightshot, browser...)"
 Write-Host "  2) in Claude Code, press Ctrl+V"
 Write-Host ""
-Write-Host "Login autostart remains off. Run 'clipwarp autostart' only if you want it." -ForegroundColor DarkGray
+Write-Host "Login autostart is enabled (starts on Windows logon). Run 'clipwarp unautostart' if you want to turn it off." -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Open a NEW terminal (or run '. `$PROFILE') if 'clipwarp' isn't found yet." -ForegroundColor DarkGray

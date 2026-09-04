@@ -57,8 +57,8 @@ The installer copies the scripts to `%USERPROFILE%\.claude\scripts` and register
 `clipwarp` command (plus a short **`cw`** alias) in the all-hosts profile of **both**
 PowerShell editions — Windows PowerShell 5.1 and PowerShell 7 — so it works whichever
 one you open. Idempotent; re-run any time to update. After a successful install,
-the clipboard watcher starts immediately for the current session. This does **not**
-enable login autostart. Open a **new** terminal afterwards (or run `. $PROFILE`) so
+the clipboard watcher starts immediately for the current session and autostart on
+Windows logon is enabled. Open a **new** terminal afterwards (or run `. $PROFILE`) so
 the command is found.
 
 > No admin rights, no services, no dependencies — plain PowerShell and .NET classes
@@ -94,7 +94,7 @@ are left untouched by image conversion and use that text in the calendar prompt.
 
 After a meaningful text copy or a successful image conversion, a topmost prompt
 appears directly below the pointer position captured when you copied, stays within
-the correct monitor's working area, and dismisses itself after 10 seconds. Press
+the correct monitor's working area, and dismisses itself after 3 seconds (with countdown). Press
 `Enter` or click its button to open Google Calendar; press `Esc` to dismiss it.
 Copied text containing an explicit ISO local date and 24-hour time, such as
 `Review 2026-09-15 14:30`, creates a timed event; a range such as
