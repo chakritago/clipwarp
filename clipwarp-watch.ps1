@@ -64,7 +64,11 @@ function Get-WatchState {
     # Match our script only as the -File argument (not merely anywhere in the line)
     # AND require the -Daemon flag, so `powershell -File other.ps1 <ourpath> -Daemon`
     # is not mistaken for the daemon.
-    $fileRe = '-File\s+"?' + [regex]::Escape($PSCommandPath) + '"?(\s|$)'
+    $targetPaths = @($PSCommandPath)
+    $installedWatch = Join-Path $scriptsDir 'clipwarp-watch.ps1'
+    if ($targetPaths -notcontains $installedWatch) { $targetPaths += $installedWatch }
+    $escaped = ($targetPaths | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    $fileRe = '-File\s+"?(' + $escaped + ')"?(\s|$)'
     if (($cmd -match $fileRe) -and ($cmd -match '(^|\s)-Daemon(\s|$)')) { return @{ State = 'watcher'; Pid = $watchPid } }
     return @{ State = 'foreign'; Pid = $watchPid }
 }
@@ -137,10 +141,19 @@ if (-not $Daemon) {
         Write-Host "clipwarp watch: a shell at pid $($st.Pid) could not be verified; not starting a second watcher. Run 'clipwarp stop' or end it manually first." -ForegroundColor Yellow
         exit 1
     }
-    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
-        '-NoProfile', '-Sta', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass',
-        '-File', "`"$($MyInvocation.MyCommand.Path)`"", '-Daemon'
-    ) | Out-Null
+    $daemonCmd = "powershell.exe -NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`" -Daemon"
+    $spawned = $false
+    try {
+        $wmi = [wmiclass]'Win32_Process'
+        $res = $wmi.Create($daemonCmd)
+        if ($res.ReturnValue -eq 0) { $spawned = $true }
+    } catch {}
+    if (-not $spawned) {
+        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+            '-NoProfile', '-Sta', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass',
+            '-File', "`"$($MyInvocation.MyCommand.Path)`"", '-Daemon'
+        ) | Out-Null
+    }
     $started = $false
     foreach ($i in 1..20) {
         Start-Sleep -Milliseconds 250
@@ -366,18 +379,16 @@ namespace ClipwarpWatch
             return "auto";
         }
 
-        private bool IsChatGptForeground()
+        private bool IsWebForeground()
         {
             string proc = foregroundProcess ?? "";
             string title = foregroundTitle ?? "";
             if (proc.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase)) return true;
-            if (BrowserProcRegex.IsMatch(proc))
-            {
-                if (ChatGptTitleRegex.IsMatch(title)) return true;
-                string mode = ConfiguredTargetMode();
-                if (mode.Equals("chatgpt", StringComparison.OrdinalIgnoreCase) || mode.Equals("image-only", StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
+            if (BrowserProcRegex.IsMatch(proc)) return true;
+            if (ChatGptTitleRegex.IsMatch(title)) return true;
+            string mode = ConfiguredTargetMode();
+            if (mode.Equals("chatgpt", StringComparison.OrdinalIgnoreCase) || mode.Equals("image-only", StringComparison.OrdinalIgnoreCase) || mode.Equals("web", StringComparison.OrdinalIgnoreCase))
+                return true;
             return false;
         }
 
@@ -421,10 +432,10 @@ namespace ClipwarpWatch
 
             if (!IsManagedClipboardActive()) return;
 
-            bool isGpt = IsChatGptForeground();
+            bool isWeb = IsWebForeground();
             bool isTerm = IsTerminalForeground();
 
-            if (targetMode.Equals("chatgpt", StringComparison.OrdinalIgnoreCase) || targetMode.Equals("image-only", StringComparison.OrdinalIgnoreCase))
+            if (targetMode.Equals("chatgpt", StringComparison.OrdinalIgnoreCase) || targetMode.Equals("image-only", StringComparison.OrdinalIgnoreCase) || targetMode.Equals("web", StringComparison.OrdinalIgnoreCase))
             {
                 if (currentPayloadMode != "image-only") SetClipboardImageOnly(lastManagedImagePath);
                 return;
@@ -436,7 +447,7 @@ namespace ClipwarpWatch
             }
 
             // Auto mode:
-            if (isGpt && currentPayloadMode != "image-only")
+            if (isWeb && currentPayloadMode != "image-only")
             {
                 SetClipboardImageOnly(lastManagedImagePath);
             }
@@ -467,7 +478,7 @@ namespace ClipwarpWatch
                     }
                     currentPayloadMode = "image-only";
                     lastHandledSequence = GetClipboardSequenceNumber();
-                    Log("switched clipboard to image-only (ChatGPT target)");
+                    Log("switched clipboard to image-only (web/browser target)");
                     return;
                 }
                 catch { System.Threading.Thread.Sleep(50); }

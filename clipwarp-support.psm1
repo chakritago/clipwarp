@@ -54,7 +54,7 @@ function Get-ClipwarpTargetMode {
     [CmdletBinding()]
     param([string]$ConfigPath = (Get-ClipwarpDefaultConfigPath))
     $val = (Get-ClipwarpConfig $ConfigPath).targetMode
-    if ($val -in @('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text')) { return [string]$val }
+    if ($val -in @('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text', 'web')) { return [string]$val }
     'auto'
 }
 
@@ -62,7 +62,7 @@ function Set-ClipwarpTargetMode {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text')]
+        [ValidateSet('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text', 'web')]
         [string]$Mode,
         [string]$ConfigPath = (Get-ClipwarpDefaultConfigPath)
     )
@@ -85,6 +85,18 @@ function Test-ClipwarpChatGptTarget {
     if (-not $isBrowser) { return $false }
     $isChatGpt = $WindowTitle -match '(?i)(chatgpt|openai|(^|[\s\-_–—|•·])new\s*chat([\s\-_–—|•·]|$)|การสนทนาใหม่|แชทใหม่)'
     [bool]$isChatGpt
+}
+
+function Test-ClipwarpWebTarget {
+    [CmdletBinding()]
+    param(
+        [string]$ProcessName,
+        [string]$WindowTitle
+    )
+    if ([string]::IsNullOrWhiteSpace($ProcessName)) { return $false }
+    if ($ProcessName -match '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|waterfox|floorp|librewolf|thorium|chromium|chatgpt)$') { return $true }
+    if ($WindowTitle -match '(?i)(chatgpt|openai)') { return $true }
+    return $false
 }
 
 function Test-ClipwarpTerminalTarget {
@@ -152,7 +164,7 @@ public static string GetActiveWindow(out string procName, out uint pid) {
 function Resolve-ClipwarpPublicationMode {
     [CmdletBinding()]
     param(
-        [ValidateSet('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text')]
+        [ValidateSet('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text', 'web')]
         [Alias('Target')]
         [string]$TargetMode = 'auto',
         [switch]$ImageOnly,
@@ -162,17 +174,17 @@ function Resolve-ClipwarpPublicationMode {
         [string]$ConfigPath = (Get-ClipwarpDefaultConfigPath)
     )
     if ($ImageOnly) { return 'image-only' }
-    if ($TargetMode -in @('image-only', 'chatgpt')) { return 'image-only' }
+    if ($TargetMode -in @('image-only', 'chatgpt', 'web')) { return 'image-only' }
     if ($TargetMode -in @('dual', 'claude')) { return 'dual' }
     if ($TargetMode -eq 'text') { return 'text' }
 
     $configured = Get-ClipwarpTargetMode -ConfigPath $ConfigPath
-    if ($configured -in @('image-only', 'chatgpt')) { return 'image-only' }
+    if ($configured -in @('image-only', 'chatgpt', 'web')) { return 'image-only' }
     if ($configured -in @('dual', 'claude')) { return 'dual' }
     if ($configured -eq 'text') { return 'text' }
 
     if ($ProcessName -or $WindowTitle) {
-        if (Test-ClipwarpChatGptTarget -ProcessName $ProcessName -WindowTitle $WindowTitle) {
+        if (Test-ClipwarpWebTarget -ProcessName $ProcessName -WindowTitle $WindowTitle) {
             return 'image-only'
         }
     }
@@ -300,4 +312,4 @@ function Test-ClipwarpEnvironment {
     [pscustomobject]@{ Name='Image directory'; Status=if($resolvedOut){'INFO'}else{'WARN'}; Detail=if($resolvedOut){$resolvedOut}else{'unsafe or invalid OutDir'}; MutatesState=$false }
 }
 
-Export-ModuleMember -Function Get-ClipwarpDefaultConfigPath, Get-ClipwarpCalendarEnabled, Set-ClipwarpCalendarEnabled, Get-ClipwarpCalendarImageDetails, Set-ClipwarpCalendarImageDetails, Get-ClipwarpCalendarDefaultDuration, Set-ClipwarpCalendarDefaultDuration, Clear-ClipwarpCalendarTitleFiles, Resolve-ClipwarpOutDir, Get-ClipwarpHistory, Get-ClipwarpRecopyTarget, Clear-ClipwarpHistory, Test-ClipwarpEnvironment, Get-ClipwarpTargetMode, Set-ClipwarpTargetMode, Test-ClipwarpChatGptTarget, Test-ClipwarpTerminalTarget, Get-ClipwarpForegroundTargetInfo, Resolve-ClipwarpPublicationMode
+Export-ModuleMember -Function Get-ClipwarpDefaultConfigPath, Get-ClipwarpCalendarEnabled, Set-ClipwarpCalendarEnabled, Get-ClipwarpCalendarImageDetails, Set-ClipwarpCalendarImageDetails, Get-ClipwarpCalendarDefaultDuration, Set-ClipwarpCalendarDefaultDuration, Clear-ClipwarpCalendarTitleFiles, Resolve-ClipwarpOutDir, Get-ClipwarpHistory, Get-ClipwarpRecopyTarget, Clear-ClipwarpHistory, Test-ClipwarpEnvironment, Get-ClipwarpTargetMode, Set-ClipwarpTargetMode, Test-ClipwarpChatGptTarget, Test-ClipwarpWebTarget, Test-ClipwarpTerminalTarget, Get-ClipwarpForegroundTargetInfo, Resolve-ClipwarpPublicationMode

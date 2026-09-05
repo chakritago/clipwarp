@@ -88,7 +88,7 @@ param(
     [switch]$KeepImage,
     [switch]$ImageOnly,
     [Alias('Target')]
-    [ValidateSet('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text')]
+    [ValidateSet('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text', 'web')]
     [string]$TargetMode = 'auto',
     [string]$ForegroundProcess,
     [string]$ForegroundTitle,
@@ -103,13 +103,14 @@ if ($Command -in @('calendar','target','history','recopy','clean','doctor','help
             $configPath = Get-ClipwarpDefaultConfigPath
             switch ($Action) {
                 'status'   { Write-Host "clipwarp target: $(Get-ClipwarpTargetMode -ConfigPath $configPath)" }
-                'auto'     { [void](Set-ClipwarpTargetMode -Mode auto -ConfigPath $configPath); Write-Host 'clipwarp target: auto (ChatGPT browser pastes image; terminal/Claude pastes path)' -ForegroundColor Green }
+                'auto'     { [void](Set-ClipwarpTargetMode -Mode auto -ConfigPath $configPath); Write-Host 'clipwarp target: auto (all web browsers paste image; terminal/Claude pastes path)' -ForegroundColor Green }
+                'web'      { [void](Set-ClipwarpTargetMode -Mode web -ConfigPath $configPath); Write-Host 'clipwarp target: web (always paste pure image, no text/file path)' -ForegroundColor Green }
                 'chatgpt'  { [void](Set-ClipwarpTargetMode -Mode chatgpt -ConfigPath $configPath); Write-Host 'clipwarp target: chatgpt (always paste pure image, no text/file path)' -ForegroundColor Green }
                 'image-only' { [void](Set-ClipwarpTargetMode -Mode image-only -ConfigPath $configPath); Write-Host 'clipwarp target: image-only (always paste pure image, no text/file path)' -ForegroundColor Green }
                 'claude'   { [void](Set-ClipwarpTargetMode -Mode claude -ConfigPath $configPath); Write-Host 'clipwarp target: claude (dual format: path text + image)' -ForegroundColor Green }
                 'dual'     { [void](Set-ClipwarpTargetMode -Mode dual -ConfigPath $configPath); Write-Host 'clipwarp target: dual (dual format: path text + image)' -ForegroundColor Green }
                 'text'     { [void](Set-ClipwarpTargetMode -Mode text -ConfigPath $configPath); Write-Host 'clipwarp target: text (file path text only)' -ForegroundColor Green }
-                default    { Write-Host 'usage: clipwarp target auto|chatgpt|image-only|claude|dual|text|status' -ForegroundColor Yellow; exit 1 }
+                default    { Write-Host 'usage: clipwarp target auto|web|chatgpt|image-only|claude|dual|text|status' -ForegroundColor Yellow; exit 1 }
             }
         }
         'calendar' {
@@ -732,7 +733,7 @@ if (-not $Quiet) {
     }
     Write-Host "clipwarp: $verb $($r.Path)" -ForegroundColor Green
     if ($resolvedMode -eq 'image-only') {
-        Write-Host 'image copied to clipboard (ChatGPT target). Switch to ChatGPT and press Ctrl+V.' -ForegroundColor Cyan
+        Write-Host 'image copied to clipboard (web / image-only target). Switch to your browser / app and press Ctrl+V.' -ForegroundColor Cyan
     } else {
         Write-Host 'path copied to clipboard. Switch to Claude Code and press Ctrl+V.' -ForegroundColor Cyan
     }

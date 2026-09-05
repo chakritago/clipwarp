@@ -56,18 +56,46 @@ if (Test-ClipwarpChatGptTarget -ProcessName 'powershell' -WindowTitle 'ChatGPT p
 }
 Write-Host 'PASS: non-browser processes are not detected as ChatGPT browser target'
 
+# Test-ClipwarpWebTarget detection for all web browsers
+$allBrowsers = @('chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc', 'zen', 'waterfox', 'floorp', 'librewolf', 'thorium', 'chromium', 'chatgpt')
+foreach ($b in $allBrowsers) {
+    if (-not (Test-ClipwarpWebTarget -ProcessName $b -WindowTitle 'GitHub - chakritago/clipwarp')) {
+        throw "Expected $b with arbitrary web page title to be identified as web target"
+    }
+    if (-not (Test-ClipwarpWebTarget -ProcessName $b -WindowTitle '')) {
+        throw "Expected $b with empty title to be identified as web target"
+    }
+}
+if (Test-ClipwarpWebTarget -ProcessName 'notepad' -WindowTitle 'notes.txt') {
+    throw 'Notepad should not be detected as web target'
+}
+if (Test-ClipwarpWebTarget -ProcessName 'powershell' -WindowTitle 'Windows PowerShell') {
+    throw 'PowerShell should not be detected as web target'
+}
+if (Test-ClipwarpWebTarget -ProcessName '' -WindowTitle '') {
+    throw 'Empty process should not be detected as web target'
+}
+Write-Host 'PASS: Test-ClipwarpWebTarget detects all supported web browsers'
+
 # 2. Target mode resolution
-# auto mode with ChatGPT browser
+# auto mode with any web browser (ChatGPT or arbitrary website)
 $mode = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'chrome' -WindowTitle 'ChatGPT'
 if ($mode -ne 'image-only') { throw "Expected image-only mode for ChatGPT foreground, got $mode" }
-Write-Host 'PASS: auto mode resolves to image-only when foreground is ChatGPT'
+
+$modeEdge = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'msedge' -WindowTitle 'GitHub - chakritago/clipwarp'
+if ($modeEdge -ne 'image-only') { throw "Expected image-only mode for Edge on arbitrary web page, got $modeEdge" }
+Write-Host 'PASS: auto mode resolves to image-only when foreground is any web browser'
 
 # auto mode with Claude / Terminal foreground
 $mode = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'WindowsTerminal' -WindowTitle 'claude'
 if ($mode -ne 'dual') { throw "Expected dual mode for Terminal, got $mode" }
-Write-Host 'PASS: auto mode resolves to dual when foreground is not ChatGPT'
+Write-Host 'PASS: auto mode resolves to dual when foreground is terminal / Claude'
 
 # explicit target parameter overrides
+$mode = Resolve-ClipwarpPublicationMode -Target web -KeepImage -ProcessName 'WindowsTerminal' -WindowTitle 'claude'
+if ($mode -ne 'image-only') { throw "Expected explicit -Target web to force image-only" }
+Write-Host 'PASS: explicit -Target web forces image-only mode'
+
 $mode = Resolve-ClipwarpPublicationMode -Target chatgpt -KeepImage -ProcessName 'WindowsTerminal' -WindowTitle 'claude'
 if ($mode -ne 'image-only') { throw "Expected explicit -Target chatgpt to force image-only" }
 Write-Host 'PASS: explicit -Target chatgpt forces image-only mode'
@@ -89,6 +117,10 @@ $tempConfig = Join-Path $env:TEMP ('test-clipwarp-' + [guid]::NewGuid().ToString
 try {
     $def = Get-ClipwarpTargetMode -ConfigPath $tempConfig
     if ($def -ne 'auto') { throw "Expected default target mode auto, got $def" }
+
+    [void](Set-ClipwarpTargetMode -Mode web -ConfigPath $tempConfig)
+    $saved = Get-ClipwarpTargetMode -ConfigPath $tempConfig
+    if ($saved -ne 'web') { throw "Expected saved mode web, got $saved" }
 
     [void](Set-ClipwarpTargetMode -Mode chatgpt -ConfigPath $tempConfig)
     $saved = Get-ClipwarpTargetMode -ConfigPath $tempConfig
