@@ -17,8 +17,35 @@ foreach ($b in $browsers) {
     if (Test-ClipwarpChatGptTarget -ProcessName $b -WindowTitle 'GitHub - chakritago/clipwarp') {
         throw "Expected non-ChatGPT title in $b to return false"
     }
+    if (-not (Test-ClipwarpChatGptTarget -ProcessName $b -WindowTitle 'New chat - Google Chrome')) {
+        throw "Expected $b with New chat title to be identified"
+    }
+    if (-not (Test-ClipwarpChatGptTarget -ProcessName $b -WindowTitle 'การสนทนาใหม่ - Google Chrome')) {
+        throw "Expected $b with Thai title to be identified"
+    }
 }
 Write-Host 'PASS: browser + ChatGPT title detection matches expected browser processes'
+
+# Desktop app detection
+if (-not (Test-ClipwarpChatGptTarget -ProcessName 'ChatGPT' -WindowTitle 'ChatGPT')) {
+    throw 'ChatGPT desktop app should be identified as ChatGPT target'
+}
+if (-not (Test-ClipwarpChatGptTarget -ProcessName 'chatgpt' -WindowTitle '')) {
+    throw 'chatgpt process without title should be identified as ChatGPT target'
+}
+Write-Host 'PASS: ChatGPT desktop app is detected'
+
+# Terminal target detection
+$terminals = @('WindowsTerminal', 'powershell', 'pwsh', 'cmd', 'conhost', 'mintty')
+foreach ($t in $terminals) {
+    if (-not (Test-ClipwarpTerminalTarget -ProcessName $t -WindowTitle '')) {
+        throw "Expected $t to be identified as terminal target"
+    }
+}
+if (-not (Test-ClipwarpTerminalTarget -ProcessName 'custom' -WindowTitle 'claude')) {
+    throw 'Expected window with claude title to be identified as terminal target'
+}
+Write-Host 'PASS: terminal target detection identifies terminal processes and claude title'
 
 # Non-browser process with ChatGPT title should NOT be treated as browser ChatGPT
 if (Test-ClipwarpChatGptTarget -ProcessName 'notepad' -WindowTitle 'ChatGPT notes.txt - Notepad') {
@@ -108,6 +135,13 @@ if (-not $dualDo.ContainsImage()) { throw 'Dual payload must contain image' }
 if (-not $dualDo.ContainsFileDropList()) { throw 'Dual payload must contain FileDropList' }
 Write-Host 'PASS: dual payload contains UnicodeText, image, and file drop for Claude Code'
 
+# Verify ClipwarpManaged custom format
+$imageOnlyDo.SetData('ClipwarpManaged', 'C:\dummy\image.png')
+if (-not $imageOnlyDo.GetDataPresent('ClipwarpManaged')) { throw 'Expected ClipwarpManaged format to be present' }
+if ($imageOnlyDo.GetData('ClipwarpManaged') -ne 'C:\dummy\image.png') { throw 'Expected ClipwarpManaged data match' }
+if ($imageOnlyDo.ContainsText()) { throw 'ClipwarpManaged format must not cause ContainsText to be true' }
+Write-Host 'PASS: ClipwarpManaged custom format identifies clipwarp writes without setting text'
+
 # 5. Watcher launch arguments regex / format test
 $watchSource = Get-Content (Join-Path $root 'clipwarp-watch.ps1') -Raw
 if ($watchSource -notmatch 'TargetArguments') {
@@ -119,6 +153,12 @@ if ($watchSource -notmatch '-ForegroundProcess') {
 if ($watchSource -notmatch '-ForegroundTitle') {
     throw 'Watcher script must pass -ForegroundTitle to clipwarp.ps1'
 }
-Write-Host 'PASS: watcher includes foreground target arguments when spawning clipwarp.ps1'
+if ($watchSource -notmatch 'EVENT_SYSTEM_FOREGROUND') {
+    throw 'Watcher script must register EVENT_SYSTEM_FOREGROUND hook'
+}
+if ($watchSource -notmatch 'ClipwarpManaged') {
+    throw 'Watcher script must track ClipwarpManaged payloads'
+}
+Write-Host 'PASS: watcher includes foreground target arguments and event hook'
 
 Write-Host 'All target regression tests passed.'

@@ -317,6 +317,7 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
                     }
                 }
                 $do = New-Object System.Windows.Forms.DataObject
+                if ($Path) { $do.SetData('ClipwarpManaged', $Path) }
                 if ($PngBytes) {
                     $do.SetData('PNG', (New-Object System.IO.MemoryStream (,$PngBytes)))
                     if (-not $Img) { $Img = New-ImageFromBytes $PngBytes }
@@ -327,6 +328,7 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
             elseif ($PublicationMode -eq 'dual') {
                 $do = New-Object System.Windows.Forms.DataObject
                 $do.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $Path)
+                if ($Path) { $do.SetData('ClipwarpManaged', $Path) }
                 if ($PngBytes) {
                     $do.SetData('PNG', (New-Object System.IO.MemoryStream (,$PngBytes)))
                     if (-not $Img) { $Img = New-ImageFromBytes $PngBytes }

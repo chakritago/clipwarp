@@ -22,7 +22,7 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
     $references = @([AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator)
     $references += [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object Location | ForEach-Object Location
     Add-Type -TypeDefinition $watchSource -ReferencedAssemblies ($references | Select-Object -Unique)
-} else { Add-Type -TypeDefinition $watchSource -ReferencedAssemblies @('System','System.Windows.Forms') }
+} else { Add-Type -TypeDefinition $watchSource -ReferencedAssemblies @('System','System.Windows.Forms','System.Drawing') }
 Write-Host 'PASS: compiled watcher C#'
 
 $popupSource = Get-HereStringValue (Join-Path $root 'clipwarp-calendar-popup.ps1') 'public static class ClipwarpPopupNative'

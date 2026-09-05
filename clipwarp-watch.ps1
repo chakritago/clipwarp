@@ -193,6 +193,15 @@ namespace ClipwarpWatch
         private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventProc lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+        [DllImport("user32.dll")]
+        private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+        private delegate void WinEventProc(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
+
+        private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+        private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT { public int X; public int Y; }
@@ -201,13 +210,18 @@ namespace ClipwarpWatch
         private static readonly Regex ImgExt = new Regex(@"\.(png|jpe?g|gif|webp|bmp)$", RegexOptions.IgnoreCase);
         private static readonly Regex HtmlFileUri = new Regex(@"file:///[^""'\s>]+\.(png|jpe?g|gif|webp|bmp)", RegexOptions.IgnoreCase);
         private static readonly Regex BrowserProcRegex = new Regex(@"^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|waterfox|floorp|librewolf|thorium|chromium)$", RegexOptions.IgnoreCase);
-        private static readonly Regex ChatGptTitleRegex = new Regex(@"(^|[\s\-_–—|•·])(chatgpt|openai)([\s\-_–—|•·]|$)", RegexOptions.IgnoreCase);
+        private static readonly Regex ChatGptTitleRegex = new Regex(@"(^|[\s\-_–—|•·])(chatgpt|openai|(^|[\s\-_–—|•·])new\s*chat)([\s\-_–—|•·]|$)|(การสนทนาใหม่|แชทใหม่)", RegexOptions.IgnoreCase);
+        private static readonly Regex TerminalProcRegex = new Regex(@"^(windowsterminal|powershell|pwsh|cmd|conhost|mintty|bash|alacritty|wezterm|hyper|tabby)$", RegexOptions.IgnoreCase);
 
         private readonly string scriptPath;
         private readonly string logPath;
         private readonly string popupPath;
         private readonly string configPath;
         private readonly Timer debounce;
+        private readonly WinEventProc winEventProc;
+        private IntPtr winEventHook = IntPtr.Zero;
+        private string lastManagedImagePath = null;
+        private string currentPayloadMode = "dual";
         private System.Diagnostics.Process child;
         private System.Diagnostics.Process popupChild;
         private DateTime childStarted;
@@ -249,9 +263,12 @@ namespace ClipwarpWatch
             CreateHandle(cp);
             if (!AddClipboardFormatListener(this.Handle))
                 throw new InvalidOperationException("AddClipboardFormatListener failed with Win32 error " + Marshal.GetLastWin32Error());
+            winEventProc = new WinEventProc(OnWinEvent);
+            winEventHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, winEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
             debounce = new Timer();
             debounce.Interval = EventDelayMs;      // coalesce format bursts without delaying the popup noticeably
             debounce.Tick += OnTick;
+            CaptureForeground();
             Log("watch started, pid " + System.Diagnostics.Process.GetCurrentProcess().Id);
         }
 
@@ -281,12 +298,25 @@ namespace ClipwarpWatch
             catch (Exception ex) { Log("error: " + ex.Message); convFails++; if (convFails < 3) { debounce.Interval = 500; debounce.Start(); } }  // bounded retry, then wait for a new copy
         }
 
+        private void OnWinEvent(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
+        {
+            if (eventType == EVENT_SYSTEM_FOREGROUND && hwnd != IntPtr.Zero)
+            {
+                CaptureForegroundFromHwnd(hwnd);
+                OnForegroundWindowChanged();
+            }
+        }
+
         private void CaptureForeground()
+        {
+            IntPtr hwnd = GetForegroundWindow();
+            if (hwnd != IntPtr.Zero) CaptureForegroundFromHwnd(hwnd);
+        }
+
+        private void CaptureForegroundFromHwnd(IntPtr hwnd)
         {
             try
             {
-                IntPtr hwnd = GetForegroundWindow();
-                if (hwnd == IntPtr.Zero) return;
                 uint pid;
                 GetWindowThreadProcessId(hwnd, out pid);
                 string pName = "";
@@ -321,6 +351,159 @@ namespace ClipwarpWatch
                 }
             }
             catch { }
+        }
+
+        private string ConfiguredTargetMode()
+        {
+            try
+            {
+                if (!File.Exists(configPath)) return "auto";
+                string json = File.ReadAllText(configPath, Encoding.UTF8);
+                Match m = Regex.Match(json, "\\\"targetMode\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"", RegexOptions.IgnoreCase);
+                if (m.Success) return m.Groups[1].Value.Trim().ToLowerInvariant();
+            }
+            catch { }
+            return "auto";
+        }
+
+        private bool IsChatGptForeground()
+        {
+            string proc = foregroundProcess ?? "";
+            string title = foregroundTitle ?? "";
+            if (proc.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase)) return true;
+            if (BrowserProcRegex.IsMatch(proc))
+            {
+                if (ChatGptTitleRegex.IsMatch(title)) return true;
+                string mode = ConfiguredTargetMode();
+                if (mode.Equals("chatgpt", StringComparison.OrdinalIgnoreCase) || mode.Equals("image-only", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        private bool IsTerminalForeground()
+        {
+            string proc = foregroundProcess ?? "";
+            string title = foregroundTitle ?? "";
+            if (TerminalProcRegex.IsMatch(proc)) return true;
+            if (title.IndexOf("claude", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return false;
+        }
+
+        private bool IsManagedClipboardActive()
+        {
+            try
+            {
+                IDataObject d = Clipboard.GetDataObject();
+                if (d == null) return false;
+                if (d.GetDataPresent("ClipwarpManaged"))
+                {
+                    string p = d.GetData("ClipwarpManaged") as string;
+                    return !string.IsNullOrEmpty(p) && string.Equals(p, lastManagedImagePath, StringComparison.OrdinalIgnoreCase);
+                }
+                if (Clipboard.ContainsText())
+                {
+                    string t = Clipboard.GetText();
+                    if (!string.IsNullOrEmpty(t) && string.Equals(t.Trim().Trim('"'), lastManagedImagePath, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+                return false;
+            }
+            catch { return false; }
+        }
+
+        private void OnForegroundWindowChanged()
+        {
+            if (string.IsNullOrEmpty(lastManagedImagePath) || !File.Exists(lastManagedImagePath)) return;
+
+            string targetMode = ConfiguredTargetMode();
+            if (targetMode.Equals("text", StringComparison.OrdinalIgnoreCase)) return;
+
+            if (!IsManagedClipboardActive()) return;
+
+            bool isGpt = IsChatGptForeground();
+            bool isTerm = IsTerminalForeground();
+
+            if (targetMode.Equals("chatgpt", StringComparison.OrdinalIgnoreCase) || targetMode.Equals("image-only", StringComparison.OrdinalIgnoreCase))
+            {
+                if (currentPayloadMode != "image-only") SetClipboardImageOnly(lastManagedImagePath);
+                return;
+            }
+            if (targetMode.Equals("claude", StringComparison.OrdinalIgnoreCase) || targetMode.Equals("dual", StringComparison.OrdinalIgnoreCase))
+            {
+                if (currentPayloadMode != "dual") SetClipboardDual(lastManagedImagePath);
+                return;
+            }
+
+            // Auto mode:
+            if (isGpt && currentPayloadMode != "image-only")
+            {
+                SetClipboardImageOnly(lastManagedImagePath);
+            }
+            else if (isTerm && currentPayloadMode != "dual")
+            {
+                SetClipboardDual(lastManagedImagePath);
+            }
+        }
+
+        private void SetClipboardImageOnly(string path)
+        {
+            for (int retry = 0; retry < 5; retry++)
+            {
+                try
+                {
+                    if (!File.Exists(path)) return;
+                    byte[] bytes = File.ReadAllBytes(path);
+                    DataObject doObj = new DataObject();
+                    doObj.SetData("ClipwarpManaged", path);
+                    doObj.SetData("PNG", false, new MemoryStream(bytes));
+                    using (MemoryStream ms = new MemoryStream(bytes))
+                    {
+                        using (var bmp = new System.Drawing.Bitmap(ms))
+                        {
+                            doObj.SetImage(bmp);
+                            Clipboard.SetDataObject(doObj, true);
+                        }
+                    }
+                    currentPayloadMode = "image-only";
+                    lastHandledSequence = GetClipboardSequenceNumber();
+                    Log("switched clipboard to image-only (ChatGPT target)");
+                    return;
+                }
+                catch { System.Threading.Thread.Sleep(50); }
+            }
+        }
+
+        private void SetClipboardDual(string path)
+        {
+            for (int retry = 0; retry < 5; retry++)
+            {
+                try
+                {
+                    if (!File.Exists(path)) return;
+                    byte[] bytes = File.ReadAllBytes(path);
+                    DataObject doObj = new DataObject();
+                    doObj.SetData(DataFormats.UnicodeText, path);
+                    doObj.SetData("ClipwarpManaged", path);
+                    doObj.SetData("PNG", false, new MemoryStream(bytes));
+                    using (MemoryStream ms = new MemoryStream(bytes))
+                    {
+                        using (var bmp = new System.Drawing.Bitmap(ms))
+                        {
+                            doObj.SetImage(bmp);
+                            var sc = new System.Collections.Specialized.StringCollection();
+                            sc.Add(path);
+                            doObj.SetFileDropList(sc);
+                            Clipboard.SetDataObject(doObj, true);
+                        }
+                    }
+                    currentPayloadMode = "dual";
+                    lastHandledSequence = GetClipboardSequenceNumber();
+                    Log("switched clipboard to dual (Claude Code / terminal target)");
+                    return;
+                }
+                catch { System.Threading.Thread.Sleep(50); }
+            }
         }
 
         private void Inspect()
@@ -365,13 +548,37 @@ namespace ClipwarpWatch
                 return;
             }
 
+            // Check for our own ClipwarpManaged payload:
+            IDataObject dObj = null;
+            try { dObj = Clipboard.GetDataObject(); } catch { Rearm(); return; }
+            if (dObj != null && dObj.GetDataPresent("ClipwarpManaged"))
+            {
+                string mPath = dObj.GetData("ClipwarpManaged") as string;
+                if (!string.IsNullOrEmpty(mPath) && File.Exists(mPath))
+                {
+                    lastManagedImagePath = mPath;
+                    lastHandledSequence = sequence;
+                    busyRetries = 0;
+                    debounce.Interval = EventDelayMs;
+                    currentPayloadMode = (dObj.GetDataPresent(DataFormats.UnicodeText) || dObj.GetDataPresent(DataFormats.Text)) ? "dual" : "image-only";
+                    return;
+                }
+            }
+
             string txt = null;
             try { if (Clipboard.ContainsText()) txt = Clipboard.GetText(); }
             catch { Rearm(); return; }                         // clipboard busy -> retry soon, don't drop it
             if (!string.IsNullOrEmpty(txt))
             {
                 string p = txt.Trim().Trim('"');
-                if (ImgExt.IsMatch(p) && File.Exists(p)) { busyRetries = 0; debounce.Interval = EventDelayMs; return; }  // our own write / usable path
+                if (ImgExt.IsMatch(p) && File.Exists(p)) {
+                    busyRetries = 0;
+                    debounce.Interval = EventDelayMs;
+                    lastManagedImagePath = p;
+                    lastHandledSequence = sequence;
+                    currentPayloadMode = "dual";
+                    return;
+                }  // our own write / usable path
                 string meaningful = txt.Trim();
                 if (meaningful.Length > 0)
                 {
@@ -531,6 +738,11 @@ namespace ClipwarpWatch
         public void Shutdown()
         {
             try { RemoveClipboardFormatListener(this.Handle); } catch { }
+            if (winEventHook != IntPtr.Zero)
+            {
+                try { UnhookWinEvent(winEventHook); } catch { }
+                winEventHook = IntPtr.Zero;
+            }
             CloseOwnedPopup();
             Log("watch stopped");
         }
@@ -553,7 +765,7 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
     Add-Type -TypeDefinition $src -ReferencedAssemblies ($references | Select-Object -Unique)
 }
 else {
-    Add-Type -TypeDefinition $src -ReferencedAssemblies @('System', 'System.Windows.Forms')
+    Add-Type -TypeDefinition $src -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
 }
 
 $watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $configPath, $logFile)
