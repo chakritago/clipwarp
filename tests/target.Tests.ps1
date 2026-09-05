@@ -1,0 +1,124 @@
+$ErrorActionPreference = 'Stop'
+$root = Split-Path $PSScriptRoot -Parent
+Import-Module (Join-Path $root 'clipwarp-support.psm1') -Force
+
+# 1. Test-ClipwarpChatGptTarget detection
+$browsers = @('chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc', 'zen')
+foreach ($b in $browsers) {
+    if (-not (Test-ClipwarpChatGptTarget -ProcessName $b -WindowTitle 'ChatGPT - Google Chrome')) {
+        throw "Expected $b with ChatGPT title to be identified as ChatGPT target"
+    }
+    if (-not (Test-ClipwarpChatGptTarget -ProcessName $b -WindowTitle 'New chat - ChatGPT - Mozilla Firefox')) {
+        throw "Expected $b with chatgpt in title to be identified"
+    }
+    if (-not (Test-ClipwarpChatGptTarget -ProcessName $b -WindowTitle 'OpenAI ChatGPT')) {
+        throw "Expected $b with OpenAI ChatGPT to be identified"
+    }
+    if (Test-ClipwarpChatGptTarget -ProcessName $b -WindowTitle 'GitHub - chakritago/clipwarp') {
+        throw "Expected non-ChatGPT title in $b to return false"
+    }
+}
+Write-Host 'PASS: browser + ChatGPT title detection matches expected browser processes'
+
+# Non-browser process with ChatGPT title should NOT be treated as browser ChatGPT
+if (Test-ClipwarpChatGptTarget -ProcessName 'notepad' -WindowTitle 'ChatGPT notes.txt - Notepad') {
+    throw 'Notepad should not be detected as ChatGPT target'
+}
+if (Test-ClipwarpChatGptTarget -ProcessName 'powershell' -WindowTitle 'ChatGPT prompt') {
+    throw 'PowerShell terminal should not be detected as ChatGPT target'
+}
+Write-Host 'PASS: non-browser processes are not detected as ChatGPT browser target'
+
+# 2. Target mode resolution
+# auto mode with ChatGPT browser
+$mode = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'chrome' -WindowTitle 'ChatGPT'
+if ($mode -ne 'image-only') { throw "Expected image-only mode for ChatGPT foreground, got $mode" }
+Write-Host 'PASS: auto mode resolves to image-only when foreground is ChatGPT'
+
+# auto mode with Claude / Terminal foreground
+$mode = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'WindowsTerminal' -WindowTitle 'claude'
+if ($mode -ne 'dual') { throw "Expected dual mode for Terminal, got $mode" }
+Write-Host 'PASS: auto mode resolves to dual when foreground is not ChatGPT'
+
+# explicit target parameter overrides
+$mode = Resolve-ClipwarpPublicationMode -Target chatgpt -KeepImage -ProcessName 'WindowsTerminal' -WindowTitle 'claude'
+if ($mode -ne 'image-only') { throw "Expected explicit -Target chatgpt to force image-only" }
+Write-Host 'PASS: explicit -Target chatgpt forces image-only mode'
+
+$mode = Resolve-ClipwarpPublicationMode -Target claude -ProcessName 'chrome' -WindowTitle 'ChatGPT'
+if ($mode -ne 'dual') { throw "Expected explicit -Target claude to force dual mode" }
+Write-Host 'PASS: explicit -Target claude forces dual mode'
+
+$mode = Resolve-ClipwarpPublicationMode -Target text -KeepImage
+if ($mode -ne 'text') { throw "Expected -Target text to force text mode" }
+Write-Host 'PASS: explicit -Target text forces text mode'
+
+$mode = Resolve-ClipwarpPublicationMode -ImageOnly
+if ($mode -ne 'image-only') { throw "Expected -ImageOnly switch to force image-only mode" }
+Write-Host 'PASS: -ImageOnly switch forces image-only mode'
+
+# 3. Configurable targetMode
+$tempConfig = Join-Path $env:TEMP ('test-clipwarp-' + [guid]::NewGuid().ToString('N') + '.json')
+try {
+    $def = Get-ClipwarpTargetMode -ConfigPath $tempConfig
+    if ($def -ne 'auto') { throw "Expected default target mode auto, got $def" }
+
+    [void](Set-ClipwarpTargetMode -Mode chatgpt -ConfigPath $tempConfig)
+    $saved = Get-ClipwarpTargetMode -ConfigPath $tempConfig
+    if ($saved -ne 'chatgpt') { throw "Expected saved mode chatgpt, got $saved" }
+
+    # Resolution with saved config
+    $mode = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'WindowsTerminal' -WindowTitle 'claude' -ConfigPath $tempConfig
+    if ($mode -ne 'image-only') { throw "Expected persistent chatgpt setting to yield image-only" }
+    Write-Host 'PASS: persistent targetMode config overrides auto resolution'
+} finally {
+    Remove-Item -LiteralPath $tempConfig -Force -ErrorAction SilentlyContinue
+}
+
+# 4. Publication payload validation (without touching OS clipboard)
+# Verify that image-only DataObject contains PNG/Image but NO text or file-drop
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$testBmp = New-Object System.Drawing.Bitmap 8, 8
+$pngStream = New-Object System.IO.MemoryStream
+$testBmp.Save($pngStream, [System.Drawing.Imaging.ImageFormat]::Png)
+$bytes = $pngStream.ToArray()
+
+$imageOnlyDo = New-Object System.Windows.Forms.DataObject
+$imageOnlyDo.SetData('PNG', (New-Object System.IO.MemoryStream (,$bytes)))
+$imageOnlyDo.SetImage($testBmp)
+
+if ($imageOnlyDo.ContainsText()) { throw 'ImageOnly payload must NOT contain text' }
+if ($imageOnlyDo.ContainsFileDropList()) { throw 'ImageOnly payload must NOT contain FileDropList' }
+if (-not $imageOnlyDo.ContainsImage()) { throw 'ImageOnly payload must contain image' }
+if (-not $imageOnlyDo.GetDataPresent('PNG')) { throw 'ImageOnly payload must contain PNG format' }
+Write-Host 'PASS: image-only payload contains image and PNG data with no text or file drop'
+
+# Verify dual DataObject contains UnicodeText, PNG, Image, and FileDropList
+$dualDo = New-Object System.Windows.Forms.DataObject
+$dualDo.SetData([System.Windows.Forms.DataFormats]::UnicodeText, 'C:\dummy\image.png')
+$dualDo.SetData('PNG', (New-Object System.IO.MemoryStream (,$bytes)))
+$dualDo.SetImage($testBmp)
+$sc = New-Object System.Collections.Specialized.StringCollection
+[void]$sc.Add('C:\dummy\image.png')
+$dualDo.SetFileDropList($sc)
+
+if (-not $dualDo.ContainsText()) { throw 'Dual payload must contain text' }
+if (-not $dualDo.ContainsImage()) { throw 'Dual payload must contain image' }
+if (-not $dualDo.ContainsFileDropList()) { throw 'Dual payload must contain FileDropList' }
+Write-Host 'PASS: dual payload contains UnicodeText, image, and file drop for Claude Code'
+
+# 5. Watcher launch arguments regex / format test
+$watchSource = Get-Content (Join-Path $root 'clipwarp-watch.ps1') -Raw
+if ($watchSource -notmatch 'TargetArguments') {
+    throw 'Watcher script must incorporate TargetArguments'
+}
+if ($watchSource -notmatch '-ForegroundProcess') {
+    throw 'Watcher script must pass -ForegroundProcess to clipwarp.ps1'
+}
+if ($watchSource -notmatch '-ForegroundTitle') {
+    throw 'Watcher script must pass -ForegroundTitle to clipwarp.ps1'
+}
+Write-Host 'PASS: watcher includes foreground target arguments when spawning clipwarp.ps1'
+
+Write-Host 'All target regression tests passed.'

@@ -72,7 +72,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('convert', 'watch', 'stop', 'status', 'autostart', 'unautostart', 'calendar', 'history', 'recopy', 'clean', 'doctor', 'help')]
+    [ValidateSet('convert', 'watch', 'stop', 'status', 'autostart', 'unautostart', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'help')]
     [string]$Command = 'convert',
     [Parameter(Position = 1)][string]$Action,
     [Parameter(Position = 2)][string]$Setting,
@@ -86,13 +86,32 @@ param(
     [datetime]$Before = (Get-Date).AddDays(-7),
     [switch]$Quiet,
     [switch]$KeepImage,
+    [switch]$ImageOnly,
+    [Alias('Target')]
+    [ValidateSet('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text')]
+    [string]$TargetMode = 'auto',
+    [string]$ForegroundProcess,
+    [string]$ForegroundTitle,
     [Nullable[int]]$PointerX,
     [Nullable[int]]$PointerY
 )
 
-if ($Command -in @('calendar','history','recopy','clean','doctor','help')) {
+if ($Command -in @('calendar','target','history','recopy','clean','doctor','help')) {
     Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
     switch ($Command) {
+        'target' {
+            $configPath = Get-ClipwarpDefaultConfigPath
+            switch ($Action) {
+                'status'   { Write-Host "clipwarp target: $(Get-ClipwarpTargetMode -ConfigPath $configPath)" }
+                'auto'     { [void](Set-ClipwarpTargetMode -Mode auto -ConfigPath $configPath); Write-Host 'clipwarp target: auto (ChatGPT browser pastes image; terminal/Claude pastes path)' -ForegroundColor Green }
+                'chatgpt'  { [void](Set-ClipwarpTargetMode -Mode chatgpt -ConfigPath $configPath); Write-Host 'clipwarp target: chatgpt (always paste pure image, no text/file path)' -ForegroundColor Green }
+                'image-only' { [void](Set-ClipwarpTargetMode -Mode image-only -ConfigPath $configPath); Write-Host 'clipwarp target: image-only (always paste pure image, no text/file path)' -ForegroundColor Green }
+                'claude'   { [void](Set-ClipwarpTargetMode -Mode claude -ConfigPath $configPath); Write-Host 'clipwarp target: claude (dual format: path text + image)' -ForegroundColor Green }
+                'dual'     { [void](Set-ClipwarpTargetMode -Mode dual -ConfigPath $configPath); Write-Host 'clipwarp target: dual (dual format: path text + image)' -ForegroundColor Green }
+                'text'     { [void](Set-ClipwarpTargetMode -Mode text -ConfigPath $configPath); Write-Host 'clipwarp target: text (file path text only)' -ForegroundColor Green }
+                default    { Write-Host 'usage: clipwarp target auto|chatgpt|image-only|claude|dual|text|status' -ForegroundColor Yellow; exit 1 }
+            }
+        }
         'calendar' {
             $configPath = Get-ClipwarpDefaultConfigPath
             switch ($Action) {
@@ -188,8 +207,14 @@ if ($Command -ne 'convert') {
 # All clipboard access must run on an STA thread. Windows PowerShell 5.1's
 # console host is STA, but pwsh 7 defaults to MTA, so we always marshal the
 # work onto a dedicated STA runspace to behave identically in both.
+Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
+$fgInfo = Get-ClipwarpForegroundTargetInfo
+$effProcess = if ($ForegroundProcess) { $ForegroundProcess } else { $fgInfo.ProcessName }
+$effTitle   = if ($ForegroundTitle)   { $ForegroundTitle }   else { $fgInfo.WindowTitle }
+$resolvedMode = Resolve-ClipwarpPublicationMode -Target $TargetMode -ImageOnly:$ImageOnly -KeepImage:$KeepImage -ProcessName $effProcess -WindowTitle $effTitle
+
 $work = {
-    param($OutDir, $KeepImage)
+    param($OutDir, $KeepImage, $PublicationMode)
 
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
@@ -267,7 +292,7 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
     function Set-ClipboardChecked {
         param([scriptblock]$WriteOnce)
         for ($i = 0; $i -lt 10; $i++) {
-            if ($KeepImage -and $seq0 -ne 0) {
+            if (($KeepImage -or $PublicationMode -eq 'image-only') -and $seq0 -ne 0) {
                 $now = [ClipwarpNative.Clip]::GetClipboardSequenceNumber()
                 if ($now -ne 0 -and $now -ne $seq0) { throw 'clipboard-changed' }
             }
@@ -276,13 +301,30 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
         throw 'clipboard write failed after retries'
     }
 
-    # Put the result on the clipboard. Plain mode: text only (the path).
-    # -KeepImage mode: DUAL format - text path for Claude Code, plus the
-    # original image/file so pasting into image-aware apps keeps working.
+    # Put the result on the clipboard.
+    # Mode 'image-only' (e.g. ChatGPT web in browser): pure image/PNG, NO text/file path.
+    # Mode 'dual' (-KeepImage): text path for Claude Code + original image/file.
+    # Mode 'text': text only (the path).
     function Publish-Result {
         param([string]$Path, $Img, [byte[]]$PngBytes, [string]$DropFile)
         try {
-            if ($KeepImage) {
+            if ($PublicationMode -eq 'image-only') {
+                if (-not $Img -and -not $PngBytes) {
+                    if ($DropFile -and (Test-Path -LiteralPath $DropFile -PathType Leaf)) {
+                        try { $PngBytes = [System.IO.File]::ReadAllBytes($DropFile) } catch {}
+                    } elseif ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+                        try { $PngBytes = [System.IO.File]::ReadAllBytes($Path) } catch {}
+                    }
+                }
+                $do = New-Object System.Windows.Forms.DataObject
+                if ($PngBytes) {
+                    $do.SetData('PNG', (New-Object System.IO.MemoryStream (,$PngBytes)))
+                    if (-not $Img) { $Img = New-ImageFromBytes $PngBytes }
+                }
+                if ($Img) { $do.SetImage($Img) }
+                Set-ClipboardChecked { [System.Windows.Forms.Clipboard]::SetDataObject($do, $true) }
+            }
+            elseif ($PublicationMode -eq 'dual') {
                 $do = New-Object System.Windows.Forms.DataObject
                 $do.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $Path)
                 if ($PngBytes) {
@@ -622,7 +664,7 @@ $rs.ThreadOptions = 'ReuseThread'
 $rs.Open()
 $ps = [powershell]::Create()
 $ps.Runspace = $rs
-[void]$ps.AddScript($work).AddArgument($OutDir).AddArgument([bool]$KeepImage)
+[void]$ps.AddScript($work).AddArgument($OutDir).AddArgument([bool]$KeepImage).AddArgument([string]$resolvedMode)
 $changed  = $false
 $writeErr = $null
 try { $invoked = $ps.Invoke() }
@@ -687,7 +729,11 @@ if (-not $Quiet) {
         default      { 'saved bitmap ->' }
     }
     Write-Host "clipwarp: $verb $($r.Path)" -ForegroundColor Green
-    Write-Host 'path copied to clipboard. Switch to Claude Code and press Ctrl+V.' -ForegroundColor Cyan
+    if ($resolvedMode -eq 'image-only') {
+        Write-Host 'image copied to clipboard (ChatGPT target). Switch to ChatGPT and press Ctrl+V.' -ForegroundColor Cyan
+    } else {
+        Write-Host 'path copied to clipboard. Switch to Claude Code and press Ctrl+V.' -ForegroundColor Cyan
+    }
 }
 
 # Show the same short-lived, non-blocking calendar prompt in manual and watcher

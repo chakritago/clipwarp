@@ -87,6 +87,19 @@ The clipboard is rewritten as **dual format**, so nothing else breaks:
 | Claude Code / any terminal | the saved image's **path** (auto-attaches) |
 | Photoshop, Word, Discord, a browser… | the original **image** |
 
+### ChatGPT Web & Target Awareness
+
+When using ChatGPT on the web (e.g. in Chrome, Edge, Firefox, Brave, Vivaldi, Opera), pasting a copied image pastes the **actual image**, never a local file path.
+Clipwarp automatically detects when the active/foreground browser window has ChatGPT open and publishes a pure image payload (`image/png` / Bitmap) without `UnicodeText` or file-drop lists. Claude Code / terminal windows receive the dual/text path payload as required.
+
+You can also check or explicitly configure the target mode at any time:
+```powershell
+clipwarp target status       # view active mode (default: auto)
+clipwarp target auto         # automatic foreground browser & ChatGPT detection
+clipwarp target chatgpt      # force pure image output (no path text)
+clipwarp target claude       # force dual format (path text + image)
+```
+
 Copies that carry meaningful text alongside an image (e.g. a paragraph from Word)
 are left untouched by image conversion and use that text in the calendar prompt.
 

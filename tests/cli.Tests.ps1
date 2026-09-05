@@ -39,6 +39,8 @@ try {
     Assert-Equal 0 $LASTEXITCODE 'history is a safe successful command'
     & $engine -NoProfile -File $clipwarp clean -OutDir $images -Before '2000-01-01' *> $null
     Assert-Equal 0 $LASTEXITCODE 'clean accepts an empty managed test directory'
+    & $engine -NoProfile -File $clipwarp target status *> $null
+    Assert-Equal 0 $LASTEXITCODE 'target status is a safe successful command'
     & $engine -NoProfile -File $clipwarp doctor -OutDir $images *> $null
     Assert-Equal 0 $LASTEXITCODE 'doctor is a safe successful command'
 

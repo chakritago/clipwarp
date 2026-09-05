@@ -59,6 +59,12 @@ try {
     Assert-Equal $true (Test-Path -LiteralPath (Join-Path $out 'unrelated.png')) 'clean preserves unrelated files'
     Assert-Equal $false (Test-Path -LiteralPath (Join-Path $out 'clip-20260101-000000-000.png')) 'clean removes old managed files'
 
+    Assert-Equal 'auto' (Get-ClipwarpTargetMode -ConfigPath $config) 'missing config preserves targetMode default auto'
+    Set-ClipwarpTargetMode -Mode chatgpt -ConfigPath $config | Out-Null
+    Assert-Equal 'chatgpt' (Get-ClipwarpTargetMode -ConfigPath $config) 'targetMode persists chatgpt setting'
+    Set-ClipwarpTargetMode -Mode auto -ConfigPath $config | Out-Null
+    Assert-Equal 'auto' (Get-ClipwarpTargetMode -ConfigPath $config) 'targetMode persists auto setting'
+
     $doctor = @(Test-ClipwarpEnvironment -ScriptRoot $root -ConfigPath $config -OutDir $out -ProfilePaths @((Join-Path $temp 'missing-profile.ps1')) -StartupPath (Join-Path $temp 'missing.lnk') -PidPath (Join-Path $temp 'missing.pid'))
     Assert-Equal $true ($doctor.Count -ge 6) 'doctor returns a useful diagnostic set'
     Assert-Equal $false (($doctor | Where-Object Name -eq 'Repository URL').MutatesState) 'doctor diagnostics are explicitly read-only'

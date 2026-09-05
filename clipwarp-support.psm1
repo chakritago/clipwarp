@@ -50,6 +50,123 @@ function Set-ClipwarpCalendarImageDetails { param([Parameter(Mandatory=$true)][V
 function Get-ClipwarpCalendarDefaultDuration { param([string]$ConfigPath=(Get-ClipwarpDefaultConfigPath)); $v=(Get-ClipwarpConfig $ConfigPath).calendar.defaultDurationMinutes; if($v -is [int] -or $v -is [long]){if($v -ge 1 -and $v -le 1440){return [int]$v}}; 60 }
 function Set-ClipwarpCalendarDefaultDuration { param([Parameter(Mandatory=$true)][ValidateRange(1,1440)][int]$Minutes,[string]$ConfigPath=(Get-ClipwarpDefaultConfigPath)); Set-ClipwarpCalendarProperty defaultDurationMinutes $Minutes $ConfigPath; $Minutes }
 
+function Get-ClipwarpTargetMode {
+    [CmdletBinding()]
+    param([string]$ConfigPath = (Get-ClipwarpDefaultConfigPath))
+    $val = (Get-ClipwarpConfig $ConfigPath).targetMode
+    if ($val -in @('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text')) { return [string]$val }
+    'auto'
+}
+
+function Set-ClipwarpTargetMode {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text')]
+        [string]$Mode,
+        [string]$ConfigPath = (Get-ClipwarpDefaultConfigPath)
+    )
+    $config = Get-ClipwarpConfig -ConfigPath $ConfigPath
+    $config | Add-Member NoteProperty targetMode $Mode -Force
+    Save-ClipwarpConfig $config $ConfigPath
+    $Mode
+}
+
+function Test-ClipwarpChatGptTarget {
+    [CmdletBinding()]
+    param(
+        [string]$ProcessName,
+        [string]$WindowTitle
+    )
+    if ([string]::IsNullOrWhiteSpace($ProcessName) -or [string]::IsNullOrWhiteSpace($WindowTitle)) { return $false }
+    $isBrowser = $ProcessName -match '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|waterfox|floorp|librewolf|thorium|chromium)$'
+    if (-not $isBrowser) { return $false }
+    $isChatGpt = $WindowTitle -match '(?i)(chatgpt|openai)'
+    [bool]$isChatGpt
+}
+
+function Get-ClipwarpForegroundTargetInfo {
+    [CmdletBinding()]
+    param()
+    if (-not ([System.Management.Automation.PSTypeName]'ClipwarpNative.TargetWindow').Type) {
+        Add-Type -Namespace ClipwarpNative -Name TargetWindow -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr GetForegroundWindow();
+
+[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+public static extern int GetWindowText(System.IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+
+[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint lpdwProcessId);
+
+public static string GetActiveWindow(out string procName, out uint pid) {
+    procName = "";
+    pid = 0;
+    System.IntPtr hwnd = GetForegroundWindow();
+    if (hwnd == System.IntPtr.Zero) return "";
+    GetWindowThreadProcessId(hwnd, out pid);
+    try {
+        procName = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;
+    } catch { }
+    System.Text.StringBuilder sb = new System.Text.StringBuilder(512);
+    GetWindowText(hwnd, sb, sb.Capacity);
+    return sb.ToString();
+}
+'@
+    }
+    try {
+        $proc = ""
+        $pidVal = [uint32]0
+        $title = [ClipwarpNative.TargetWindow]::GetActiveWindow([ref]$proc, [ref]$pidVal)
+        $isGpt = Test-ClipwarpChatGptTarget -ProcessName $proc -WindowTitle $title
+        return [pscustomobject]@{
+            ProcessName = $proc
+            WindowTitle = $title
+            ProcessId   = $pidVal
+            IsChatGpt   = $isGpt
+        }
+    } catch {
+        return [pscustomobject]@{
+            ProcessName = ""
+            WindowTitle = ""
+            ProcessId   = 0
+            IsChatGpt   = $false
+        }
+    }
+}
+
+function Resolve-ClipwarpPublicationMode {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('auto', 'chatgpt', 'claude', 'image-only', 'dual', 'text')]
+        [Alias('Target')]
+        [string]$TargetMode = 'auto',
+        [switch]$ImageOnly,
+        [switch]$KeepImage,
+        [string]$ProcessName,
+        [string]$WindowTitle,
+        [string]$ConfigPath = (Get-ClipwarpDefaultConfigPath)
+    )
+    if ($ImageOnly) { return 'image-only' }
+    if ($TargetMode -in @('image-only', 'chatgpt')) { return 'image-only' }
+    if ($TargetMode -in @('dual', 'claude')) { return 'dual' }
+    if ($TargetMode -eq 'text') { return 'text' }
+
+    $configured = Get-ClipwarpTargetMode -ConfigPath $ConfigPath
+    if ($configured -in @('image-only', 'chatgpt')) { return 'image-only' }
+    if ($configured -in @('dual', 'claude')) { return 'dual' }
+    if ($configured -eq 'text') { return 'text' }
+
+    if ($ProcessName -or $WindowTitle) {
+        if (Test-ClipwarpChatGptTarget -ProcessName $ProcessName -WindowTitle $WindowTitle) {
+            return 'image-only'
+        }
+    }
+
+    if ($KeepImage) { return 'dual' }
+    return 'text'
+}
+
 function Clear-ClipwarpCalendarTitleFiles {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$Directory,[datetime]$BeforeUtc=[datetime]::UtcNow.AddDays(-1),[ValidateRange(1,1000)][int]$MaximumFiles=100)
@@ -156,6 +273,8 @@ function Test-ClipwarpEnvironment {
     $calendarState=if(Get-ClipwarpCalendarEnabled -ConfigPath $ConfigPath){'enabled'}else{'disabled'}
     $calendarDetail="$calendarState; image details $(Get-ClipwarpCalendarImageDetails -ConfigPath $ConfigPath); default duration $(Get-ClipwarpCalendarDefaultDuration -ConfigPath $ConfigPath) minutes"
     [pscustomobject]@{ Name='Calendar'; Status='INFO'; Detail=$calendarDetail; MutatesState=$false }
+    $targetMode = Get-ClipwarpTargetMode -ConfigPath $ConfigPath
+    [pscustomobject]@{ Name='Target mode'; Status='INFO'; Detail="configured: $targetMode (ChatGPT browser detection: active in auto mode)"; MutatesState=$false }
     $titleDir=Split-Path -Parent $ConfigPath
     $orphanCount=if(Test-Path -LiteralPath $titleDir -PathType Container){@(Get-ChildItem -LiteralPath $titleDir -File -Filter 'clipwarp-title-*.txt' -ErrorAction SilentlyContinue | Where-Object {$_.Name -match '^clipwarp-title-[0-9a-f]{32}\.txt$' -and $_.LastWriteTimeUtc -lt [datetime]::UtcNow.AddDays(-1)} | Select-Object -First 101).Count}else{0}
     [pscustomobject]@{ Name='Calendar transport'; Status=if($orphanCount){'WARN'}else{'OK'}; Detail=if($orphanCount -gt 100){'more than 100 old managed title files'}elseif($orphanCount){"$orphanCount old managed title file(s)"}else{'no old managed title files'}; MutatesState=$false }
@@ -167,4 +286,4 @@ function Test-ClipwarpEnvironment {
     [pscustomobject]@{ Name='Image directory'; Status=if($resolvedOut){'INFO'}else{'WARN'}; Detail=if($resolvedOut){$resolvedOut}else{'unsafe or invalid OutDir'}; MutatesState=$false }
 }
 
-Export-ModuleMember -Function Get-ClipwarpDefaultConfigPath, Get-ClipwarpCalendarEnabled, Set-ClipwarpCalendarEnabled, Get-ClipwarpCalendarImageDetails, Set-ClipwarpCalendarImageDetails, Get-ClipwarpCalendarDefaultDuration, Set-ClipwarpCalendarDefaultDuration, Clear-ClipwarpCalendarTitleFiles, Resolve-ClipwarpOutDir, Get-ClipwarpHistory, Get-ClipwarpRecopyTarget, Clear-ClipwarpHistory, Test-ClipwarpEnvironment
+Export-ModuleMember -Function Get-ClipwarpDefaultConfigPath, Get-ClipwarpCalendarEnabled, Set-ClipwarpCalendarEnabled, Get-ClipwarpCalendarImageDetails, Set-ClipwarpCalendarImageDetails, Get-ClipwarpCalendarDefaultDuration, Set-ClipwarpCalendarDefaultDuration, Clear-ClipwarpCalendarTitleFiles, Resolve-ClipwarpOutDir, Get-ClipwarpHistory, Get-ClipwarpRecopyTarget, Clear-ClipwarpHistory, Test-ClipwarpEnvironment, Get-ClipwarpTargetMode, Set-ClipwarpTargetMode, Test-ClipwarpChatGptTarget, Get-ClipwarpForegroundTargetInfo, Resolve-ClipwarpPublicationMode

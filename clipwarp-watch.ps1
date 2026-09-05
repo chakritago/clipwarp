@@ -187,6 +187,12 @@ namespace ClipwarpWatch
         private static extern uint GetClipboardSequenceNumber();
         [DllImport("user32.dll")]
         private static extern bool GetCursorPos(out POINT point);
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT { public int X; public int Y; }
@@ -194,6 +200,8 @@ namespace ClipwarpWatch
         private const int WM_CLIPBOARDUPDATE = 0x031D;
         private static readonly Regex ImgExt = new Regex(@"\.(png|jpe?g|gif|webp|bmp)$", RegexOptions.IgnoreCase);
         private static readonly Regex HtmlFileUri = new Regex(@"file:///[^""'\s>]+\.(png|jpe?g|gif|webp|bmp)", RegexOptions.IgnoreCase);
+        private static readonly Regex BrowserProcRegex = new Regex(@"^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|waterfox|floorp|librewolf|thorium|chromium)$", RegexOptions.IgnoreCase);
+        private static readonly Regex ChatGptTitleRegex = new Regex(@"(^|[\s\-_–—|•·])(chatgpt|openai)([\s\-_–—|•·]|$)", RegexOptions.IgnoreCase);
 
         private readonly string scriptPath;
         private readonly string logPath;
@@ -211,6 +219,12 @@ namespace ClipwarpWatch
         private DateTime lastTextAt;
         private POINT eventPointer;
         private bool hasEventPointer;
+        private string foregroundProcess = "";
+        private string foregroundTitle = "";
+        private bool hasForeground;
+        private string lastNonOverlayProcess = "";
+        private string lastNonOverlayTitle = "";
+        private DateTime lastNonOverlayAt = DateTime.MinValue;
         private const int EventDelayMs = 75;
         private const int WatchdogDelayMs = 200;
 
@@ -252,6 +266,7 @@ namespace ClipwarpWatch
                 POINT captured;
                 hasEventPointer = GetCursorPos(out captured);
                 if (hasEventPointer) eventPointer = captured;
+                CaptureForeground();
                 debounce.Interval = EventDelayMs;
                 debounce.Stop();
                 debounce.Start();
@@ -264,6 +279,48 @@ namespace ClipwarpWatch
             debounce.Stop();
             try { Inspect(); }
             catch (Exception ex) { Log("error: " + ex.Message); convFails++; if (convFails < 3) { debounce.Interval = 500; debounce.Start(); } }  // bounded retry, then wait for a new copy
+        }
+
+        private void CaptureForeground()
+        {
+            try
+            {
+                IntPtr hwnd = GetForegroundWindow();
+                if (hwnd == IntPtr.Zero) return;
+                uint pid;
+                GetWindowThreadProcessId(hwnd, out pid);
+                string pName = "";
+                try { pName = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch { }
+                StringBuilder sb = new StringBuilder(512);
+                GetWindowText(hwnd, sb, sb.Capacity);
+                string title = sb.ToString();
+
+                foregroundProcess = pName ?? "";
+                foregroundTitle = title ?? "";
+                hasForeground = !string.IsNullOrEmpty(foregroundProcess) || !string.IsNullOrEmpty(foregroundTitle);
+
+                bool isOverlay = false;
+                if (!string.IsNullOrEmpty(foregroundProcess))
+                {
+                    if (foregroundProcess.Equals("SnippingTool", StringComparison.OrdinalIgnoreCase) ||
+                        foregroundProcess.Equals("ScreenClippingHost", StringComparison.OrdinalIgnoreCase) ||
+                        foregroundProcess.Equals("ShellExperienceHost", StringComparison.OrdinalIgnoreCase) ||
+                        foregroundProcess.Equals("Lightshot", StringComparison.OrdinalIgnoreCase) ||
+                        foregroundProcess.Equals("ShareX", StringComparison.OrdinalIgnoreCase) ||
+                        foregroundProcess.Equals("clipwarp", StringComparison.OrdinalIgnoreCase))
+                    {
+                        isOverlay = true;
+                    }
+                }
+
+                if (!isOverlay && hasForeground)
+                {
+                    lastNonOverlayProcess = foregroundProcess;
+                    lastNonOverlayTitle = foregroundTitle;
+                    lastNonOverlayAt = DateTime.Now;
+                }
+            }
+            catch { }
         }
 
         private void Inspect()
@@ -339,7 +396,7 @@ namespace ClipwarpWatch
             debounce.Interval = EventDelayMs;
             var psi = new System.Diagnostics.ProcessStartInfo();
             psi.FileName = "powershell.exe";
-            psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + scriptPath + "\" -Quiet -KeepImage" + PointerArguments();
+            psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + scriptPath + "\" -Quiet -KeepImage" + TargetArguments() + PointerArguments();
             psi.CreateNoWindow = true;
             psi.UseShellExecute = false;
             child = System.Diagnostics.Process.Start(psi);
@@ -355,6 +412,31 @@ namespace ClipwarpWatch
         private string PointerArguments()
         {
             return hasEventPointer ? " -PointerX " + eventPointer.X + " -PointerY " + eventPointer.Y : "";
+        }
+
+        private string TargetArguments()
+        {
+            string proc = foregroundProcess;
+            string title = foregroundTitle;
+            if (!string.IsNullOrEmpty(proc) &&
+                (proc.Equals("SnippingTool", StringComparison.OrdinalIgnoreCase) ||
+                 proc.Equals("ScreenClippingHost", StringComparison.OrdinalIgnoreCase) ||
+                 proc.Equals("ShellExperienceHost", StringComparison.OrdinalIgnoreCase) ||
+                 proc.Equals("Lightshot", StringComparison.OrdinalIgnoreCase) ||
+                 proc.Equals("ShareX", StringComparison.OrdinalIgnoreCase) ||
+                 proc.Equals("clipwarp", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!string.IsNullOrEmpty(lastNonOverlayProcess) && (DateTime.Now - lastNonOverlayAt).TotalSeconds <= 12)
+                {
+                    proc = lastNonOverlayProcess;
+                    title = lastNonOverlayTitle;
+                }
+            }
+            if (string.IsNullOrEmpty(proc) && string.IsNullOrEmpty(title)) return "";
+            string safeProc = (proc ?? "").Replace("\"", "").Replace("'", "").Replace(";", "").Replace("$", "");
+            string safeTitle = (title ?? "").Replace("\"", "").Replace("'", "").Replace(";", "").Replace("$", "").Replace("`", "");
+            if (safeTitle.Length > 100) safeTitle = safeTitle.Substring(0, 100);
+            return " -ForegroundProcess \"" + safeProc + "\" -ForegroundTitle \"" + safeTitle + "\"";
         }
 
         private void LaunchTextPopup(string title)
