@@ -92,6 +92,7 @@ param(
     [string]$TargetMode = 'auto',
     [string]$ForegroundProcess,
     [string]$ForegroundTitle,
+    [string]$ForegroundClass,
     [Nullable[int]]$PointerX,
     [Nullable[int]]$PointerY
 )
@@ -103,7 +104,7 @@ if ($Command -in @('calendar','target','history','recopy','clean','doctor','help
             $configPath = Get-ClipwarpDefaultConfigPath
             switch ($Action) {
                 'status'   { Write-Host "clipwarp target: $(Get-ClipwarpTargetMode -ConfigPath $configPath)" }
-                'auto'     { [void](Set-ClipwarpTargetMode -Mode auto -ConfigPath $configPath); Write-Host 'clipwarp target: auto (all web browsers paste image; terminal/Claude pastes path)' -ForegroundColor Green }
+                'auto'     { [void](Set-ClipwarpTargetMode -Mode auto -ConfigPath $configPath); Write-Host 'clipwarp target: auto (file picker & terminal/Claude paste file path; all other apps paste image)' -ForegroundColor Green }
                 'web'      { [void](Set-ClipwarpTargetMode -Mode web -ConfigPath $configPath); Write-Host 'clipwarp target: web (always paste pure image, no text/file path)' -ForegroundColor Green }
                 'chatgpt'  { [void](Set-ClipwarpTargetMode -Mode chatgpt -ConfigPath $configPath); Write-Host 'clipwarp target: chatgpt (always paste pure image, no text/file path)' -ForegroundColor Green }
                 'image-only' { [void](Set-ClipwarpTargetMode -Mode image-only -ConfigPath $configPath); Write-Host 'clipwarp target: image-only (always paste pure image, no text/file path)' -ForegroundColor Green }
@@ -212,7 +213,8 @@ Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
 $fgInfo = Get-ClipwarpForegroundTargetInfo
 $effProcess = if ($ForegroundProcess) { $ForegroundProcess } else { $fgInfo.ProcessName }
 $effTitle   = if ($ForegroundTitle)   { $ForegroundTitle }   else { $fgInfo.WindowTitle }
-$resolvedMode = Resolve-ClipwarpPublicationMode -Target $TargetMode -ImageOnly:$ImageOnly -KeepImage:$KeepImage -ProcessName $effProcess -WindowTitle $effTitle
+$effClass   = if ($ForegroundClass)   { $ForegroundClass }   else { $fgInfo.WindowClass }
+$resolvedMode = Resolve-ClipwarpPublicationMode -Target $TargetMode -ImageOnly:$ImageOnly -KeepImage:$KeepImage -ProcessName $effProcess -WindowTitle $effTitle -WindowClass $effClass
 
 $work = {
     param($OutDir, $KeepImage, $PublicationMode)
@@ -733,9 +735,9 @@ if (-not $Quiet) {
     }
     Write-Host "clipwarp: $verb $($r.Path)" -ForegroundColor Green
     if ($resolvedMode -eq 'image-only') {
-        Write-Host 'image copied to clipboard (web / image-only target). Switch to your browser / app and press Ctrl+V.' -ForegroundColor Cyan
+        Write-Host 'image copied to clipboard (paste as image). Switch to your app and press Ctrl+V.' -ForegroundColor Cyan
     } else {
-        Write-Host 'path copied to clipboard. Switch to Claude Code and press Ctrl+V.' -ForegroundColor Cyan
+        Write-Host 'file path copied to clipboard (file picker / terminal target). Switch and press Ctrl+V.' -ForegroundColor Cyan
     }
 }
 

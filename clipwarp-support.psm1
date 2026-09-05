@@ -99,14 +99,33 @@ function Test-ClipwarpWebTarget {
     return $false
 }
 
+function Test-ClipwarpFilePickerTarget {
+    [CmdletBinding()]
+    param(
+        [string]$ProcessName,
+        [string]$WindowTitle,
+        [string]$WindowClass
+    )
+    if ($ProcessName -match '(?i)^pickerhost$') { return $true }
+    if ($WindowClass -eq '#32770') {
+        if ([string]::IsNullOrWhiteSpace($WindowTitle) -or $WindowTitle -match '(?i)^(open|save|save as|select|choose|upload|browse|all files|เปิด|บันทึก|บันทึกเป็น|เลือกไฟล์|เลือกโฟลเดอร์|อัปโหลด)(\s|$|[\-_–—|•·:])') {
+            return $true
+        }
+    }
+    if ($WindowTitle -match '(?i)^(open|save as|select a? file|choose a? file|upload a? file|เปิด|บันทึกเป็น|เลือกไฟล์)(\s|$|[\-_–—|•·:])') {
+        return $true
+    }
+    return $false
+}
+
 function Test-ClipwarpTerminalTarget {
     [CmdletBinding()]
     param(
         [string]$ProcessName,
         [string]$WindowTitle
     )
-    if ([string]::IsNullOrWhiteSpace($ProcessName)) { return $false }
-    if ($ProcessName -match '^(windowsterminal|powershell|pwsh|cmd|conhost|mintty|bash|alacritty|wezterm|hyper|tabby)$') { return $true }
+    if ([string]::IsNullOrWhiteSpace($ProcessName) -and [string]::IsNullOrWhiteSpace($WindowTitle)) { return $false }
+    if ($ProcessName -match '(?i)^(windowsterminal|powershell|pwsh|cmd|conhost|mintty|bash|alacritty|wezterm|hyper|tabby)$') { return $true }
     if ($WindowTitle -match '(?i)(claude|powershell|cmd\.exe|wsl)') { return $true }
     return $false
 }
@@ -114,19 +133,23 @@ function Test-ClipwarpTerminalTarget {
 function Get-ClipwarpForegroundTargetInfo {
     [CmdletBinding()]
     param()
-    if (-not ([System.Management.Automation.PSTypeName]'ClipwarpNative.TargetWindow').Type) {
-        Add-Type -Namespace ClipwarpNative -Name TargetWindow -MemberDefinition @'
+    if (-not ([System.Management.Automation.PSTypeName]'ClipwarpNative.TargetWindowV2').Type) {
+        Add-Type -Namespace ClipwarpNative -Name TargetWindowV2 -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll")]
 public static extern System.IntPtr GetForegroundWindow();
 
 [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
 public static extern int GetWindowText(System.IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
 
+[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+public static extern int GetClassName(System.IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
 [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
 public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint lpdwProcessId);
 
-public static string GetActiveWindow(out string procName, out uint pid) {
+public static string GetActiveWindow(out string procName, out string clsName, out uint pid) {
     procName = "";
+    clsName = "";
     pid = 0;
     System.IntPtr hwnd = GetForegroundWindow();
     if (hwnd == System.IntPtr.Zero) return "";
@@ -134,6 +157,9 @@ public static string GetActiveWindow(out string procName, out uint pid) {
     try {
         procName = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;
     } catch { }
+    System.Text.StringBuilder sbCls = new System.Text.StringBuilder(256);
+    GetClassName(hwnd, sbCls, sbCls.Capacity);
+    clsName = sbCls.ToString();
     System.Text.StringBuilder sb = new System.Text.StringBuilder(512);
     GetWindowText(hwnd, sb, sb.Capacity);
     return sb.ToString();
@@ -142,12 +168,14 @@ public static string GetActiveWindow(out string procName, out uint pid) {
     }
     try {
         $proc = ""
+        $cls = ""
         $pidVal = [uint32]0
-        $title = [ClipwarpNative.TargetWindow]::GetActiveWindow([ref]$proc, [ref]$pidVal)
+        $title = [ClipwarpNative.TargetWindowV2]::GetActiveWindow([ref]$proc, [ref]$cls, [ref]$pidVal)
         $isGpt = Test-ClipwarpChatGptTarget -ProcessName $proc -WindowTitle $title
         return [pscustomobject]@{
             ProcessName = $proc
             WindowTitle = $title
+            WindowClass = $cls
             ProcessId   = $pidVal
             IsChatGpt   = $isGpt
         }
@@ -155,6 +183,7 @@ public static string GetActiveWindow(out string procName, out uint pid) {
         return [pscustomobject]@{
             ProcessName = ""
             WindowTitle = ""
+            WindowClass = ""
             ProcessId   = 0
             IsChatGpt   = $false
         }
@@ -171,6 +200,7 @@ function Resolve-ClipwarpPublicationMode {
         [switch]$KeepImage,
         [string]$ProcessName,
         [string]$WindowTitle,
+        [string]$WindowClass,
         [string]$ConfigPath = (Get-ClipwarpDefaultConfigPath)
     )
     if ($ImageOnly) { return 'image-only' }
@@ -183,10 +213,21 @@ function Resolve-ClipwarpPublicationMode {
     if ($configured -in @('dual', 'claude')) { return 'dual' }
     if ($configured -eq 'text') { return 'text' }
 
+    # Auto mode resolution per user rule:
+    # Paste as file path if:
+    # 1. File picker in Windows
+    # 2. Terminal / Claude Code (WindowsTerminal, powershell, pwsh, cmd)
+    # Paste as image:
+    # - Everything else
+    if (Test-ClipwarpFilePickerTarget -ProcessName $ProcessName -WindowTitle $WindowTitle -WindowClass $WindowClass) {
+        return 'dual'
+    }
+    if (Test-ClipwarpTerminalTarget -ProcessName $ProcessName -WindowTitle $WindowTitle) {
+        return 'dual'
+    }
+
     if ($ProcessName -or $WindowTitle) {
-        if (Test-ClipwarpWebTarget -ProcessName $ProcessName -WindowTitle $WindowTitle) {
-            return 'image-only'
-        }
+        return 'image-only'
     }
 
     if ($KeepImage) { return 'dual' }
@@ -312,4 +353,4 @@ function Test-ClipwarpEnvironment {
     [pscustomobject]@{ Name='Image directory'; Status=if($resolvedOut){'INFO'}else{'WARN'}; Detail=if($resolvedOut){$resolvedOut}else{'unsafe or invalid OutDir'}; MutatesState=$false }
 }
 
-Export-ModuleMember -Function Get-ClipwarpDefaultConfigPath, Get-ClipwarpCalendarEnabled, Set-ClipwarpCalendarEnabled, Get-ClipwarpCalendarImageDetails, Set-ClipwarpCalendarImageDetails, Get-ClipwarpCalendarDefaultDuration, Set-ClipwarpCalendarDefaultDuration, Clear-ClipwarpCalendarTitleFiles, Resolve-ClipwarpOutDir, Get-ClipwarpHistory, Get-ClipwarpRecopyTarget, Clear-ClipwarpHistory, Test-ClipwarpEnvironment, Get-ClipwarpTargetMode, Set-ClipwarpTargetMode, Test-ClipwarpChatGptTarget, Test-ClipwarpWebTarget, Test-ClipwarpTerminalTarget, Get-ClipwarpForegroundTargetInfo, Resolve-ClipwarpPublicationMode
+Export-ModuleMember -Function Get-ClipwarpDefaultConfigPath, Get-ClipwarpCalendarEnabled, Set-ClipwarpCalendarEnabled, Get-ClipwarpCalendarImageDetails, Set-ClipwarpCalendarImageDetails, Get-ClipwarpCalendarDefaultDuration, Set-ClipwarpCalendarDefaultDuration, Clear-ClipwarpCalendarTitleFiles, Resolve-ClipwarpOutDir, Get-ClipwarpHistory, Get-ClipwarpRecopyTarget, Clear-ClipwarpHistory, Test-ClipwarpEnvironment, Get-ClipwarpTargetMode, Set-ClipwarpTargetMode, Test-ClipwarpChatGptTarget, Test-ClipwarpWebTarget, Test-ClipwarpFilePickerTarget, Test-ClipwarpTerminalTarget, Get-ClipwarpForegroundTargetInfo, Resolve-ClipwarpPublicationMode

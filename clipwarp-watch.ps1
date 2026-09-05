@@ -204,6 +204,10 @@ namespace ClipwarpWatch
         private static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+        [DllImport("user32.dll")]
+        private static extern bool EnumChildWindows(IntPtr hWnd, EnumWindowsProc lpEnumFunc, IntPtr lParam);
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
         [DllImport("user32.dll")]
@@ -212,6 +216,7 @@ namespace ClipwarpWatch
         private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
 
         private delegate void WinEventProc(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
         private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
         private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
@@ -225,6 +230,7 @@ namespace ClipwarpWatch
         private static readonly Regex BrowserProcRegex = new Regex(@"^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|waterfox|floorp|librewolf|thorium|chromium)$", RegexOptions.IgnoreCase);
         private static readonly Regex ChatGptTitleRegex = new Regex(@"(^|[\s\-_–—|•·])(chatgpt|openai|(^|[\s\-_–—|•·])new\s*chat)([\s\-_–—|•·]|$)|(การสนทนาใหม่|แชทใหม่)", RegexOptions.IgnoreCase);
         private static readonly Regex TerminalProcRegex = new Regex(@"^(windowsterminal|powershell|pwsh|cmd|conhost|mintty|bash|alacritty|wezterm|hyper|tabby)$", RegexOptions.IgnoreCase);
+        private static readonly Regex FileDialogTitleRegex = new Regex(@"(^|[\s\-_–—|•·:])(open|save|save\s*as|select(\s*a)?\s*file|choose(\s*a)?\s*file|upload(\s*a)?\s*file|browse|เปิด|บันทึก|บันทึกเป็น|เลือกไฟล์|เลือกโฟลเดอร์|อัปโหลด)([\s\-_–—|•·:]|$)", RegexOptions.IgnoreCase);
 
         private readonly string scriptPath;
         private readonly string logPath;
@@ -246,11 +252,15 @@ namespace ClipwarpWatch
         private DateTime lastTextAt;
         private POINT eventPointer;
         private bool hasEventPointer;
+        private IntPtr currentForegroundHwnd = IntPtr.Zero;
         private string foregroundProcess = "";
         private string foregroundTitle = "";
+        private string foregroundClass = "";
         private bool hasForeground;
+        private IntPtr lastNonOverlayHwnd = IntPtr.Zero;
         private string lastNonOverlayProcess = "";
         private string lastNonOverlayTitle = "";
+        private string lastNonOverlayClass = "";
         private DateTime lastNonOverlayAt = DateTime.MinValue;
         private const int EventDelayMs = 75;
         private const int WatchdogDelayMs = 200;
@@ -330,16 +340,21 @@ namespace ClipwarpWatch
         {
             try
             {
+                currentForegroundHwnd = hwnd;
                 uint pid;
                 GetWindowThreadProcessId(hwnd, out pid);
                 string pName = "";
                 try { pName = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch { }
+                StringBuilder sbCls = new StringBuilder(256);
+                GetClassName(hwnd, sbCls, sbCls.Capacity);
+                string cls = sbCls.ToString();
                 StringBuilder sb = new StringBuilder(512);
                 GetWindowText(hwnd, sb, sb.Capacity);
                 string title = sb.ToString();
 
                 foregroundProcess = pName ?? "";
                 foregroundTitle = title ?? "";
+                foregroundClass = cls ?? "";
                 hasForeground = !string.IsNullOrEmpty(foregroundProcess) || !string.IsNullOrEmpty(foregroundTitle);
 
                 bool isOverlay = false;
@@ -360,6 +375,8 @@ namespace ClipwarpWatch
                 {
                     lastNonOverlayProcess = foregroundProcess;
                     lastNonOverlayTitle = foregroundTitle;
+                    lastNonOverlayClass = foregroundClass;
+                    lastNonOverlayHwnd = hwnd;
                     lastNonOverlayAt = DateTime.Now;
                 }
             }
@@ -377,6 +394,60 @@ namespace ClipwarpWatch
             }
             catch { }
             return "auto";
+        }
+
+        private bool IsFilePickerForeground()
+        {
+            try
+            {
+                string proc = foregroundProcess ?? "";
+                if (proc.Equals("PickerHost", StringComparison.OrdinalIgnoreCase)) return true;
+
+                IntPtr hwnd = currentForegroundHwnd;
+                if (hwnd == IntPtr.Zero) return false;
+
+                string cls = foregroundClass ?? "";
+                if (cls.Equals("#32770", StringComparison.OrdinalIgnoreCase))
+                {
+                    string title = foregroundTitle ?? "";
+                    if (FileDialogTitleRegex.IsMatch(title)) return true;
+
+                    bool hasShellControls = false;
+                    EnumChildWindows(hwnd, (child, lParam) =>
+                    {
+                        StringBuilder sb = new StringBuilder(128);
+                        GetClassName(child, sb, sb.Capacity);
+                        string c = sb.ToString();
+                        if (c.Equals("SHELLDLL_DefView", StringComparison.OrdinalIgnoreCase) ||
+                            c.Equals("Address Band Root", StringComparison.OrdinalIgnoreCase) ||
+                            c.Equals("NamespaceTreeControl", StringComparison.OrdinalIgnoreCase))
+                        {
+                            hasShellControls = true;
+                            return false;
+                        }
+                        return true;
+                    }, IntPtr.Zero);
+
+                    if (hasShellControls) return true;
+                }
+
+                if (FileDialogTitleRegex.IsMatch(foregroundTitle ?? ""))
+                {
+                    string title = (foregroundTitle ?? "").Trim();
+                    if (title.Equals("Open", StringComparison.OrdinalIgnoreCase) ||
+                        title.Equals("Save As", StringComparison.OrdinalIgnoreCase) ||
+                        title.Equals("Save", StringComparison.OrdinalIgnoreCase) ||
+                        title.Equals("เปิด", StringComparison.OrdinalIgnoreCase) ||
+                        title.Equals("บันทึก", StringComparison.OrdinalIgnoreCase) ||
+                        title.Equals("บันทึกเป็น", StringComparison.OrdinalIgnoreCase) ||
+                        title.Equals("เลือกไฟล์", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
         }
 
         private bool IsWebForeground()
@@ -432,9 +503,6 @@ namespace ClipwarpWatch
 
             if (!IsManagedClipboardActive()) return;
 
-            bool isWeb = IsWebForeground();
-            bool isTerm = IsTerminalForeground();
-
             if (targetMode.Equals("chatgpt", StringComparison.OrdinalIgnoreCase) || targetMode.Equals("image-only", StringComparison.OrdinalIgnoreCase) || targetMode.Equals("web", StringComparison.OrdinalIgnoreCase))
             {
                 if (currentPayloadMode != "image-only") SetClipboardImageOnly(lastManagedImagePath);
@@ -446,14 +514,28 @@ namespace ClipwarpWatch
                 return;
             }
 
-            // Auto mode:
-            if (isWeb && currentPayloadMode != "image-only")
+            // Auto mode per user rule:
+            // Paste as file path if:
+            // 1. File picker in Windows
+            // 2. Terminal / Claude Code (WindowsTerminal, powershell, pwsh, cmd)
+            // Paste as image:
+            // - Everything else
+            bool isFilePicker = IsFilePickerForeground();
+            bool isTerm = IsTerminalForeground();
+
+            if (isFilePicker || isTerm)
             {
-                SetClipboardImageOnly(lastManagedImagePath);
+                if (currentPayloadMode != "dual")
+                {
+                    SetClipboardDual(lastManagedImagePath);
+                }
             }
-            else if (isTerm && currentPayloadMode != "dual")
+            else
             {
-                SetClipboardDual(lastManagedImagePath);
+                if (currentPayloadMode != "image-only")
+                {
+                    SetClipboardImageOnly(lastManagedImagePath);
+                }
             }
         }
 
@@ -478,7 +560,7 @@ namespace ClipwarpWatch
                     }
                     currentPayloadMode = "image-only";
                     lastHandledSequence = GetClipboardSequenceNumber();
-                    Log("switched clipboard to image-only (web/browser target)");
+                    Log("switched clipboard to image-only (paste as image)");
                     return;
                 }
                 catch { System.Threading.Thread.Sleep(50); }
@@ -510,7 +592,7 @@ namespace ClipwarpWatch
                     }
                     currentPayloadMode = "dual";
                     lastHandledSequence = GetClipboardSequenceNumber();
-                    Log("switched clipboard to dual (Claude Code / terminal target)");
+                    Log("switched clipboard to dual (file picker / terminal target)");
                     return;
                 }
                 catch { System.Threading.Thread.Sleep(50); }
@@ -636,6 +718,7 @@ namespace ClipwarpWatch
         {
             string proc = foregroundProcess;
             string title = foregroundTitle;
+            string cls = foregroundClass;
             if (!string.IsNullOrEmpty(proc) &&
                 (proc.Equals("SnippingTool", StringComparison.OrdinalIgnoreCase) ||
                  proc.Equals("ScreenClippingHost", StringComparison.OrdinalIgnoreCase) ||
@@ -648,13 +731,15 @@ namespace ClipwarpWatch
                 {
                     proc = lastNonOverlayProcess;
                     title = lastNonOverlayTitle;
+                    cls = lastNonOverlayClass;
                 }
             }
             if (string.IsNullOrEmpty(proc) && string.IsNullOrEmpty(title)) return "";
             string safeProc = (proc ?? "").Replace("\"", "").Replace("'", "").Replace(";", "").Replace("$", "");
             string safeTitle = (title ?? "").Replace("\"", "").Replace("'", "").Replace(";", "").Replace("$", "").Replace("`", "");
+            string safeCls = (cls ?? "").Replace("\"", "").Replace("'", "").Replace(";", "").Replace("$", "");
             if (safeTitle.Length > 100) safeTitle = safeTitle.Substring(0, 100);
-            return " -ForegroundProcess \"" + safeProc + "\" -ForegroundTitle \"" + safeTitle + "\"";
+            return " -ForegroundProcess \"" + safeProc + "\" -ForegroundTitle \"" + safeTitle + "\" -ForegroundClass \"" + safeCls + "\"";
         }
 
         private void LaunchTextPopup(string title)

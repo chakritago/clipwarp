@@ -77,19 +77,63 @@ if (Test-ClipwarpWebTarget -ProcessName '' -WindowTitle '') {
 }
 Write-Host 'PASS: Test-ClipwarpWebTarget detects all supported web browsers'
 
-# 2. Target mode resolution
-# auto mode with any web browser (ChatGPT or arbitrary website)
-$mode = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'chrome' -WindowTitle 'ChatGPT'
-if ($mode -ne 'image-only') { throw "Expected image-only mode for ChatGPT foreground, got $mode" }
+# Test-ClipwarpFilePickerTarget detection
+if (-not (Test-ClipwarpFilePickerTarget -ProcessName 'msedge' -WindowTitle 'Open' -WindowClass '#32770')) {
+    throw 'Expected Edge Open dialog (#32770) to be identified as file picker'
+}
+if (-not (Test-ClipwarpFilePickerTarget -ProcessName 'chrome' -WindowTitle 'Save As' -WindowClass '#32770')) {
+    throw 'Expected Chrome Save As dialog (#32770) to be identified as file picker'
+}
+if (-not (Test-ClipwarpFilePickerTarget -ProcessName 'chrome' -WindowTitle 'เปิด' -WindowClass '#32770')) {
+    throw 'Expected Thai Open dialog to be identified as file picker'
+}
+if (-not (Test-ClipwarpFilePickerTarget -ProcessName 'notepad' -WindowTitle 'บันทึกเป็น' -WindowClass '#32770')) {
+    throw 'Expected Thai Save As dialog to be identified as file picker'
+}
+if (-not (Test-ClipwarpFilePickerTarget -ProcessName 'PickerHost' -WindowTitle '' -WindowClass '')) {
+    throw 'Expected PickerHost process to be identified as file picker'
+}
+if (Test-ClipwarpFilePickerTarget -ProcessName 'msedge' -WindowTitle 'ChatGPT - Microsoft Edge' -WindowClass 'Chrome_WidgetWin_1') {
+    throw 'Edge browser tab should NOT be identified as file picker'
+}
+if (Test-ClipwarpFilePickerTarget -ProcessName 'notepad' -WindowTitle 'notes.txt - Notepad' -WindowClass 'Notepad') {
+    throw 'Notepad main window should NOT be identified as file picker'
+}
+Write-Host 'PASS: Test-ClipwarpFilePickerTarget detects Windows file pickers accurately'
 
-$modeEdge = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'msedge' -WindowTitle 'GitHub - chakritago/clipwarp'
-if ($modeEdge -ne 'image-only') { throw "Expected image-only mode for Edge on arbitrary web page, got $modeEdge" }
-Write-Host 'PASS: auto mode resolves to image-only when foreground is any web browser'
+# 2. Target mode resolution per user rule:
+# - file picker in windows -> dual (paste as path file)
+# - Terminal / Claude Code -> dual (paste as path file)
+# - other apps -> image-only (paste as image)
 
-# auto mode with Claude / Terminal foreground
+# File picker in Windows
+$mode = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'msedge' -WindowTitle 'Open' -WindowClass '#32770'
+if ($mode -ne 'dual') { throw "Expected dual mode for File Picker, got $mode" }
+Write-Host 'PASS: auto mode resolves to dual (path file) for Windows file picker'
+
+# Terminal / Claude Code
 $mode = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'WindowsTerminal' -WindowTitle 'claude'
 if ($mode -ne 'dual') { throw "Expected dual mode for Terminal, got $mode" }
-Write-Host 'PASS: auto mode resolves to dual when foreground is terminal / Claude'
+
+$modePs = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'powershell' -WindowTitle 'Windows PowerShell'
+if ($modePs -ne 'dual') { throw "Expected dual mode for PowerShell, got $modePs" }
+Write-Host 'PASS: auto mode resolves to dual (path file) for Terminal / Claude Code'
+
+# Web browser page (not file picker) -> image-only (paste as image)
+$modeEdge = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'msedge' -WindowTitle 'ChatGPT'
+if ($modeEdge -ne 'image-only') { throw "Expected image-only mode for Edge web page, got $modeEdge" }
+
+$modeChrome = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'chrome' -WindowTitle 'GitHub - chakritago/clipwarp'
+if ($modeChrome -ne 'image-only') { throw "Expected image-only mode for Chrome web page, got $modeChrome" }
+Write-Host 'PASS: auto mode resolves to image-only for web browsers'
+
+# Other apps (Slack, Discord, Word, Notion) -> image-only (paste as image)
+$modeSlack = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'Slack' -WindowTitle 'general - Slack'
+if ($modeSlack -ne 'image-only') { throw "Expected image-only mode for Slack, got $modeSlack" }
+
+$modeWord = Resolve-ClipwarpPublicationMode -Target auto -KeepImage -ProcessName 'WINWORD' -WindowTitle 'Document1 - Word'
+if ($modeWord -ne 'image-only') { throw "Expected image-only mode for Word, got $modeWord" }
+Write-Host 'PASS: auto mode resolves to image-only for all other applications'
 
 # explicit target parameter overrides
 $mode = Resolve-ClipwarpPublicationMode -Target web -KeepImage -ProcessName 'WindowsTerminal' -WindowTitle 'claude'
