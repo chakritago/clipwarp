@@ -1,4 +1,4 @@
-function Get-ClipwarpPayloadKind {
+﻿function Get-ClipwarpPayloadKind {
     [CmdletBinding()]
     param(
         [AllowNull()][string]$Text,
@@ -554,7 +554,9 @@ function Start-ClipwarpCommand {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$CommandText,
-        [string]$WorkingDirectory = $env:USERPROFILE
+        [string]$WorkingDirectory = $env:USERPROFILE,
+        [scriptblock]$ProcessStarter = $null,
+        [scriptblock]$CommandLookup = { param($name) Get-Command $name -ErrorAction SilentlyContinue }
     )
 
     $clean = Get-ClipwarpCommandText -Text $CommandText
@@ -563,25 +565,111 @@ function Start-ClipwarpCommand {
     $bytes = [System.Text.Encoding]::Unicode.GetBytes($clean)
     $b64 = [Convert]::ToBase64String($bytes)
 
-    $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
-    if ($wt) {
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = 'wt.exe'
-        $psi.Arguments = "-d `"$WorkingDirectory`" powershell.exe -NoExit -ExecutionPolicy Bypass -EncodedCommand $b64"
-        $psi.UseShellExecute = $true
-        try {
-            [System.Diagnostics.Process]::Start($psi) | Out-Null
-            return
-        } catch { }
+    $workDir = if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory) -and (Test-Path -LiteralPath $WorkingDirectory)) {
+        $WorkingDirectory
+    } else {
+        $env:USERPROFILE
     }
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'powershell.exe'
-    $psi.Arguments = "-NoExit -ExecutionPolicy Bypass -EncodedCommand $b64"
-    $psi.WorkingDirectory = $WorkingDirectory
-    $psi.UseShellExecute = $true
-    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
-    [System.Diagnostics.Process]::Start($psi) | Out-Null
+    # 1. Prefer Windows Terminal (wt.exe) if available and genuinely startable
+    $wt = & $CommandLookup 'wt.exe'
+    if ($wt) {
+        $wtPsi = New-ClipwarpCommandProcessStartInfo -CommandText $clean -WorkingDirectory $workDir -Launcher 'wt' -CommandLookup $CommandLookup
+        if ($ProcessStarter) {
+            $started = & $ProcessStarter $wtPsi
+            if ($started) { return }
+        } else {
+            try {
+                $proc = [System.Diagnostics.Process]::Start($wtPsi)
+                if ($proc) {
+                    Start-Sleep -Milliseconds 150
+                    if (-not $proc.HasExited -or $proc.ExitCode -eq 0) {
+                        return
+                    }
+                }
+            } catch { }
+        }
+    }
+
+    # 2. Fallback to Windows PowerShell, ensuring it is visibly detached from the hidden parent
+    $psPsi = New-ClipwarpCommandProcessStartInfo -CommandText $clean -WorkingDirectory $workDir -Launcher 'powershell' -CommandLookup $CommandLookup
+    if ($ProcessStarter) {
+        & $ProcessStarter $psPsi | Out-Null
+        return
+    }
+
+   try {
+        Start-Process -FilePath $psPsi.FileName -WorkingDirectory $workDir -ArgumentList $psPsi.ArgumentList -WindowStyle Normal -ErrorAction Stop | Out-Null
+   } catch {
+        [System.Diagnostics.Process]::Start($psPsi) | Out-Null
+    }
 }
 
-Export-ModuleMember -Function Get-ClipwarpPayloadKind, Format-ClipwarpCalendarPayload, Get-ClipwarpCalendarTimeZone, New-ClipwarpCalendarUrl, ConvertFrom-ClipwarpCalendarText, Get-ClipwarpImageCalendarDetails, Get-ClipwarpCalendarPreview, Export-ClipwarpIcsEvent, Set-ClipwarpClipboardText, Get-ClipwarpPopupLocation, Get-ClipwarpPopupMetrics, New-ClipwarpCalendarPopupArguments, Start-ClipwarpCalendarPopup, Get-ClipwarpCommandText, Test-ClipwarpCommandLine, Start-ClipwarpCommand
+function New-ClipwarpCommandProcessStartInfo {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$CommandText,
+        [string]$WorkingDirectory = $env:USERPROFILE,
+        [AllowNull()][AllowEmptyString()][ValidateSet('wt', 'powershell')][string]$Launcher = $null,
+        [scriptblock]$CommandLookup = { param($name) Get-Command $name -ErrorAction SilentlyContinue }
+    )
+
+    $clean = Get-ClipwarpCommandText -Text $CommandText
+    if ([string]::IsNullOrWhiteSpace($clean)) { return $null }
+
+    $bytes = [System.Text.Encoding]::Unicode.GetBytes($clean)
+    $b64 = [Convert]::ToBase64String($bytes)
+
+    $targetLauncher = $Launcher
+    if ([string]::IsNullOrWhiteSpace($targetLauncher)) {
+        $wt = & $CommandLookup 'wt.exe'
+        if ($wt) { $targetLauncher = 'wt' } else { $targetLauncher = 'powershell' }
+    }
+
+    $workDir = if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory) -and (Test-Path -LiteralPath $WorkingDirectory)) {
+        $WorkingDirectory
+    } else {
+        $env:USERPROFILE
+    }
+
+   $psi = New-Object System.Diagnostics.ProcessStartInfo
+   $psi.WorkingDirectory = $workDir
+   $psi.UseShellExecute = $true
+   $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
+    $psi.CreateNoWindow = $false
+
+   if ($targetLauncher -eq 'wt') {
+       $psi.FileName = 'wt.exe'
+        $escapedWorkDir = if ($workDir.EndsWith('\')) { $workDir + '\' } else { $workDir }
+        $psi.Arguments = "-d `"$escapedWorkDir`" powershell.exe -NoExit -ExecutionPolicy Bypass -EncodedCommand $b64"
+   } else {
+        $psi.FileName = 'powershell.exe'
+        $psi.Arguments = "-NoExit -ExecutionPolicy Bypass -EncodedCommand $b64"
+    }
+
+    Add-Member -InputObject $psi -MemberType NoteProperty -Name 'Launcher' -Value $targetLauncher -Force
+    Add-Member -InputObject $psi -MemberType NoteProperty -Name 'EncodedCommand' -Value $b64 -Force
+    Add-Member -InputObject $psi -MemberType NoteProperty -Name 'CleanCommand' -Value $clean -Force
+    Add-Member -InputObject $psi -MemberType NoteProperty -Name 'ArgumentList' -Value @('-NoExit', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $b64) -Force
+
+    return $psi
+}
+
+function Get-ClipwarpCommandProcessStartInfo {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$CommandText,
+        [string]$WorkingDirectory = $env:USERPROFILE,
+        [AllowNull()][AllowEmptyString()][ValidateSet('wt', 'powershell')][string]$Launcher = $null,
+        [scriptblock]$CommandLookup = { param($name) Get-Command $name -ErrorAction SilentlyContinue }
+    )
+    $params = @{
+        CommandText      = $CommandText
+        WorkingDirectory = $WorkingDirectory
+        CommandLookup    = $CommandLookup
+    }
+    if ($Launcher) { $params.Launcher = $Launcher }
+    New-ClipwarpCommandProcessStartInfo @params
+}
+
+Export-ModuleMember -Function Get-ClipwarpPayloadKind, Format-ClipwarpCalendarPayload, Get-ClipwarpCalendarTimeZone, New-ClipwarpCalendarUrl, ConvertFrom-ClipwarpCalendarText, Get-ClipwarpImageCalendarDetails, Get-ClipwarpCalendarPreview, Export-ClipwarpIcsEvent, Set-ClipwarpClipboardText, Get-ClipwarpPopupLocation, Get-ClipwarpPopupMetrics, New-ClipwarpCalendarPopupArguments, Start-ClipwarpCalendarPopup, Get-ClipwarpCommandText, Test-ClipwarpCommandLine, Start-ClipwarpCommand, New-ClipwarpCommandProcessStartInfo, Get-ClipwarpCommandProcessStartInfo

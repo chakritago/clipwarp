@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $module = Join-Path (Split-Path $PSScriptRoot -Parent) 'clipwarp-calendar.psm1'
 Import-Module $module -Force
 $root = Split-Path $PSScriptRoot -Parent
@@ -304,6 +304,83 @@ Assert-Equal $false (Test-ClipwarpCommandLine -Text 'นัดคุยงาน
 Assert-Equal $false (Test-ClipwarpCommandLine -Text 'Hello world this is a normal sentence.') 'Plain sentence is not treated as command'
 Assert-Equal $false (Test-ClipwarpCommandLine -Text 'Sprint planning 14:00-15:30') 'Timed title is not treated as command'
 Assert-Equal $false (Test-ClipwarpCommandLine -Text '   ') 'Whitespace is not treated as command'
+
+# Start-ClipwarpCommand deterministic launch argument tests
+$testCmd = "echo 'hello world'"
+$expectedClean = "echo 'hello world'"
+Assert-Equal $expectedClean (Get-ClipwarpCommandText -Text $testCmd) 'command text cleanup preserves simple command'
+$promptCmd = "PS C:\Users\Test> npm test"
+Assert-Equal 'npm test' (Get-ClipwarpCommandText -Text $promptCmd) 'command text cleanup strips powershell prompt'
+$unicodeCmd = "Write-Host 'สวัสดี'"
+$unicodeClean = Get-ClipwarpCommandText -Text $unicodeCmd
+$unicodeB64 = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($unicodeClean))
+$decodedUnicode = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($unicodeB64))
+Assert-Equal $unicodeCmd $decodedUnicode 'unicode command transport preserves characters through base64 encoding'
+$multilineCmd = "Write-Host Line1`r`nWrite-Host Line2"
+$multilineClean = Get-ClipwarpCommandText -Text $multilineCmd
+$multilineB64 = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($multilineClean))
+$decodedMultiline = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($multilineB64))
+Assert-Equal $multilineCmd $decodedMultiline 'multiline command transport preserves CRLF through base64 encoding'
+
+# ProcessStartInfo decision helper tests
+$mockWithWt = { param($name) if ($name -eq 'wt.exe') { [pscustomobject]@{ Source = 'C:\WindowsApps\wt.exe' } } else { $null } }
+$mockWithoutWt = { param($name) $null }
+
+$wtInfo = New-ClipwarpCommandProcessStartInfo -CommandText 'npm test' -CommandLookup $mockWithWt
+Assert-Equal 'wt.exe' $wtInfo.FileName 'launcher decision prefers wt.exe when available'
+Assert-Equal 'wt' $wtInfo.Launcher 'launcher note property reports wt'
+Assert-Equal $true ($wtInfo.Arguments.Contains('powershell.exe -NoExit -ExecutionPolicy Bypass -EncodedCommand')) 'wt arguments encapsulate powershell invocation'
+Assert-Equal $false $wtInfo.CreateNoWindow 'wt CreateNoWindow is false for window visibility'
+Assert-Equal $true $wtInfo.UseShellExecute 'wt UseShellExecute is true for detachment'
+Assert-Equal ([System.Diagnostics.ProcessWindowStyle]::Normal) $wtInfo.WindowStyle 'wt WindowStyle is Normal'
+
+$psInfo = New-ClipwarpCommandProcessStartInfo -CommandText 'npm test' -CommandLookup $mockWithoutWt
+Assert-Equal 'powershell.exe' $psInfo.FileName 'launcher decision falls back to powershell.exe when wt.exe is missing'
+Assert-Equal 'powershell' $psInfo.Launcher 'launcher note property reports powershell'
+Assert-Equal $true ($psInfo.Arguments.StartsWith('-NoExit -ExecutionPolicy Bypass -EncodedCommand')) 'powershell arguments use encoded command'
+Assert-Equal $false $psInfo.CreateNoWindow 'powershell CreateNoWindow is false for window visibility'
+Assert-Equal $true $psInfo.UseShellExecute 'powershell UseShellExecute is true for detachment'
+Assert-Equal ([System.Diagnostics.ProcessWindowStyle]::Normal) $psInfo.WindowStyle 'powershell WindowStyle is Normal'
+Assert-Equal 5 $psInfo.ArgumentList.Count 'powershell ArgumentList has expected token count'
+Assert-Equal '-EncodedCommand' $psInfo.ArgumentList[3] 'powershell ArgumentList uses safe encoded transport'
+
+$aliasInfo = Get-ClipwarpCommandProcessStartInfo -CommandText 'npm test' -CommandLookup $mockWithoutWt
+Assert-Equal 'powershell.exe' $aliasInfo.FileName 'Get- alias returns matching process start info'
+
+$forcedPs = New-ClipwarpCommandProcessStartInfo -CommandText 'npm test' -Launcher 'powershell' -CommandLookup $mockWithWt
+Assert-Equal 'powershell.exe' $forcedPs.FileName 'explicit launcher override bypasses preferred wt'
+
+$emptyInfo = New-ClipwarpCommandProcessStartInfo -CommandText '   '
+Assert-Equal $null $emptyInfo 'empty command text produces null process start info'
+
+$nonExistentDir = Join-Path ([IO.Path]::GetTempPath()) ('nonexistent-' + [guid]::NewGuid().ToString('N'))
+$fallbackDirInfo = New-ClipwarpCommandProcessStartInfo -CommandText 'npm test' -WorkingDirectory $nonExistentDir -CommandLookup $mockWithoutWt
+Assert-Equal $env:USERPROFILE $fallbackDirInfo.WorkingDirectory 'invalid working directory safely falls back to USERPROFILE'
+
+# Start-ClipwarpCommand fallback decision tests with injected process starter
+$wtOnlyCalls = @()
+$mockStarterSuccess = { param($psi) $script:wtOnlyCalls += $psi.FileName; return $true }
+Start-ClipwarpCommand -CommandText 'npm test' -CommandLookup $mockWithWt -ProcessStarter $mockStarterSuccess
+Assert-Equal 1 $wtOnlyCalls.Count 'successful preferred launcher only launches once'
+Assert-Equal 'wt.exe' $wtOnlyCalls[0] 'successful preferred launcher selects wt.exe'
+
+$fallbackCalls = @()
+$mockStarterFailWt = {
+    param($psi)
+    $script:fallbackCalls += $psi.FileName
+    if ($psi.FileName -eq 'wt.exe') { return $false }
+    return $true
+}
+Start-ClipwarpCommand -CommandText 'npm test' -CommandLookup $mockWithWt -ProcessStarter $mockStarterFailWt
+Assert-Equal 2 $fallbackCalls.Count 'failed preferred launcher triggers fallback attempt'
+Assert-Equal 'wt.exe' $fallbackCalls[0] 'failed preferred launcher is attempted first'
+Assert-Equal 'powershell.exe' $fallbackCalls[1] 'failed preferred launcher falls back to powershell.exe'
+
+$directPsCalls = @()
+$mockStarterPs = { param($psi) $script:directPsCalls += $psi.FileName; return $true }
+Start-ClipwarpCommand -CommandText 'npm test' -CommandLookup $mockWithoutWt -ProcessStarter $mockStarterPs
+Assert-Equal 1 $directPsCalls.Count 'missing wt directly launches powershell'
+Assert-Equal 'powershell.exe' $directPsCalls[0] 'missing wt launches powershell.exe'
 
 if ($failures) { throw "$failures calendar test(s) failed" }
 Write-Host 'All calendar tests passed.' -ForegroundColor Cyan
