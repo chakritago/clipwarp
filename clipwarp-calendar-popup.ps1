@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][ValidateSet('Text', 'Image')][string]$Kind,
     [string]$Title,
@@ -188,7 +188,6 @@ if ($Kind -eq 'Text') {
         $runButton.ForeColor = [Drawing.Color]::White
         $runButton.Font = New-Object Drawing.Font 'Segoe UI Semibold', 9
         $runButton.TabIndex = 0
-        $form.AcceptButton = $runButton
 
         $calButton.FlatAppearance.BorderColor = [Drawing.Color]::FromArgb(203, 213, 225)
         $calButton.FlatAppearance.BorderSize = 1
@@ -215,7 +214,9 @@ if ($Kind -eq 'Text') {
     $form.Controls.Add($runButton)
     $form.Controls.Add($calButton)
 
-    $runButton.Add_Click({
+    # MouseClick excludes Enter, Space, and form-default PerformClick activation.
+    $runButton.Add_MouseClick({
+        if ($_.Button -ne [Windows.Forms.MouseButtons]::Left) { return }
         Start-ClipwarpCommand -CommandText $commandText
         $form.Close()
     })
@@ -254,6 +255,13 @@ if ($Kind -eq 'Text') {
         $form.Close()
     })
 }
+# Enter must never activate the focused Run button, including command popups.
+$form.Add_KeyDown({
+    if ($Kind -eq 'Text' -and $_.KeyCode -eq [Windows.Forms.Keys]::Enter -and ($isCommand -or $runButton.Focused)) {
+        $_.Handled = $true
+        $_.SuppressKeyPress = $true
+    }
+})
 $form.Add_KeyDown({ if ($_.KeyCode -eq [Windows.Forms.Keys]::Escape) { $form.Close() } })
 $form.Add_Paint({
     param($sender, $e)
@@ -275,7 +283,7 @@ $timer.Add_Tick({
 })
 $form.Add_Shown({
     if ($Kind -eq 'Text') {
-        if ($isCommand) { $runButton.Focus() } else { $calButton.Focus() }
+        $calButton.Focus()
     } else {
         $button.Focus()
     }

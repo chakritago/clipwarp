@@ -1,4 +1,4 @@
-function Get-ClipwarpDefaultConfigPath {
+﻿function Get-ClipwarpDefaultConfigPath {
     Join-Path $env:USERPROFILE '.claude\clipwarp.json'
 }
 
@@ -107,13 +107,22 @@ function Test-ClipwarpFilePickerTarget {
         [string]$WindowClass
     )
     if ($ProcessName -match '(?i)^pickerhost$') { return $true }
+
+    $fileDialogTitlePattern = '(?i)(^|[\s\-_–—|•·:\[(])(open|save|save\s*as|select(\s*a)?\s*file|choose(\s*a)?\s*file|upload(\s*a)?\s*file|file\s*upload|browse|select\s*folder|choose\s*folder|all\s*files|öffnen|speichern|speichern\s*unter|datei(en)?\s*auswählen|ouvrir|enregistrer|enregistrer\s*sous|sélectionner\s*un\s*fichier|choisir\s*un\s*fichier|abrir|guardar|guardar\s*como|seleccionar\s*archivo|elegir\s*archivo|apri|salva|salva\s*con\s*nome|seleziona\s*file|salvar|salvar\s*como|открыть|сохранить|сохранить\s*как|выбор\s*файла|выбрать\s*файл|開く|保存|名前を付けて保存|ファイルの選択|ファイルを開く|ファイルの保存|打开|另存为|选择文件|上传文件|瀏覽|開啟|儲存|另存新檔|選擇檔案|上傳檔案|열기|저장|다른\s*이름으로\s*저장|파일\s*선택|파일\s*열기|เปิด|บันทึก|บันทึกเป็น|เลือกไฟล์|เลือกโฟลเดอร์|อัปโหลด)([\s\-_–—|•·:)\]]|$)'
+
     if ($WindowClass -eq '#32770') {
-        if ([string]::IsNullOrWhiteSpace($WindowTitle) -or $WindowTitle -match '(?i)^(open|save|save as|select|choose|upload|browse|all files|เปิด|บันทึก|บันทึกเป็น|เลือกไฟล์|เลือกโฟลเดอร์|อัปโหลด)(\s|$|[\-_–—|•·:])') {
+        if ([string]::IsNullOrWhiteSpace($WindowTitle) -or $WindowTitle -match $fileDialogTitlePattern) {
             return $true
         }
     }
-    if ($WindowTitle -match '(?i)^(open|save as|select a? file|choose a? file|upload a? file|เปิด|บันทึกเป็น|เลือกไฟล์)(\s|$|[\-_–—|•·:])') {
-        return $true
+
+    $isBrowser = $ProcessName -match '(?i)^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|waterfox|floorp|librewolf|thorium|chromium|chatgpt)$'
+    $isIde = $ProcessName -match '(?i)^(code|cursor|windsurf|idea|idea64|pycharm|pycharm64|webstorm|webstorm64|phpstorm|phpstorm64|rider|rider64|clion|clion64|goland|goland64|rubymine|rubymine64|rustrover|rustrover64|datagrip|datagrip64|studio64|fleet)$'
+
+    if (-not $isBrowser -and -not $isIde) {
+        if (-not [string]::IsNullOrWhiteSpace($WindowTitle) -and $WindowTitle -match $fileDialogTitlePattern) {
+            return $true
+        }
     }
     return $false
 }
@@ -125,8 +134,19 @@ function Test-ClipwarpTerminalTarget {
         [string]$WindowTitle
     )
     if ([string]::IsNullOrWhiteSpace($ProcessName) -and [string]::IsNullOrWhiteSpace($WindowTitle)) { return $false }
+    if ($ProcessName -match '(?i)^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|waterfox|floorp|librewolf|thorium|chromium|chatgpt)$') { return $false }
     if ($ProcessName -match '(?i)^(windowsterminal|powershell|pwsh|cmd|conhost|mintty|bash|alacritty|wezterm|hyper|tabby)$') { return $true }
-    if ($WindowTitle -match '(?i)(claude|powershell|cmd\.exe|wsl)') { return $true }
+
+    $integratedTermTitlePattern = '(?i)(^|[\s\-_–—|•·●:\[(])(terminal|claude|powershell|pwsh|cmd(\.exe)?|bash|zsh|wsl)([\s\-_–—|•·●:)\]]|$)'
+
+    if ($ProcessName -match '(?i)^(code|cursor|windsurf|idea|idea64|pycharm|pycharm64|webstorm|webstorm64|phpstorm|phpstorm64|rider|rider64|clion|clion64|goland|goland64|rubymine|rubymine64|rustrover|rustrover64|datagrip|datagrip64|studio64|fleet)$') {
+        if ([string]::IsNullOrWhiteSpace($WindowTitle)) { return $false }
+        return [bool]($WindowTitle -match $integratedTermTitlePattern)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($WindowTitle) -and $WindowTitle -match $integratedTermTitlePattern) {
+        return $true
+    }
     return $false
 }
 
@@ -294,11 +314,16 @@ function Get-ClipwarpRecopyTarget {
 
 function Clear-ClipwarpHistory {
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param([Parameter(Mandatory = $true)][string]$OutDir, [datetime]$Before = (Get-Date).AddDays(-7))
+    param([Parameter(Mandatory = $true)][string]$OutDir, [datetime]$Before = (Get-Date).AddDays(-7), [string]$ExcludePath)
     $dir = Resolve-ClipwarpOutDir $OutDir
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return }
+    $ancestor = Get-Item -LiteralPath $dir -Force
+    while ($null -ne $ancestor) {
+        if ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Refusing cleanup through a reparse point.' }
+        $ancestor = $ancestor.Parent
+    }
     $targets = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction Stop |
-        Where-Object { $_.Name -match '^clip-.*\.(png|jpe?g|gif|webp)$' -and $_.LastWriteTime -lt $Before } |
+        Where-Object { $_.Name -match '^clip-.*\.(png|jpe?g|gif|webp)$' -and $_.LastWriteTime -lt $Before -and $_.FullName -ne $ExcludePath -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
         Sort-Object @{ Expression = 'LastWriteTimeUtc'; Descending = $false }, Name)
     foreach ($file in $targets) {
         if ($PSCmdlet.ShouldProcess($file.FullName, 'Delete saved clipwarp image')) {
@@ -318,7 +343,7 @@ function Test-ClipwarpEnvironment {
         [string]$StartupPath = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\clipwarp-watch.lnk'),
         [string]$PidPath = (Join-Path $env:USERPROFILE '.claude\scripts\clipwarp-watch.pid')
     )
-    $required = @('clipwarp.ps1','clipwarp-watch.ps1','clipwarp-calendar.psm1','clipwarp-calendar-popup.ps1','clipwarp-support.psm1')
+    $required = @('clipwarp.ps1','clipwarp-watch.ps1','clipwarp-calendar.psm1','clipwarp-calendar-popup.ps1','clipwarp-support.psm1','clipwarp-clipboard.cs')
     $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ScriptRoot $_) -PathType Leaf) })
     [pscustomobject]@{ Name='Installed scripts'; Status=if($missing.Count){'WARN'}else{'OK'}; Detail=if($missing.Count){'missing: '+($missing -join ', ')}else{'all present'}; MutatesState=$false }
     $marker = '# >>> clipwarp (Claude Code image paste helper) >>>'
@@ -354,3 +379,28 @@ function Test-ClipwarpEnvironment {
 }
 
 Export-ModuleMember -Function Get-ClipwarpDefaultConfigPath, Get-ClipwarpCalendarEnabled, Set-ClipwarpCalendarEnabled, Get-ClipwarpCalendarImageDetails, Set-ClipwarpCalendarImageDetails, Get-ClipwarpCalendarDefaultDuration, Set-ClipwarpCalendarDefaultDuration, Clear-ClipwarpCalendarTitleFiles, Resolve-ClipwarpOutDir, Get-ClipwarpHistory, Get-ClipwarpRecopyTarget, Clear-ClipwarpHistory, Test-ClipwarpEnvironment, Get-ClipwarpTargetMode, Set-ClipwarpTargetMode, Test-ClipwarpChatGptTarget, Test-ClipwarpWebTarget, Test-ClipwarpFilePickerTarget, Test-ClipwarpTerminalTarget, Get-ClipwarpForegroundTargetInfo, Resolve-ClipwarpPublicationMode
+
+function Get-ClipwarpRetentionDays {
+    param([string]$ConfigPath=(Get-ClipwarpDefaultConfigPath))
+    $v=(Get-ClipwarpConfig $ConfigPath).retentionDays
+    if (($v -is [int] -or $v -is [long]) -and $v -ge 0 -and $v -le 3650) { return [int]$v }
+    0
+}
+function Set-ClipwarpRetentionDays {
+    param([ValidateRange(0,3650)][int]$Days,[string]$ConfigPath=(Get-ClipwarpDefaultConfigPath))
+    $config=Get-ClipwarpConfig $ConfigPath
+    $config | Add-Member NoteProperty retentionDays $Days -Force
+    Save-ClipwarpConfig $config $ConfigPath
+}
+function Get-ClipwarpPaused {
+    param([string]$ConfigPath=(Get-ClipwarpDefaultConfigPath))
+    $v=(Get-ClipwarpConfig $ConfigPath).paused
+    return ($v -is [bool] -and $v)
+}
+function Set-ClipwarpPaused {
+    param([bool]$Paused,[string]$ConfigPath=(Get-ClipwarpDefaultConfigPath))
+    $config=Get-ClipwarpConfig $ConfigPath
+    $config | Add-Member NoteProperty paused $Paused -Force
+    Save-ClipwarpConfig $config $ConfigPath
+}
+Export-ModuleMember -Function Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused

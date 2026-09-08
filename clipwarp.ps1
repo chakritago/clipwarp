@@ -30,6 +30,8 @@
     calendar image-details enable|full-path|disable|status - image path privacy.
     calendar duration <minutes>|status - timed-event default (1-1440 minutes).
     calendar export -Title <text> [-Details <text>] [-Path <file>] [-TimeZone <id>] - local ICS.
+    privacy pause|resume|status|retention <days 0-3650> - pause processing / opt-in cleanup.
+    target auto|web|chatgpt|image-only|claude|dual|text|status - publication mode.
     history | recopy | clean - inspect, explicitly recopy, or prune saved images.
     doctor - run read-only installation and environment diagnostics.
 
@@ -72,7 +74,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('convert', 'watch', 'stop', 'status', 'autostart', 'unautostart', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'help')]
+    [ValidateSet('convert', 'watch', 'stop', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'help')]
     [string]$Command = 'convert',
     [Parameter(Position = 1)][string]$Action,
     [Parameter(Position = 2)][string]$Setting,
@@ -97,9 +99,22 @@ param(
     [Nullable[int]]$PointerY
 )
 
-if ($Command -in @('calendar','target','history','recopy','clean','doctor','help')) {
+if ($Command -in @('privacy','calendar','target','history','recopy','clean','doctor','help')) {
     Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
     switch ($Command) {
+        'privacy' {
+            switch ($Action) {
+                'pause' { Set-ClipwarpPaused -Paused $true; Write-Host 'clipwarp: paused' }
+                'resume' { Set-ClipwarpPaused -Paused $false; Write-Host 'clipwarp: resumed; copy again' }
+                'status' { Write-Host "clipwarp privacy: paused=$(Get-ClipwarpPaused), retentionDays=$(Get-ClipwarpRetentionDays) (0 disables cleanup)" }
+                'retention' {
+                    $days=0
+                    if (-not [int]::TryParse($Setting,[ref]$days) -or $days -lt 0 -or $days -gt 3650) { throw 'retention requires days 0-3650' }
+                    Set-ClipwarpRetentionDays -Days $days
+                }
+                default { throw 'usage: clipwarp privacy pause|resume|status|retention <days 0-3650>' }
+            }
+        }
         'target' {
             $configPath = Get-ClipwarpDefaultConfigPath
             switch ($Action) {
@@ -210,6 +225,8 @@ if ($Command -ne 'convert') {
 # console host is STA, but pwsh 7 defaults to MTA, so we always marshal the
 # work onto a dedicated STA runspace to behave identically in both.
 Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
+if (Get-ClipwarpPaused) { if (-not $Quiet) { Write-Host 'clipwarp: paused' }; exit 0 }
+$retentionDays = Get-ClipwarpRetentionDays
 $fgInfo = Get-ClipwarpForegroundTargetInfo
 $effProcess = if ($ForegroundProcess) { $ForegroundProcess } else { $fgInfo.ProcessName }
 $effTitle   = if ($ForegroundTitle)   { $ForegroundTitle }   else { $fgInfo.WindowTitle }
@@ -217,10 +234,21 @@ $effClass   = if ($ForegroundClass)   { $ForegroundClass }   else { $fgInfo.Wind
 $resolvedMode = Resolve-ClipwarpPublicationMode -Target $TargetMode -ImageOnly:$ImageOnly -KeepImage:$KeepImage -ProcessName $effProcess -WindowTitle $effTitle -WindowClass $effClass
 
 $work = {
-    param($OutDir, $KeepImage, $PublicationMode)
+    param($OutDir, $KeepImage, $PublicationMode, $ScriptRoot)
 
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
+    Import-Module (Join-Path $ScriptRoot 'clipwarp-support.psm1') -Force
+    if (-not ('ClipwarpTransport.ClipboardWriter' -as [type])) {
+        $transport = [IO.File]::ReadAllText((Join-Path $ScriptRoot 'clipwarp-clipboard.cs'))
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            # Prefer compilation contracts over runtime facades (notably System.Collections).
+            $refs = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
+            $refs += @([AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator)
+            $refs += [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object Location | ForEach-Object Location
+            Add-Type -TypeDefinition $transport -ReferencedAssemblies ($refs | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
+        } else { Add-Type -TypeDefinition $transport -ReferencedAssemblies System,System.Windows.Forms,System.Drawing }
+    }
     # Guard the compiled helpers: types live in the process AppDomain, so running
     # clipwarp twice in one PS 5.1 session would otherwise throw "type already
     # exists" - which, now that we read Streams.Error, would be misreported.
@@ -295,10 +323,9 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
     function Set-ClipboardChecked {
         param([scriptblock]$WriteOnce)
         for ($i = 0; $i -lt 10; $i++) {
-            if (($KeepImage -or $PublicationMode -eq 'image-only') -and $seq0 -ne 0) {
-                $now = [ClipwarpNative.Clip]::GetClipboardSequenceNumber()
-                if ($now -ne 0 -and $now -ne $seq0) { throw 'clipboard-changed' }
-            }
+            if (Get-ClipwarpPaused) { throw 'clipboard-changed' }
+            $now = [ClipwarpNative.Clip]::GetClipboardSequenceNumber()
+            if (-not [ClipwarpTransport.ClipboardWriter]::SequenceMatches($seq0, $now)) { throw 'clipboard-changed' }
             try { & $WriteOnce; return } catch { Start-Sleep -Milliseconds 100 }
         }
         throw 'clipboard write failed after retries'
@@ -326,7 +353,7 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
                     if (-not $Img) { $Img = New-ImageFromBytes $PngBytes }
                 }
                 if ($Img) { $do.SetImage($Img) }
-                Set-ClipboardChecked { [System.Windows.Forms.Clipboard]::SetDataObject($do, $true) }
+                Set-ClipboardChecked { [void][ClipwarpTransport.ClipboardWriter]::Publish($do, $seq0) }
             }
             elseif ($PublicationMode -eq 'dual') {
                 $do = New-Object System.Windows.Forms.DataObject
@@ -342,10 +369,13 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
                     [void]$sc.Add($DropFile)
                     $do.SetFileDropList($sc)
                 }
-                Set-ClipboardChecked { [System.Windows.Forms.Clipboard]::SetDataObject($do, $true) }
+                Set-ClipboardChecked { [void][ClipwarpTransport.ClipboardWriter]::Publish($do, $seq0) }
             }
             else {
-                Set-ClipboardChecked { [System.Windows.Forms.Clipboard]::SetText($Path) }
+                $do = New-Object System.Windows.Forms.DataObject
+                $do.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $Path)
+                $do.SetData('ClipwarpManaged', $Path)
+                Set-ClipboardChecked { [void][ClipwarpTransport.ClipboardWriter]::Publish($do, $seq0) }
             }
         }
         finally {
@@ -669,7 +699,7 @@ $rs.ThreadOptions = 'ReuseThread'
 $rs.Open()
 $ps = [powershell]::Create()
 $ps.Runspace = $rs
-[void]$ps.AddScript($work).AddArgument($OutDir).AddArgument([bool]$KeepImage).AddArgument([string]$resolvedMode)
+[void]$ps.AddScript($work).AddArgument($OutDir).AddArgument([bool]$KeepImage).AddArgument([string]$resolvedMode).AddArgument($PSScriptRoot)
 $changed  = $false
 $writeErr = $null
 try { $invoked = $ps.Invoke() }
@@ -717,12 +747,12 @@ if (-not $r -or $r.Error -eq 'no-image' -or -not $r.Path) {
     exit 1
 }
 
-# Best-effort housekeeping: drop PNGs older than 7 days so the folder never grows unbounded.
+# Opt-in cleanup runs after successful conversion and preserves its active file.
 try {
-    Get-ChildItem -LiteralPath $OutDir -Filter 'clip-*' -ErrorAction Stop |
-        Where-Object { $_.Extension -match '^\.(png|jpe?g|gif|webp)$' -and $_.LastWriteTime -lt (Get-Date).AddDays(-7) } |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-} catch {}
+    if ($retentionDays -gt 0) {
+        Clear-ClipwarpHistory -OutDir $OutDir -Before (Get-Date).AddDays(-$retentionDays) -ExcludePath $r.Path -Confirm:$false | Out-Null
+    }
+} catch { if (-not $Quiet) { Write-Warning "clipwarp cleanup failed: $_" } }
 
 if (-not $Quiet) {
     $verb = switch ($r.Kind) {
@@ -745,7 +775,7 @@ if (-not $Quiet) {
 # conversions. It never reads or writes the clipboard.
 try {
     Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
-    if (-not (Get-ClipwarpCalendarEnabled)) { throw 'calendar-disabled' }
+    if ((Get-ClipwarpPaused) -or -not (Get-ClipwarpCalendarEnabled)) { throw 'calendar-disabled' }
     Import-Module (Join-Path $PSScriptRoot 'clipwarp-calendar.psm1') -Force
     $imageTitle = 'Clipboard image ' + (Get-Date -Format 'yyyy-MM-dd HH:mm')
     Start-ClipwarpCalendarPopup -Kind Image -Title $imageTitle -ImagePath $r.Path -PointerX $PointerX -PointerY $PointerY -ScriptRoot $PSScriptRoot

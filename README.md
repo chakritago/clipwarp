@@ -57,8 +57,8 @@ The installer copies the scripts to `%USERPROFILE%\.claude\scripts` and register
 `clipwarp` command (plus a short **`cw`** alias) in the all-hosts profile of **both**
 PowerShell editions — Windows PowerShell 5.1 and PowerShell 7 — so it works whichever
 one you open. Idempotent; re-run any time to update. After a successful install,
-the clipboard watcher starts immediately for the current session and autostart on
-Windows logon is enabled. Open a **new** terminal afterwards (or run `. $PROFILE`) so
+the clipboard watcher starts immediately for the current session. Login autostart
+is opt-in via `clipwarp autostart`; updates preserve any existing login shortcut. Open a **new** terminal afterwards (or run `. $PROFILE`) so
 the command is found.
 
 > No admin rights, no services, no dependencies — plain PowerShell and .NET classes
@@ -95,7 +95,7 @@ Clipwarp automatically detects when the active/foreground browser window has Cha
 You can also check or explicitly configure the target mode at any time:
 ```powershell
 clipwarp target status       # view active mode (default: auto)
-clipwarp target auto         # automatic foreground browser & ChatGPT detection
+clipwarp target auto         # file picker / terminal -> dual; other apps -> image-only
 clipwarp target chatgpt      # force pure image output (no path text)
 clipwarp target claude       # force dual format (path text + image)
 ```
@@ -213,17 +213,86 @@ the clipboard sequence number, so a slow conversion never overwrites a newer cop
 
 ## Privacy & housekeeping
 
-- **Local by default.** Image conversion and storage stay local. Network access
-  occurs only if you click the optional Calendar prompt, which opens Google's
-  normal Calendar website in your browser; clipwarp itself uploads nothing.
-- **Auto-cleanup.** Saved images older than **7 days are deleted automatically**, so the
-  folder never grows unbounded and won't clutter your machine.
+- **Local by default.** Image conversion and storage stay local. Accepting a Calendar prompt
+  opens Google's Calendar website; clipwarp itself uploads no images. Deliberately
+  launched PowerShell commands can access the network or modify your machine.
+- **Opt-in retention.** `clipwarp privacy retention 7` deletes managed images older
+  than seven days after successful conversions, excluding the active image.
+  `clipwarp privacy retention 0` disables automatic deletion (the default).
+  Valid values are 0-3650 days. There is no background cleanup timer or size cap;
+  files remain until another successful conversion or explicit `clipwarp clean`.
+  Cleanup skips reparse points and refuses directories reached through them.
 - **Safe history tools.** `history` is bounded and read-only. `clean` refuses a drive
   root and only deletes matching managed files directly inside `-OutDir`; `recopy` is
   the only history command that writes to the clipboard.
 - **Performance roadmap.** Image conversion still uses an isolated PowerShell child
   process for compatibility with the multi-format decoder and both PowerShell editions;
   an in-process conversion path remains future work and requires separate benchmarking.
+
+Pause before working with passwords, financial records, or other sensitive material:
+
+```powershell
+clipwarp privacy pause
+clipwarp privacy status
+# After leaving the sensitive app:
+clipwarp privacy resume  # copy again to process new content
+```
+
+Pause is persistent in `%USERPROFILE%\.claude\clipwarp.json` (`paused: true`).
+It suppresses watcher image conversion, target rewriting, text prompts, and manual
+conversion. Checks occur before processing and publication; it does not cancel an
+already open popup or undo a file already saved by an in-flight conversion. Close
+prompts and use `clipwarp stop` when you need the listener fully stopped. Explicit
+`recopy` and Calendar export remain deliberate actions. There is no automatic
+sensitive-process detection: foreground process names cannot reliably identify the
+source of every clipboard copy. Pause before copying, rather than after.
+
+Clipboard sequence comparison occurs under the native clipboard lock before
+publication, including the initial conversion and target switches. A newer copy
+cancels a stale write. Custom ownership markers are bookkeeping, not a security
+boundary against other local applications. A native publication failure after
+emptying the clipboard may leave a partial payload; clipwarp cannot roll back
+another application's clipboard safely.
+
+Saved files and temporary Calendar title files can contain sensitive content.
+Cleanup is ordinary deletion, not secure erasure; it does not clear Windows
+Clipboard History, cloud sync, backups, or copies retained by other applications.
+Configure those Windows features yourself if needed. No unsupported History/cloud
+API is used. Clicking Run with PowerShell deliberately executes clipboard text in
+a visible PowerShell window with encoded transport. Review the command first;
+Enter never activates Run. Calendar parsing, details privacy, and ICS export are
+independent of command detection.
+
+Auto targeting uses process/window-title heuristics: Windows file pickers and
+terminals (including recognized integrated-terminal titles) receive dual payloads;
+other apps receive image-only. A browser page titled "Open" or "PowerShell" is not
+itself a file picker or terminal. A screenshot overlay retains the preceding target
+for at most 12 seconds from overlay entry; a new non-overlay target replaces it.
+`web`, `chatgpt`, and `image-only` force PNG/bitmap without path text/file-drop;
+`claude` and `dual` force image plus path text/file-drop; `text` forces path text.
+Use `clipwarp target <mode>` for persistent settings or `-TargetMode <mode>` for
+one conversion. An explicit non-auto flag overrides the saved mode.
+
+The real ChatGPT paste and Windows file-picker GUI boundary remains **unverified**
+by the automated suite. Tests construct payloads and exercise helper logic without
+opening a UI or accessing the real clipboard; they cannot prove how a particular
+browser/app version consumes those formats.
+
+## Regression tests
+
+With existing PowerShell 7 and Windows PowerShell 5.1 executables available:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run-all.ps1
+# If pwsh is not on PATH:
+.\tests\run-all.ps1 -PwshPath 'C:\Program Files\PowerShell\7\pwsh.exe'
+```
+
+The runner launches every `tests/*.Tests.ps1` in a separate process under both
+editions, reports each result, and exits nonzero if an engine is unavailable or a
+test fails. It runs no watcher, installer, autostart, browser, GUI, or clipboard
+operation. Compatibility tests parse all PowerShell scripts and compile embedded
+C# plus the shared native transport. Test fixtures use temporary directories.
 
 ## Scripting
 

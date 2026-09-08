@@ -33,6 +33,10 @@ try {
     Assert-Equal 0 $LASTEXITCODE 'calendar duration status is a safe successful command'
     Assert-Equal $true ((Invoke-ClipwarpExitCode 'calendar duration 0') -ne 0) 'calendar duration rejects an out-of-range value'
 
+    foreach ($argsText in @('privacy status','privacy pause','privacy resume','privacy retention 14','privacy retention 0')) {
+        Assert-Equal 0 (Invoke-ClipwarpExitCode $argsText) "safe privacy command: $argsText"
+    }
+    Assert-Equal $true ((Invoke-ClipwarpExitCode 'privacy retention -1') -ne 0) 'negative retention rejected'
     $images = Join-Path $temp 'images'
     New-Item -ItemType Directory -Path $images | Out-Null
     & $engine -NoProfile -File $clipwarp history -OutDir $images *> $null

@@ -18,6 +18,15 @@ $popupAst = [Management.Automation.Language.Parser]::ParseFile($popupPath, [ref]
 Assert-Equal 0 $popupErrors.Count 'calendar popup script parses without errors'
 $timeoutParameter = @($popupAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'TimeoutSeconds' })[0]
 Assert-Equal 3 ([int]$timeoutParameter.DefaultValue.SafeGetValue()) 'text and image popups default to a 3-second timeout'
+$acceptRunAssignments = @($popupAst.FindAll({ $args[0] -is [Management.Automation.Language.AssignmentStatementAst] }, $true) |
+    Where-Object { $_.Left.Extent.Text -match 'AcceptButton' -and $_.Right.Extent.Text -match 'runButton' })
+Assert-Equal 0 $acceptRunAssignments.Count 'command popup source does not assign runButton as AcceptButton'
+$acceptCalAssignments = @($popupAst.FindAll({ $args[0] -is [Management.Automation.Language.AssignmentStatementAst] }, $true) |
+    Where-Object { $_.Left.Extent.Text -match 'AcceptButton' -and $_.Right.Extent.Text -match 'calButton' })
+Assert-Equal 1 $acceptCalAssignments.Count 'calendar popup source preserves calButton as AcceptButton for non-command text'
+$runClickHandler = @($popupAst.FindAll({ $args[0] -is [Management.Automation.Language.InvokeMemberExpressionAst] }, $true) |
+    Where-Object { $_.Expression.Extent.Text.Trim() -eq '$runButton' -and $_.Member.Extent.Text -eq 'Add_MouseClick' -and $_.Extent.Text -match 'Start-ClipwarpCommand' })
+Assert-Equal 1 $runClickHandler.Count 'command popup source retains explicit runButton click handler'
 
 $date = [datetime]::new(2026, 8, 31, 22, 15, 0, [DateTimeKind]::Local)
 $textUrl = New-ClipwarpCalendarUrl -Title 'Plan A & B / review' -LocalDate $date
@@ -384,3 +393,9 @@ Assert-Equal 'powershell.exe' $directPsCalls[0] 'missing wt launches powershell.
 
 if ($failures) { throw "$failures calendar test(s) failed" }
 Write-Host 'All calendar tests passed.' -ForegroundColor Cyan
+
+if ([IO.File]::ReadAllText($popupPath) -notmatch 'SuppressKeyPress = \$true') { throw 'Popup must suppress Enter before focused Run can activate' }
+
+$keyboardRunHandlers = @($popupAst.FindAll({ $args[0] -is [Management.Automation.Language.InvokeMemberExpressionAst] }, $true) |
+    Where-Object { $_.Expression.Extent.Text.Trim() -eq '$runButton' -and $_.Member.Extent.Text -eq 'Add_Click' })
+if ($keyboardRunHandlers.Count) { throw 'Run must not use keyboard/default-button Click activation' }

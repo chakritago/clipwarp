@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 Import-Module (Join-Path $root 'clipwarp-support.psm1') -Force
 
@@ -238,3 +238,15 @@ if ($watchSource -notmatch 'ClipwarpManaged') {
 Write-Host 'PASS: watcher includes foreground target arguments and event hook'
 
 Write-Host 'All target regression tests passed.'
+
+# Integrated terminal and browser title false-positive regressions.
+foreach ($ide in @('code','cursor','windsurf','idea64','pycharm64','rider64')) {
+    if (-not (Test-ClipwarpTerminalTarget $ide 'project - terminal')) { throw "integrated terminal missed: $ide" }
+    if (Test-ClipwarpTerminalTarget $ide 'terminal.ts - project') { throw "editor filename misclassified: $ide" }
+}
+foreach ($browser in @('chrome','msedge','chatgpt')) {
+    if (Test-ClipwarpTerminalTarget $browser 'PowerShell - Claude - terminal') { throw 'browser title mistaken for terminal' }
+    if (Test-ClipwarpFilePickerTarget $browser 'Open - upload file' 'Chrome_WidgetWin_1') { throw 'browser tab mistaken for file picker' }
+    if (-not (Test-ClipwarpFilePickerTarget $browser 'Öffnen' '#32770')) { throw 'localized picker missed' }
+}
+Write-Host 'PASS: integrated terminal and localized picker classification boundaries'

@@ -65,6 +65,22 @@ try {
     Set-ClipwarpTargetMode -Mode auto -ConfigPath $config | Out-Null
     Assert-Equal 'auto' (Get-ClipwarpTargetMode -ConfigPath $config) 'targetMode persists auto setting'
 
+    Assert-Equal 0 (Get-ClipwarpRetentionDays -ConfigPath $config) 'retention defaults off'
+    Set-ClipwarpRetentionDays -Days 14 -ConfigPath $config
+    Assert-Equal 14 (Get-ClipwarpRetentionDays -ConfigPath $config) 'retention persists'
+    Set-ClipwarpPaused -Paused $true -ConfigPath $config
+    Assert-Equal $true (Get-ClipwarpPaused -ConfigPath $config) 'pause persists'
+    Assert-Equal 'auto' (Get-ClipwarpTargetMode -ConfigPath $config) 'privacy preserves target settings'
+    Set-ClipwarpPaused -Paused $false -ConfigPath $config
+    Assert-Equal $false (Get-ClipwarpPaused -ConfigPath $config) 'resume persists'
+    $activePath=Join-Path $out 'clip-active.png'
+    [IO.File]::WriteAllBytes($activePath,[byte[]](1))
+    (Get-Item $activePath).LastWriteTime=(Get-Date).AddDays(-100)
+    [void](Clear-ClipwarpHistory -OutDir $out -Before (Get-Date).AddDays(-30) -ExcludePath $activePath)
+    Assert-Equal $true (Test-Path $activePath) 'retention excludes active old image'
+    $invalidRetention=$false
+    try { Set-ClipwarpRetentionDays -Days 3651 -ConfigPath $config } catch { $invalidRetention=$true }
+    Assert-Equal $true $invalidRetention 'retention rejects excessive duration'
     $doctor = @(Test-ClipwarpEnvironment -ScriptRoot $root -ConfigPath $config -OutDir $out -ProfilePaths @((Join-Path $temp 'missing-profile.ps1')) -StartupPath (Join-Path $temp 'missing.lnk') -PidPath (Join-Path $temp 'missing.pid'))
     Assert-Equal $true ($doctor.Count -ge 6) 'doctor returns a useful diagnostic set'
     Assert-Equal $false (($doctor | Where-Object Name -eq 'Repository URL').MutatesState) 'doctor diagnostics are explicitly read-only'
