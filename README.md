@@ -114,7 +114,16 @@ Copied text containing an explicit ISO local date and 24-hour time, such as
 `Meeting 2026-09-15 14:00-15:30` sets an explicit end. An ISO date without a
 time creates an all-day event on that date. Strict parsing deliberately rejects
 ambiguous natural language and falls back to the existing all-day event for the
-current local date. The prompt does not read, replace, or otherwise disturb the clipboard.
+current local date. Showing the prompt and using Calendar do not change the clipboard.
+
+The text popup keeps Run with PowerShell and Calendar side by side, with a separate
+**Open ChatGPT (Temporary)** button below. Clicking it copies the full original
+text (including all lines, without calendar parsing or command cleanup) to the
+clipboard and opens exactly `https://chatgpt.com/?temporary-chat=true` in your
+default browser. **Paste and send the message yourself in the opened temporary
+chat.** Nothing is typed or submitted automatically. Neither the message nor any
+local image path is added to the URL. This button is available only for text;
+opening the popup alone does not perform the handoff.
 
 For an image, Google Calendar's template URL cannot upload or attach a local file.
 clipwarp therefore opens the event editor with a sensible image title and today's

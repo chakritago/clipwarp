@@ -386,6 +386,40 @@ function Set-ClipwarpClipboardText {
     Invoke-ClipwarpStaClipboardWrite -Value $Value
 }
 
+function New-ClipwarpChatGptUrl {
+    [CmdletBinding()]
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        $Ignored
+    )
+    'https://chatgpt.com/?temporary-chat=true'
+}
+
+function Start-ClipwarpChatGptHandoff {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [scriptblock]$ClipboardWriter = $null,
+        [scriptblock]$BrowserStarter = $null
+    )
+
+    if ($ClipboardWriter) {
+        & $ClipboardWriter $Message
+    } else {
+        Set-ClipwarpClipboardText -Value $Message
+    }
+
+    $url = New-ClipwarpChatGptUrl
+    if ($BrowserStarter) {
+        & $BrowserStarter $url
+    } else {
+        $browser = New-Object Diagnostics.ProcessStartInfo
+        $browser.FileName = $url
+        $browser.UseShellExecute = $true
+        [Diagnostics.Process]::Start($browser) | Out-Null
+    }
+}
+
 function Get-ClipwarpPopupLocation {
     [CmdletBinding()]
     param(
@@ -672,4 +706,4 @@ function Get-ClipwarpCommandProcessStartInfo {
     New-ClipwarpCommandProcessStartInfo @params
 }
 
-Export-ModuleMember -Function Get-ClipwarpPayloadKind, Format-ClipwarpCalendarPayload, Get-ClipwarpCalendarTimeZone, New-ClipwarpCalendarUrl, ConvertFrom-ClipwarpCalendarText, Get-ClipwarpImageCalendarDetails, Get-ClipwarpCalendarPreview, Export-ClipwarpIcsEvent, Set-ClipwarpClipboardText, Get-ClipwarpPopupLocation, Get-ClipwarpPopupMetrics, New-ClipwarpCalendarPopupArguments, Start-ClipwarpCalendarPopup, Get-ClipwarpCommandText, Test-ClipwarpCommandLine, Start-ClipwarpCommand, New-ClipwarpCommandProcessStartInfo, Get-ClipwarpCommandProcessStartInfo
+Export-ModuleMember -Function Get-ClipwarpPayloadKind, Format-ClipwarpCalendarPayload, Get-ClipwarpCalendarTimeZone, New-ClipwarpCalendarUrl, ConvertFrom-ClipwarpCalendarText, Get-ClipwarpImageCalendarDetails, Get-ClipwarpCalendarPreview, Export-ClipwarpIcsEvent, Set-ClipwarpClipboardText, New-ClipwarpChatGptUrl, Start-ClipwarpChatGptHandoff, Get-ClipwarpPopupLocation, Get-ClipwarpPopupMetrics, New-ClipwarpCalendarPopupArguments, Start-ClipwarpCalendarPopup, Get-ClipwarpCommandText, Test-ClipwarpCommandLine, Start-ClipwarpCommand, New-ClipwarpCommandProcessStartInfo, Get-ClipwarpCommandProcessStartInfo

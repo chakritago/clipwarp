@@ -84,6 +84,10 @@ $pointer = if ($null -ne $PointerX -and $null -ne $PointerY) {
 $area = [Windows.Forms.Screen]::FromPoint($pointer).WorkingArea
 $metrics = Get-ClipwarpPopupMetrics -Dpi ([ClipwarpPopupNative]::GetDpi($pointer.X, $pointer.Y))
 $contentWidth = $metrics.Width - (2 * $metrics.Padding)
+if ($Kind -eq 'Text') {
+    # Preserve the existing action row; add a full-width deliberate handoff below it.
+    $metrics.Height += [int][Math]::Round(70 * ($metrics.Width / 400.0))
+}
 $location = Get-ClipwarpPopupLocation -PointerX $pointer.X -PointerY $pointer.Y -PopupWidth $metrics.Width -PopupHeight $metrics.Height -WorkingLeft $area.Left -WorkingTop $area.Top -WorkingRight $area.Right -WorkingBottom $area.Bottom -Gap $metrics.Gap
 
 $form = New-Object Windows.Forms.Form
@@ -213,6 +217,32 @@ if ($Kind -eq 'Text') {
 
     $form.Controls.Add($runButton)
     $form.Controls.Add($calButton)
+
+    $chatGptButton = New-Object Windows.Forms.Button
+    $chatGptButton.Location = New-Object Drawing.Point $metrics.Padding, ($metrics.ButtonTop + $metrics.ButtonHeight + $btnGap)
+    $chatGptButton.Size = New-Object Drawing.Size $contentWidth, $metrics.ButtonHeight
+    $chatGptButton.FlatStyle = [Windows.Forms.FlatStyle]::Flat
+    $chatGptButton.FlatAppearance.BorderColor = [Drawing.Color]::FromArgb(203, 213, 225)
+    $chatGptButton.BackColor = [Drawing.Color]::FromArgb(241, 245, 249)
+    $chatGptButton.ForeColor = [Drawing.Color]::FromArgb(30, 41, 59)
+    $chatGptButton.Cursor = [Windows.Forms.Cursors]::Hand
+    $chatGptButton.Text = 'Open ChatGPT (Temporary)'
+    $chatGptButton.AccessibleName = 'Open ChatGPT (Temporary)'
+    $chatGptButton.AccessibleDescription = 'Copies the full text. Paste and send it yourself in the temporary chat.'
+    $chatGptButton.TabIndex = 2
+    $close.TabIndex = 3
+    $form.Controls.Add($chatGptButton)
+
+    $handoffHint = New-Object Windows.Forms.Label
+    $handoffHint.Location = New-Object Drawing.Point $metrics.Padding, ($chatGptButton.Bottom + [int][Math]::Round(4 * $scale))
+    $handoffHint.Size = New-Object Drawing.Size $contentWidth, ([int][Math]::Round(20 * $scale))
+    $handoffHint.Text = 'Copies full text; paste and send it yourself in ChatGPT.'
+    $handoffHint.AccessibleName = $handoffHint.Text
+    $form.Controls.Add($handoffHint)
+    $chatGptButton.Add_Click({
+        Start-ClipwarpChatGptHandoff -Message $Title
+        $form.Close()
+    })
 
     # MouseClick excludes Enter, Space, and form-default PerformClick activation.
     $runButton.Add_MouseClick({

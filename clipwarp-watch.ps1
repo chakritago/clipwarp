@@ -788,7 +788,7 @@ namespace ClipwarpWatch
                 {
                     if (meaningful == lastTextFingerprint && (DateTime.Now - lastTextAt).TotalSeconds < 2)
                     { lastHandledSequence = sequence; return; }
-                    LaunchTextPopup(meaningful);
+                    LaunchTextPopup(txt);
                     lastTextFingerprint = meaningful;
                     lastTextAt = DateTime.Now;
                     lastHandledSequence = sequence;
