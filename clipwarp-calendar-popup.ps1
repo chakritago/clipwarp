@@ -226,9 +226,9 @@ if ($Kind -eq 'Text') {
     $chatGptButton.BackColor = [Drawing.Color]::FromArgb(241, 245, 249)
     $chatGptButton.ForeColor = [Drawing.Color]::FromArgb(30, 41, 59)
     $chatGptButton.Cursor = [Windows.Forms.Cursors]::Hand
-    $chatGptButton.Text = 'Open ChatGPT (Temporary)'
-    $chatGptButton.AccessibleName = 'Open ChatGPT (Temporary)'
-    $chatGptButton.AccessibleDescription = 'Copies the full text. Paste and send it yourself in the temporary chat.'
+    $chatGptButton.Text = 'Open ChatGPT && Send (Temporary)'
+    $chatGptButton.AccessibleName = 'Open ChatGPT & Send (Temporary)'
+    $chatGptButton.AccessibleDescription = 'Copies the full text, then automatically pastes and sends it in the temporary chat.'
     $chatGptButton.TabIndex = 2
     $close.TabIndex = 3
     $form.Controls.Add($chatGptButton)
@@ -236,12 +236,16 @@ if ($Kind -eq 'Text') {
     $handoffHint = New-Object Windows.Forms.Label
     $handoffHint.Location = New-Object Drawing.Point $metrics.Padding, ($chatGptButton.Bottom + [int][Math]::Round(4 * $scale))
     $handoffHint.Size = New-Object Drawing.Size $contentWidth, ([int][Math]::Round(20 * $scale))
-    $handoffHint.Text = 'Copies full text; paste and send it yourself in ChatGPT.'
+    $handoffHint.Text = 'Automatically pastes full text and sends it in ChatGPT.'
     $handoffHint.AccessibleName = $handoffHint.Text
     $form.Controls.Add($handoffHint)
     $chatGptButton.Add_Click({
-        Start-ClipwarpChatGptHandoff -Message $Title
-        $form.Close()
+        try {
+            Start-ClipwarpChatGptHandoff -Message $Title
+            $form.Close()
+        } catch {
+            [void][Windows.Forms.MessageBox]::Show('ChatGPT automatic send failed. Check that a single temporary ChatGPT page is open, signed in, and ready with an empty composer. Its accessible composer and send controls must be available. Clipwarp could not confirm submission. The message may already have been sent; check ChatGPT before trying again.', 'Clipwarp - ChatGPT', [Windows.Forms.MessageBoxButtons]::OK, [Windows.Forms.MessageBoxIcon]::Error)
+        }
     })
 
     # MouseClick excludes Enter, Space, and form-default PerformClick activation.

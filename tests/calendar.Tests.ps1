@@ -57,12 +57,28 @@ Start-ClipwarpChatGptHandoff -Message $handoffText -ClipboardWriter {
     param($value) $handoffCalls.Add([pscustomobject]@{ Kind='clipboard'; Value=$value })
 } -BrowserStarter {
     param($value) $handoffCalls.Add([pscustomobject]@{ Kind='browser'; Value=$value })
+} -PageWaiter { param($url) $handoffCalls.Add([pscustomobject]@{ Kind='wait'; Value=$url }); 'verified-page' } -Submitter {
+    param($page, $message) $handoffCalls.Add([pscustomobject]@{ Kind='submit'; Value=$message; Page=$page })
 }
-Assert-Equal 2 $handoffCalls.Count 'handoff writes and opens exactly once'
+Assert-Equal 4 $handoffCalls.Count 'handoff writes and opens exactly once'
 Assert-Equal 'clipboard' $handoffCalls[0].Kind 'handoff writes before opening browser'
 Assert-Equal $handoffText $handoffCalls[0].Value 'handoff preserves full multiline Unicode text and whitespace'
 Assert-Equal 'browser' $handoffCalls[1].Kind 'handoff opens browser after writing'
 Assert-Equal $temporaryUrl $handoffCalls[1].Value 'browser URL leaks neither message nor local image path'
+Assert-Equal 'wait' $handoffCalls[2].Kind 'wait follows browser launch'
+Assert-Equal $temporaryUrl $handoffCalls[2].Value 'wait targets exact temporary URL'
+Assert-Equal 'submit' $handoffCalls[3].Kind 'submit follows verified page wait'
+Assert-Equal 'verified-page' $handoffCalls[3].Page 'submit receives identified page'
+Assert-Equal $handoffText $handoffCalls[3].Value 'submit preserves exact original message'
+foreach ($stage in @('clipboard','browser','wait','submit')) {
+    $order = New-Object Collections.Generic.List[string]
+    try {
+        Start-ClipwarpChatGptHandoff -Message $handoffText -ClipboardWriter { $order.Add('clipboard'); if ($stage -eq 'clipboard') { throw 'stop' } } -BrowserStarter { $order.Add('browser'); if ($stage -eq 'browser') { throw 'stop' } } -PageWaiter { $order.Add('wait'); if ($stage -eq 'wait') { throw 'stop' }; 'page' } -Submitter { $order.Add('submit'); throw 'stop' }
+        throw 'Expected failure'
+    } catch { Assert-Equal 'stop' $_.Exception.Message 'operation failure propagates' }
+    $expected = @('clipboard','browser','wait','submit')
+    Assert-Equal ($expected[0..([array]::IndexOf($expected,$stage))] -join ',') ($order -join ',') 'failure prevents all later actions'
+}
 $browserAfterFailure = New-Object Collections.Generic.List[string]
 try {
     Start-ClipwarpChatGptHandoff -Message 'test' -ClipboardWriter { throw 'injected write failure' } -BrowserStarter { param($value) $browserAfterFailure.Add($value) }
@@ -77,9 +93,9 @@ $textBranch = $chatHandler[0].Parent
 while ($textBranch -and $textBranch -isnot [Management.Automation.Language.IfStatementAst]) { $textBranch = $textBranch.Parent }
 Assert-Equal '$Kind -eq ''Text''' $textBranch.Clauses[0].Item1.Extent.Text 'ChatGPT button is restricted to text popup'
 $popupSource = [IO.File]::ReadAllText($popupPath)
-Assert-Equal $true ($popupSource.Contains('$chatGptButton.Text = ''Open ChatGPT (Temporary)''')) 'ChatGPT button has visible label'
-Assert-Equal $true ($popupSource.Contains('$chatGptButton.AccessibleName = ''Open ChatGPT (Temporary)''')) 'ChatGPT button has accessible name'
-Assert-Equal $true ($popupSource.Contains('Copies full text; paste and send it yourself in ChatGPT.')) 'popup explains manual paste and send boundary'
+Assert-Equal $true ($popupSource.Contains('$chatGptButton.Text = ''Open ChatGPT && Send (Temporary)''')) 'ChatGPT button has visible label'
+Assert-Equal $true ($popupSource.Contains('$chatGptButton.AccessibleName = ''Open ChatGPT & Send (Temporary)''')) 'ChatGPT button has accessible name'
+Assert-Equal $true ($popupSource.Contains('Automatically pastes full text and sends it in ChatGPT.')) 'popup explains automatic submission'
 Assert-Equal $false ($popupSource -match 'AcceptButton\s*=\s*\$chatGptButton') 'handoff is not the form default action'
 # Execute the actual extracted handler with a fake form and injected helper wrapper.
 & {
@@ -89,16 +105,21 @@ Assert-Equal $false ($popupSource -match 'AcceptButton\s*=\s*\$chatGptButton') '
     $calls = New-Object Collections.Generic.List[string]
     function Start-ClipwarpChatGptHandoff {
         param($Message)
-        clipwarp-calendar\Start-ClipwarpChatGptHandoff -Message $Message -ClipboardWriter { param($value) $calls.Add($value) } -BrowserStarter { param($value) $calls.Add($value) }
+        clipwarp-calendar\Start-ClipwarpChatGptHandoff -Message $Message -ClipboardWriter { param($value) $calls.Add($value) } -BrowserStarter { param($value) $calls.Add($value) } -PageWaiter { 'page' } -Submitter { param($page,$message) $calls.Add($message) }
     }
     & ([scriptblock]::Create($chatHandler[0].Arguments[0].ScriptBlock.Extent.Text.Trim().Substring(1).TrimEnd('}')))
-    Assert-Equal 2 $calls.Count 'actual popup handler invokes injected handoff once'
+    Assert-Equal 3 $calls.Count 'actual popup handler invokes injected handoff once'
     Assert-Equal $Title $calls[0] 'actual popup handler passes full original Title'
     Assert-Equal $temporaryUrl $calls[1] 'actual popup handler opens only temporary URL'
+    Assert-Equal $Title $calls[2] 'actual popup handler submits original Title'
     Assert-Equal $true $form.Closed 'actual popup handler closes popup after handoff'
 }
 $moduleSource = [IO.File]::ReadAllText($module)
-Assert-Equal $false (($popupSource + $moduleSource) -match '(?i)SendKeys|SendInput|keybd_event|AppActivate|Invoke-WebRequest|Invoke-RestMethod') 'popup and handoff contain no keystroke automation or automatic submission'
+Assert-Equal $false (($popupSource + $moduleSource) -match '(?i)SendKeys|SendInput|keybd_event|AppActivate|Invoke-WebRequest|Invoke-RestMethod') 'popup and handoff contain no global keystrokes or HTTP submission'
+foreach ($contract in @('AutomationElement','ValuePattern','InvokePattern','prompt-textarea','Log in','IsOffscreen')) {
+    Assert-Equal $true ($moduleSource.Contains($contract)) "scoped automation checks $contract"
+}
+Assert-Equal $true ($popupSource.Contains('[Windows.Forms.MessageBox]::Show')) 'handoff errors are user-visible'
 Assert-Equal '239,187,191' (([IO.File]::ReadAllBytes($module))[0..2] -join ',') 'calendar module retains UTF-8 BOM for Windows PowerShell'
 
 $textUrl = New-ClipwarpCalendarUrl -Title 'Plan A & B / review' -LocalDate $date
