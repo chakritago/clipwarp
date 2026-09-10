@@ -240,12 +240,14 @@ if ($Kind -eq 'Text') {
     $handoffHint.AccessibleName = $handoffHint.Text
     $form.Controls.Add($handoffHint)
     $chatGptButton.Add_Click({
+        try { if ($null -ne $timer) { $timer.Stop() } } catch { }
         if ($form.PSObject.Methods['Hide']) { $form.Hide() }
         try {
             Start-ClipwarpChatGptHandoff -Message $Title
             $form.Close()
         } catch {
             [void][Windows.Forms.MessageBox]::Show("ChatGPT automatic send failed. $($_.Exception.Message)", 'Clipwarp - ChatGPT', [Windows.Forms.MessageBoxButtons]::OK, [Windows.Forms.MessageBoxIcon]::Error)
+            $form.Close()
         }
     })
 

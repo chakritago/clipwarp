@@ -383,17 +383,75 @@ function Set-ClipwarpClipboardText {
     [CmdletBinding()]
     param([Parameter(Mandatory=$true)][string]$Value, [scriptblock]$Writer)
     if ($Writer) { & $Writer $Value; return }
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        if ([Windows.Forms.Clipboard]::ContainsText()) {
+            $current = [Windows.Forms.Clipboard]::GetText()
+            if ([string]::Equals($current, $Value, [StringComparison]::Ordinal)) {
+                return
+            }
+        }
+    } catch { }
     Invoke-ClipwarpStaClipboardWrite -Value $Value
 }
 
 if (-not ([System.Management.Automation.PSTypeName]'ClipwarpChatGptNative').Type) {
     Add-Type -TypeDefinition @'
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
+
 public static class ClipwarpChatGptNative {
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    public static IntPtr FindChatGptWindow() {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((hWnd, lParam) => {
+            if (IsWindowVisible(hWnd)) {
+                StringBuilder sb = new StringBuilder(512);
+                if (GetWindowText(hWnd, sb, 512) > 0) {
+                    string title = sb.ToString();
+                    if (title.IndexOf("ChatGPT", StringComparison.OrdinalIgnoreCase) >= 0) {
+                        found = hWnd;
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    public static void ActivateWindow(IntPtr hWnd) {
+        if (hWnd == IntPtr.Zero) return;
+
+        uint processId;
+        uint targetThread = GetWindowThreadProcessId(hWnd, out processId);
+        uint currentThread = GetCurrentThreadId();
+
+        if (currentThread != targetThread) {
+            AttachThreadInput(currentThread, targetThread, true);
+        }
+
+        ShowWindow(hWnd, 9);
+        BringWindowToTop(hWnd);
+        SetForegroundWindow(hWnd);
+
+        if (currentThread != targetThread) {
+            AttachThreadInput(currentThread, targetThread, false);
+        }
+    }
 
     public static void SendPasteAndEnter() {
         keybd_event(0x11, 0, 0, UIntPtr.Zero);
@@ -401,15 +459,10 @@ public static class ClipwarpChatGptNative {
         keybd_event(0x56, 0, 2, UIntPtr.Zero);
         keybd_event(0x11, 0, 2, UIntPtr.Zero);
 
-        System.Threading.Thread.Sleep(300);
+        System.Threading.Thread.Sleep(400);
 
         keybd_event(0x0D, 0, 0, UIntPtr.Zero);
         keybd_event(0x0D, 0, 2, UIntPtr.Zero);
-    }
-
-    public static void ActivateWindow(IntPtr hWnd) {
-        ShowWindow(hWnd, 9);
-        SetForegroundWindow(hWnd);
     }
 }
 '@
@@ -427,19 +480,29 @@ function New-ClipwarpChatGptUrl {
 function Find-ClipwarpChatGptPage {
     param(
         [string]$Url,
-        [scriptblock]$ProcessFinder = {
-            Get-Process -ErrorAction SilentlyContinue
-        }
+        [scriptblock]$ProcessFinder = $null
     )
-    $processes = @(& $ProcessFinder)
-    foreach ($p in $processes) {
-        if ($null -ne $p -and
-            $p.ProcessName -match '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$' -and
-            $p.MainWindowTitle -match '(?i)ChatGPT' -and
-            $null -ne $p.MainWindowHandle -and
-            $p.MainWindowHandle -ne [IntPtr]::Zero -and
-            $p.MainWindowHandle -ne 0) {
-            return $p
+    if ($ProcessFinder) {
+        $processes = @(& $ProcessFinder)
+        foreach ($p in $processes) {
+            if ($null -ne $p -and
+                $p.ProcessName -match '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$' -and
+                $p.MainWindowTitle -match '(?i)ChatGPT' -and
+                $null -ne $p.MainWindowHandle -and
+                $p.MainWindowHandle -ne [IntPtr]::Zero -and
+                $p.MainWindowHandle -ne 0) {
+                return $p
+            }
+        }
+        return $null
+    }
+
+    $hWnd = [ClipwarpChatGptNative]::FindChatGptWindow()
+    if ($hWnd -ne [IntPtr]::Zero) {
+        return [pscustomobject]@{
+            MainWindowHandle = $hWnd
+            ProcessName = 'browser'
+            MainWindowTitle = 'ChatGPT'
         }
     }
     return $null
