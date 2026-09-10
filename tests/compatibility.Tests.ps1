@@ -21,6 +21,7 @@ $watchSource = Get-HereStringValue (Join-Path $root 'clipwarp-watch.ps1') 'names
 $watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-clipboard.cs'))
 $watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-image.cs'))
 $watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-policy.cs'))
+$watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-popup-host.cs'))
 Add-Type -AssemblyName System.Drawing
 if ($PSVersionTable.PSEdition -eq 'Core') {
     # Prefer compilation contracts over runtime facades (notably System.Collections).

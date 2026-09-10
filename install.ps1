@@ -12,7 +12,7 @@ param(
 )
 
 function Get-ClipwarpReleaseInventory {
-    @('clipwarp.ps1','clipwarp-watch.ps1','clipwarp-calendar.psm1','clipwarp-calendar-popup.ps1','clipwarp-support.psm1','clipwarp-clipboard.cs','clipwarp-policy.cs','clipwarp-image.cs','install.ps1','uninstall.ps1')
+    @('clipwarp.ps1','clipwarp-watch.ps1','clipwarp-calendar.psm1','clipwarp-calendar-popup.ps1','clipwarp-support.psm1','clipwarp-clipboard.cs','clipwarp-policy.cs','clipwarp-image.cs','clipwarp-popup-host.cs','install.ps1','uninstall.ps1')
 }
 function Assert-ClipwarpSafePath([string]$Path) {
     $full = [IO.Path]::GetFullPath($Path)

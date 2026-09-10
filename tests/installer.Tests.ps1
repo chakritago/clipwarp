@@ -27,13 +27,13 @@ try {
     $profile=Join-Path $temp 'profiles\profile.ps1'; [void][IO.Directory]::CreateDirectory((Split-Path $profile -Parent)); [IO.File]::WriteAllText($profile,"# personal profile`r`n",[Text.Encoding]::Unicode)
     Run (Join-Path $repo 'new-release-manifest.ps1') @('-SourceRoot',$source,'-Commit',('a'*40))
     $manifest=[IO.File]::ReadAllText((Join-Path $source 'release-manifest.json')) | ConvertFrom-Json
-    Assert ($manifest.files.Count -eq 10 -and 'clipwarp-policy.cs' -in $manifest.files.name -and 'clipwarp-image.cs' -in $manifest.files.name) 'fixed inventory includes both shared helpers'
+    Assert ($manifest.files.Count -eq 11 -and 'clipwarp-policy.cs' -in $manifest.files.name -and 'clipwarp-image.cs' -in $manifest.files.name -and 'clipwarp-popup-host.cs' -in $manifest.files.name) 'fixed inventory includes shared helpers'
     Run (Join-Path $repo 'install.ps1') @('-SourceRoot',$source,'-InstallRoot',$root,'-ProfilePaths',$profile,'-WhatIf')
     Assert (-not [IO.Directory]::Exists($root)) 'install WhatIf creates no directory'
     Run (Join-Path $repo 'install.ps1') @('-SourceRoot',$source,'-InstallRoot',$root,'-ProfilePaths',$profile,'-NoWatcher')
     $active=[IO.File]::ReadAllText((Join-Path $root 'active-version.json'))
     $meta=[IO.File]::ReadAllText((Join-Path $root 'installed-manifest.json')) | ConvertFrom-Json
-    Assert ($meta.origin.kind -eq 'local' -and $meta.files.Count -eq 10) 'installed metadata records origin and inventory'
+    Assert ($meta.origin.kind -eq 'local' -and $meta.files.Count -eq 11) 'installed metadata records origin and inventory'
     Assert ([IO.File]::ReadAllText($profile).Contains('function clipwarp')) 'isolated profile registered'
     $bytes=[IO.File]::ReadAllBytes($profile); Assert ($bytes[0] -eq 255 -and $bytes[1] -eq 254) 'profile UTF-16 BOM preserved'
     Run (Join-Path $root 'clipwarp.ps1') @('help')

@@ -7,6 +7,7 @@ if (-not $src) { throw 'Missing watcher source' }
 $src += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-clipboard.cs'))
 $src += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-image.cs'))
 $src += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-policy.cs'))
+$src += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-popup-host.cs'))
 # All threaded callbacks are C#; no PowerShell runspace or live clipboard is used.
 $src += @'
 public static class WorkerFixture {

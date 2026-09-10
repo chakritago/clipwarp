@@ -424,6 +424,11 @@ namespace ClipwarpWatch
         private string currentPayloadMode = "dual";
         private System.Diagnostics.Process child;
         private System.Diagnostics.Process popupChild;
+        private System.Diagnostics.Process warmPopupHost;
+        private Stream warmPopupPipe;
+        private long popupRequestId = 0;
+        private DateTime warmPopupStarted;
+        private int warmPopupRestarts = 0;
         private DateTime childStarted;
         private const int ChildTimeoutSec = 15;   // a conversion that runs longer is treated as hung
         private int busyRetries;                  // consecutive "clipboard busy" re-arms in this burst
@@ -474,6 +479,7 @@ namespace ClipwarpWatch
             debounce.Interval = EventDelayMs;      // coalesce format bursts without delaying the popup noticeably
             debounce.Tick += OnTick;
             CaptureForeground();
+            StartWarmPopupHostAsync();
             Log("watch started, pid " + System.Diagnostics.Process.GetCurrentProcess().Id);
         }
 
@@ -908,9 +914,90 @@ namespace ClipwarpWatch
             return " -TargetMode " + decision.Mode;
         }
 
+        private void StartWarmPopupHostAsync()
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate {
+                try { EnsureWarmPopupHost(); } catch { }
+            });
+        }
+
+        private bool EnsureWarmPopupHost()
+        {
+            if (stopping) return false;
+            if (warmPopupHost != null && !warmPopupHost.HasExited && warmPopupPipe != null) return true;
+            try
+            {
+                if (warmPopupRestarts > 5 && (DateTime.Now - warmPopupStarted).TotalSeconds < 30)
+                {
+                    Log("warm popup host restarted too frequently; falling back to direct launch");
+                    return false;
+                }
+                CloseWarmPopupHost();
+                var psi = new System.Diagnostics.ProcessStartInfo();
+                psi.FileName = "powershell.exe";
+                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -HostMode";
+                psi.CreateNoWindow = true;
+                psi.UseShellExecute = false;
+                psi.RedirectStandardInput = true;
+                warmPopupHost = System.Diagnostics.Process.Start(psi);
+                warmPopupPipe = warmPopupHost.StandardInput.BaseStream;
+                warmPopupStarted = DateTime.Now;
+                warmPopupRestarts++;
+                Log("warm popup host started, pid " + warmPopupHost.Id);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("failed to start warm popup host: " + ex.GetType().Name);
+                return false;
+            }
+        }
+
+        private void CloseWarmPopupHost()
+        {
+            try { if (warmPopupPipe != null) { warmPopupPipe.Dispose(); warmPopupPipe = null; } } catch { }
+            try
+            {
+                if (warmPopupHost != null && !warmPopupHost.HasExited)
+                {
+                    warmPopupHost.Kill();
+                    warmPopupHost.WaitForExit(500);
+                }
+            }
+            catch { }
+            try { if (warmPopupHost != null) warmPopupHost.Dispose(); } catch { }
+            warmPopupHost = null;
+        }
+
         private void LaunchTextPopup(string title,uint expectedSequence)
         {
             if (!CalendarEnabled()) return;
+            if (EnsureWarmPopupHost())
+            {
+                try
+                {
+                    var req = new ClipwarpPopupHost.PopupRequest();
+                    req.RequestId = System.Threading.Interlocked.Increment(ref popupRequestId);
+                    req.Text = title;
+                    req.ExpectedSequence = expectedSequence;
+                    req.HasPointer = hasEventPointer;
+                    if (hasEventPointer)
+                    {
+                        req.PointerX = eventPointer.X;
+                        req.PointerY = eventPointer.Y;
+                    }
+                    byte[] payload = req.Serialize();
+                    warmPopupPipe.Write(payload, 0, payload.Length);
+                    warmPopupPipe.Flush();
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Log("warm popup send failed (" + ex.GetType().Name + "), falling back to cold start");
+                    CloseWarmPopupHost();
+                }
+            }
+
             CloseOwnedPopup();
             CleanupTitleFiles();
             var psi = new System.Diagnostics.ProcessStartInfo();
@@ -1018,6 +1105,7 @@ namespace ClipwarpWatch
             try { if (child != null && !child.HasExited) { child.Kill(); child.WaitForExit(1000); } } catch { }
             try { if (child != null) child.Dispose(); } catch { }
             child = null;
+            CloseWarmPopupHost();
             CloseOwnedPopup();
             ClearPayloadCache();
         }
@@ -1056,10 +1144,10 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
     $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
     $references += @([AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator)
     $references += [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object Location | ForEach-Object Location
-    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-image.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-policy.cs'))) -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
+    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-image.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-policy.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-popup-host.cs'))) -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
 }
 else {
-    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-image.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-policy.cs'))) -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
+    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-image.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-policy.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-popup-host.cs'))) -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
 }
 
 $watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $configPath, $logFile)
