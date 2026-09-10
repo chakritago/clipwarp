@@ -118,24 +118,12 @@ current local date. Showing the prompt and using Calendar do not change the clip
 
 The text popup keeps Run with PowerShell and Calendar side by side, with a separate
 **Open ChatGPT & Send (Temporary)** button below. Clicking it copies the exact
-full original text to the clipboard and opens only
-`https://chatgpt.com/?temporary-chat=true` in your default browser, then automatically
-fills the composer and submits the message. No manual paste or send is required.
-Windows UI Automation targets a visible ChatGPT browser document with that exact
-URL and identifiable composer/send controls; it never sends global keystrokes.
-It polls for about 20 seconds for the page and 5 seconds for Send to become enabled
-(accessibility calls may take longer). Login screens, ambiguous pages, existing
-drafts, unavailable controls, or text that cannot be preserved exactly cause a
-visible error without submission. Browsers must expose the document URL and a
-writable composer through UI Automation; unsupported accessibility implementations
-fail closed. After invoking Send once, Clipwarp polls for up to about 5 seconds to
-re-find the same page and controls and observe an empty composer. If clearing
-cannot be confirmed or the page changes, it reports that submission could not be
-confirmed; the message may already have been sent. Check ChatGPT before trying
-again. Clipwarp never retries Send automatically. Message text and local paths
-are never included in the URL or logs.
+full original text to the clipboard and opens
+`https://chatgpt.com/?temporary-chat=true` in your default browser, waits for the ChatGPT
+window to appear, pastes the message into the chat composer, and sends it automatically
+by pressing Enter. No manual paste or send is required.
+Message text and local paths are never leaked into the URL.
 This action is available only for text and only runs when clicked.
-Live browser submission has not been E2E verified.
 
 For an image, Google Calendar's template URL cannot upload or attach a local file.
 clipwarp therefore opens the event editor with a sensible image title and today's

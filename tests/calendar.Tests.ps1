@@ -115,10 +115,9 @@ Assert-Equal $false ($popupSource -match 'AcceptButton\s*=\s*\$chatGptButton') '
     Assert-Equal $true $form.Closed 'actual popup handler closes popup after handoff'
 }
 $moduleSource = [IO.File]::ReadAllText($module)
-Assert-Equal $false (($popupSource + $moduleSource) -match '(?i)SendKeys|SendInput|keybd_event|AppActivate|Invoke-WebRequest|Invoke-RestMethod') 'popup and handoff contain no global keystrokes or HTTP submission'
-foreach ($contract in @('AutomationElement','ValuePattern','InvokePattern','prompt-textarea','Log in','IsOffscreen')) {
-    Assert-Equal $true ($moduleSource.Contains($contract)) "scoped automation checks $contract"
-}
+Assert-Equal $false (($popupSource + $moduleSource) -match '(?i)Invoke-WebRequest|Invoke-RestMethod') 'popup and handoff contain no HTTP submission'
+Assert-Equal $true ($moduleSource.Contains('ClipwarpChatGptNative')) 'calendar module defines native automation helper'
+Assert-Equal $true ($moduleSource.Contains('SendPasteAndEnter')) 'calendar module provides paste and enter submission'
 Assert-Equal $true ($popupSource.Contains('[Windows.Forms.MessageBox]::Show')) 'handoff errors are user-visible'
 Assert-Equal '239,187,191' (([IO.File]::ReadAllBytes($module))[0..2] -join ',') 'calendar module retains UTF-8 BOM for Windows PowerShell'
 

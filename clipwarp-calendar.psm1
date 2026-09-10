@@ -386,6 +386,35 @@ function Set-ClipwarpClipboardText {
     Invoke-ClipwarpStaClipboardWrite -Value $Value
 }
 
+if (-not ([System.Management.Automation.PSTypeName]'ClipwarpChatGptNative').Type) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ClipwarpChatGptNative {
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+    public static void SendPasteAndEnter() {
+        keybd_event(0x11, 0, 0, UIntPtr.Zero);
+        keybd_event(0x56, 0, 0, UIntPtr.Zero);
+        keybd_event(0x56, 0, 2, UIntPtr.Zero);
+        keybd_event(0x11, 0, 2, UIntPtr.Zero);
+
+        System.Threading.Thread.Sleep(300);
+
+        keybd_event(0x0D, 0, 0, UIntPtr.Zero);
+        keybd_event(0x0D, 0, 2, UIntPtr.Zero);
+    }
+
+    public static void ActivateWindow(IntPtr hWnd) {
+        ShowWindow(hWnd, 9);
+        SetForegroundWindow(hWnd);
+    }
+}
+'@
+}
+
 function New-ClipwarpChatGptUrl {
     [CmdletBinding()]
     param(
@@ -396,120 +425,63 @@ function New-ClipwarpChatGptUrl {
 }
 
 function Find-ClipwarpChatGptPage {
-    param([string]$Url,
-        [scriptblock]$WindowFinder = { [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) },
-        [scriptblock]$ProcessFinder = { param($id) Get-Process -Id $id -ErrorAction Stop })
-    Add-Type -AssemblyName UIAutomationClient
-    Add-Type -AssemblyName UIAutomationTypes
-    $scope = [Windows.Automation.TreeScope]::Descendants
-    $all = [Windows.Automation.Condition]::TrueCondition
-    $matchingDocuments = @()
-    $windows = & $WindowFinder
-    foreach ($window in $windows) {
-        try {
-            $process = & $ProcessFinder $window.Current.ProcessId
-            if ($process.ProcessName -notmatch '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$' -or
-                $window.Current.Name -notmatch '(?i)ChatGPT' -or $window.Current.IsOffscreen) { continue }
-            $documents = $window.FindAll($scope, [Windows.Automation.PropertyCondition]::new(
-                [Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Document))
-            foreach ($document in $documents) {
-                $pattern = $null
-                if (-not $document.Current.IsOffscreen -and
-                    $document.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern) -and
-                    ($null -ne $pattern.Current.Value -and $null -ne $Url -and [string]::Equals($pattern.Current.Value, $Url, [StringComparison]::Ordinal))) { $matchingDocuments += $document }
-            }
-        } catch [Windows.Automation.ElementNotAvailableException] { continue }
-    }
-    if ($matchingDocuments.Count -gt 1) { throw 'Multiple temporary ChatGPT pages are open. Close the extra pages and try again.' }
-    if ($matchingDocuments.Count -eq 1) { return $matchingDocuments[0] }
-}
-
-function Get-ClipwarpChatGptControls {
-    param($Page)
-    $elements = $Page.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
-    $composers = @()
-    $buttons = @()
-    foreach ($element in $elements) {
-        if ($element.Current.IsOffscreen) { continue }
-        if ($element.Current.Name -match '^(?i:Log in|Login|Sign in|Sign up)$') {
-            throw 'ChatGPT shows a login screen. Sign in, then try again.'
+    param(
+        [string]$Url,
+        [scriptblock]$ProcessFinder = {
+            Get-Process -ErrorAction SilentlyContinue
         }
-        if ($element.Current.AutomationId -ceq 'prompt-textarea' -and $element.Current.IsEnabled) { $composers += $element }
-        if ($element.Current.ControlType -eq [Windows.Automation.ControlType]::Button -and
-            ($element.Current.AutomationId -ceq 'composer-submit-button' -or $element.Current.Name -cmatch '^(Send prompt|Send message|Send)$')) { $buttons += $element }
+    )
+    $processes = @(& $ProcessFinder)
+    foreach ($p in $processes) {
+        if ($null -ne $p -and
+            $p.ProcessName -match '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$' -and
+            $p.MainWindowTitle -match '(?i)ChatGPT' -and
+            $null -ne $p.MainWindowHandle -and
+            $p.MainWindowHandle -ne [IntPtr]::Zero -and
+            $p.MainWindowHandle -ne 0) {
+            return $p
+        }
     }
-    if ($composers.Count -ne 1 -or $buttons.Count -ne 1) { return }
-    $value = $null
-    $invoke = $null
-    if (-not $composers[0].TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$value) -or
-        $value.Current.IsReadOnly -or
-        -not $buttons[0].TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) { return }
-    [pscustomobject]@{ Composer=$composers[0]; Value=$value; Button=$buttons[0]; Invoke=$invoke }
+    return $null
 }
 
 function Wait-ClipwarpChatGptPage {
-    param([string]$Url, [scriptblock]$PageFinder = { param($u) Find-ClipwarpChatGptPage $u },
-        [scriptblock]$ControlFinder = { param($p) Get-ClipwarpChatGptControls $p },
-        [scriptblock]$Delay = { Start-Sleep -Milliseconds 250 }, [int]$Attempts = 80)
+    param(
+        [string]$Url,
+        [scriptblock]$PageFinder = { param($u) Find-ClipwarpChatGptPage $u },
+        [scriptblock]$Delay = { Start-Sleep -Milliseconds 250 },
+        [int]$Attempts = 80
+    )
     for ($attempt = 0; $attempt -lt $Attempts; $attempt++) {
         $page = & $PageFinder $Url
-        if ($null -ne $page) {
-            $controls = & $ControlFinder $page
-            if ($null -ne $controls) { return $page }
-        }
+        if ($null -ne $page) { return $page }
         & $Delay
     }
-    throw 'ChatGPT is not ready, or its composer/send control cannot be identified. Sign in and try again.'
+    throw 'ChatGPT is not ready or the browser window was not found.'
 }
 
 function Send-ClipwarpChatGptMessage {
-    param($Page, [string]$Message,
-        [scriptblock]$PageFinder = { Find-ClipwarpChatGptPage (New-ClipwarpChatGptUrl) },
-        [scriptblock]$ControlFinder = { param($p) Get-ClipwarpChatGptControls $p },
-        [scriptblock]$PageComparer = { param($a,$b) [Windows.Automation.Automation]::Compare($a,$b) },
-        [scriptblock]$Delay = { Start-Sleep -Milliseconds 250 },
-        [ValidateRange(1, 120)][int]$VerificationAttempts = 20)
-    $current = & $PageFinder
-    if ($null -eq $current -or -not (& $PageComparer $Page $current)) {
-        throw 'The temporary ChatGPT page changed. Nothing was sent.'
-    }
-    $controls = & $ControlFinder $current
-    if ($null -eq $controls -or $null -eq $controls.Value.Current.Value -or -not [string]::Equals($controls.Value.Current.Value, '', [StringComparison]::Ordinal)) {
-        throw 'ChatGPT needs an empty, identifiable composer and send control. Nothing was sent.'
-    }
-    # Scoped paste equivalent: write the original string without foreground keystrokes.
-    $controls.Value.SetValue($Message)
-    for ($attempt = 0; $attempt -lt 20; $attempt++) {
-        $current = & $PageFinder
-        if ($null -eq $current -or -not (& $PageComparer $Page $current)) {
-            throw 'The temporary ChatGPT page changed. Nothing was sent.'
+    param(
+        $Page,
+        [string]$Message,
+        [scriptblock]$WindowActivator = $null,
+        [scriptblock]$KeySender = $null,
+        [scriptblock]$Delay = { Start-Sleep -Milliseconds 300 }
+    )
+    if ($WindowActivator) {
+        & $WindowActivator $Page
+    } else {
+        if ($null -ne $Page -and $null -ne $Page.MainWindowHandle -and $Page.MainWindowHandle -ne [IntPtr]::Zero -and $Page.MainWindowHandle -ne 0) {
+            [ClipwarpChatGptNative]::ActivateWindow([IntPtr]$Page.MainWindowHandle)
         }
-        $ready = & $ControlFinder $current
-        if ($null -eq $ready -or $null -eq $ready.Value.Current.Value -or -not [string]::Equals($ready.Value.Current.Value, $Message, [StringComparison]::Ordinal)) {
-            throw 'ChatGPT could not preserve the full message in its composer. Nothing was sent.'
-        }
-        if ($ready.Button.Current.IsEnabled) {
-            # Invoke only once. A failed observation must never trigger a second send.
-            try {
-                $ready.Invoke.Invoke()
-                for ($verification = 0; $verification -lt $VerificationAttempts; $verification++) {
-                    & $Delay
-                    $submittedPage = & $PageFinder
-                    if ($null -eq $submittedPage -or -not (& $PageComparer $Page $submittedPage)) {
-                        throw 'The temporary ChatGPT page changed after Send was invoked.'
-                    }
-                    $submittedControls = & $ControlFinder $submittedPage
-                    if ($null -ne $submittedControls -and $null -ne $submittedControls.Value.Current.Value -and
-                        [string]::Equals($submittedControls.Value.Current.Value, '', [StringComparison]::Ordinal)) { return }
-                }
-                throw 'The composer was not observed to clear within the verification period.'
-            } catch {
-                throw "Clipwarp could not confirm submission after invoking Send. The message may have been sent; check ChatGPT before trying again. $($_.Exception.Message)"
-            }
-        }
-        & $Delay
     }
-    throw 'ChatGPT send control is not ready. Nothing was sent.'
+    & $Delay
+
+    if ($KeySender) {
+        & $KeySender $Message
+    } else {
+        [ClipwarpChatGptNative]::SendPasteAndEnter()
+    }
 }
 
 function Start-ClipwarpChatGptHandoff {
@@ -538,8 +510,14 @@ function Start-ClipwarpChatGptHandoff {
         $browser.UseShellExecute = $true
         [Diagnostics.Process]::Start($browser) | Out-Null
     }
+
     $page = & $PageWaiter $url
     if ($null -eq $page) { throw 'ChatGPT is not ready. Nothing was sent.' }
+
+    if (-not $BrowserStarter) {
+        Start-Sleep -Milliseconds 1500
+    }
+
     & $Submitter $page $Message
 }
 

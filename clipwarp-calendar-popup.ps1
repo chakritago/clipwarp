@@ -240,11 +240,12 @@ if ($Kind -eq 'Text') {
     $handoffHint.AccessibleName = $handoffHint.Text
     $form.Controls.Add($handoffHint)
     $chatGptButton.Add_Click({
+        if ($form.PSObject.Methods['Hide']) { $form.Hide() }
         try {
             Start-ClipwarpChatGptHandoff -Message $Title
             $form.Close()
         } catch {
-            [void][Windows.Forms.MessageBox]::Show('ChatGPT automatic send failed. Check that a single temporary ChatGPT page is open, signed in, and ready with an empty composer. Its accessible composer and send controls must be available. Clipwarp could not confirm submission. The message may already have been sent; check ChatGPT before trying again.', 'Clipwarp - ChatGPT', [Windows.Forms.MessageBoxButtons]::OK, [Windows.Forms.MessageBoxIcon]::Error)
+            [void][Windows.Forms.MessageBox]::Show("ChatGPT automatic send failed. $($_.Exception.Message)", 'Clipwarp - ChatGPT', [Windows.Forms.MessageBoxButtons]::OK, [Windows.Forms.MessageBoxIcon]::Error)
         }
     })
 
