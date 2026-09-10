@@ -58,7 +58,11 @@ namespace ClipwarpTransport {
             return formats;
         }
         public static uint Publish(IDataObject data, uint expected) {
-            var formats = Prepare(data, RegisterClipboardFormat);
+            return PublishPrepared(Prepare(data, RegisterClipboardFormat), expected, null);
+        }
+        public static Dictionary<uint, byte[]> PrepareNative(IDataObject data) { return Prepare(data, RegisterClipboardFormat); }
+        // The predicate must be side-effect free; it is checked while the native clipboard lock is held.
+        public static uint PublishPrepared(Dictionary<uint, byte[]> formats, uint expected, Func<bool> targetIsCurrent) {
             if (formats.Count == 0) throw new InvalidOperationException("Empty publication");
             var memory = new Dictionary<uint, IntPtr>();
             try {
@@ -79,6 +83,7 @@ namespace ClipwarpTransport {
                     if (!OpenClipboard(owner.Handle)) throw new InvalidOperationException("Clipboard busy");
                     try {
                         if (!SequenceMatches(expected,GetClipboardSequenceNumber())) throw new InvalidOperationException("clipboard-changed");
+                        if (targetIsCurrent != null && !targetIsCurrent()) throw new InvalidOperationException("target-changed");
                         if (!EmptyClipboard()) throw new InvalidOperationException("EmptyClipboard failed");
                         foreach (uint format in new List<uint>(memory.Keys)) {
                             if (SetClipboardData(format,memory[format]) == IntPtr.Zero) throw new InvalidOperationException("SetClipboardData failed");

@@ -9,13 +9,14 @@ param(
     [string]$ImagePathBase64,
     [Nullable[int]]$PointerX,
     [Nullable[int]]$PointerY,
-    [int]$TimeoutSeconds = 3
+    [ValidateRange(1,300)][int]$TimeoutSeconds = 3,
+    [uint32]$ExpectedSequence = 0
 )
 
+Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
 if ($TitleFileBase64) { $TitleFile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($TitleFileBase64)) }
 if ($TitleFile) {
-    try { $Title = [IO.File]::ReadAllText($TitleFile, [Text.Encoding]::UTF8) }
-    finally { Remove-Item -LiteralPath $TitleFile -Force -ErrorAction SilentlyContinue }
+    $Title = Read-ClipwarpOwnedTitleFile -Path $TitleFile
 } elseif ($TitleBase64) { $Title = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($TitleBase64)) }
 if ($ImagePathBase64) { $ImagePath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ImagePathBase64)) }
 if ([string]::IsNullOrWhiteSpace($Title)) { exit 1 }
@@ -53,6 +54,13 @@ public static class ClipwarpPopupNative {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+$config = Get-ClipwarpConfigStatus
+if ($config.Paused) { exit 0 }
+$calendarEnabled = $config.CalendarEnabled
+$chatGptEnabled = $config.ChatGptEnabled
+$runCommandEnabled = $config.RunCommandEnabled
+if (-not $PSBoundParameters.ContainsKey('TimeoutSeconds')) { $TimeoutSeconds = $config.PopupDurationSeconds }
+if (-not $calendarEnabled -and ($Kind -eq 'Image' -or (-not $chatGptEnabled -and -not $runCommandEnabled))) { exit 0 }
 $duration = Get-ClipwarpCalendarDefaultDuration
 $event = if ($Kind -eq 'Text') { ConvertFrom-ClipwarpCalendarText -Text $Title -LocalDate (Get-Date) -DefaultDurationMinutes $duration } else { [pscustomobject]@{ Title=$Title; IsTimed=$false; LocalDate=(Get-Date).Date.AddDays(1); Location=$null } }
 $calendarTitle = $event.Title
@@ -63,7 +71,8 @@ $details = if ($Kind -eq 'Image') {
     $Title
 } else { $null }
 $zone = Get-ClipwarpCalendarTimeZone
-$url = if ($event.IsTimed) { New-ClipwarpCalendarUrl -Title $calendarTitle -Start $event.Start -End $event.End -Details $details -TimeZone $zone -Location $event.Location } else { New-ClipwarpCalendarUrl -Title $calendarTitle -LocalDate $event.LocalDate -Details $details -Location $event.Location }
+$calendarWarnings = @()
+$url = if ($event.IsTimed) { New-ClipwarpCalendarUrl -Title $calendarTitle -Start $event.Start -End $event.End -Details $details -TimeZone $zone -Location $event.Location -WarningVariable +calendarWarnings } else { New-ClipwarpCalendarUrl -Title $calendarTitle -LocalDate $event.LocalDate -Details $details -Location $event.Location -WarningVariable +calendarWarnings }
 $isCommand = if ($Kind -eq 'Text') { Test-ClipwarpCommandLine -Text $Title } else { $false }
 $commandText = if ($Kind -eq 'Text') { Get-ClipwarpCommandText -Text $Title } else { $null }
 $preview = if ($isCommand) {
@@ -90,7 +99,17 @@ if ($Kind -eq 'Text') {
 }
 $location = Get-ClipwarpPopupLocation -PointerX $pointer.X -PointerY $pointer.Y -PopupWidth $metrics.Width -PopupHeight $metrics.Height -WorkingLeft $area.Left -WorkingTop $area.Top -WorkingRight $area.Right -WorkingBottom $area.Bottom -Gap $metrics.Gap
 
-$form = New-Object Windows.Forms.Form
+$passiveReferences = @([Windows.Forms.Form].Assembly.Location)
+if ($PSVersionTable.PSEdition -eq 'Core') { $passiveReferences += @('System.Runtime','System.ComponentModel.Primitives') }
+Add-Type -TypeDefinition @'
+public class ClipwarpPassiveForm : System.Windows.Forms.Form {
+    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override System.Windows.Forms.CreateParams CreateParams {
+        get { var value = base.CreateParams; value.ExStyle |= 0x00000080; return value; }
+    }
+}
+'@ -ReferencedAssemblies $passiveReferences
+$form = New-Object ClipwarpPassiveForm
 $form.Text = if ($isCommand) { 'Run in PowerShell' } else { 'Send to Google Calendar' }
 $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
 $form.StartPosition = [Windows.Forms.FormStartPosition]::Manual
@@ -226,9 +245,9 @@ if ($Kind -eq 'Text') {
     $chatGptButton.BackColor = [Drawing.Color]::FromArgb(241, 245, 249)
     $chatGptButton.ForeColor = [Drawing.Color]::FromArgb(30, 41, 59)
     $chatGptButton.Cursor = [Windows.Forms.Cursors]::Hand
-    $chatGptButton.Text = 'Open ChatGPT && Send (Temporary)'
-    $chatGptButton.AccessibleName = 'Open ChatGPT & Send (Temporary)'
-    $chatGptButton.AccessibleDescription = 'Copies the full text, then automatically pastes and sends it in the temporary chat.'
+    $chatGptButton.Text = 'Open ChatGPT (paste && send yourself)'
+    $chatGptButton.AccessibleName = 'Open temporary ChatGPT; paste and send manually'
+    $chatGptButton.AccessibleDescription = 'Copies only if the clipboard still matches this snapshot, then opens a temporary chat. Paste and send yourself.'
     $chatGptButton.TabIndex = 2
     $close.TabIndex = 3
     $form.Controls.Add($chatGptButton)
@@ -236,29 +255,44 @@ if ($Kind -eq 'Text') {
     $handoffHint = New-Object Windows.Forms.Label
     $handoffHint.Location = New-Object Drawing.Point $metrics.Padding, ($chatGptButton.Bottom + [int][Math]::Round(4 * $scale))
     $handoffHint.Size = New-Object Drawing.Size $contentWidth, ([int][Math]::Round(20 * $scale))
-    $handoffHint.Text = 'Automatically pastes full text and sends it in ChatGPT.'
+    $handoffHint.Text = 'Manual handoff. Nothing is sent automatically.'
     $handoffHint.AccessibleName = $handoffHint.Text
     $form.Controls.Add($handoffHint)
     $chatGptButton.Add_Click({
         try { if ($null -ne $timer) { $timer.Stop() } } catch { }
         if ($form.PSObject.Methods['Hide']) { $form.Hide() }
         try {
-            Start-ClipwarpChatGptHandoff -Message $Title
+            $result = Start-ClipwarpChatGptHandoff -Message $Title -ExpectedSequence $ExpectedSequence
+            $statusText = if ($result.Status -eq 'manual-required') { 'Copied and opened temporary ChatGPT. Paste and send yourself. Nothing was sent.' } elseif ($result.Status -eq 'cancelled') { 'Cancelled: the clipboard changed or its snapshot could not be verified. Copy again and retry.' } else { 'Handoff failed. Copied: ' + $result.Copied + '; opened: ' + $result.Opened + '. Nothing was sent.' }
+            [void][Windows.Forms.MessageBox]::Show($statusText, 'Clipwarp - ChatGPT')
             $form.Close()
         } catch {
-            [void][Windows.Forms.MessageBox]::Show("ChatGPT automatic send failed. $($_.Exception.Message)", 'Clipwarp - ChatGPT', [Windows.Forms.MessageBoxButtons]::OK, [Windows.Forms.MessageBoxIcon]::Error)
+            [void][Windows.Forms.MessageBox]::Show('ChatGPT manual handoff failed. Nothing was sent.', 'Clipwarp - ChatGPT', [Windows.Forms.MessageBoxButtons]::OK, [Windows.Forms.MessageBoxIcon]::Error)
             $form.Close()
         }
     })
 
-    # MouseClick excludes Enter, Space, and form-default PerformClick activation.
-    $runButton.Add_MouseClick({
-        if ($_.Button -ne [Windows.Forms.MouseButtons]::Left) { return }
-        Start-ClipwarpCommand -CommandText $commandText
-        $form.Close()
+    $runButton.Visible = $runCommandEnabled
+    $calButton.Visible = $calendarEnabled
+    $chatGptButton.Visible = $chatGptEnabled
+    $handoffHint.Visible = $chatGptEnabled
+    $calButton.Enabled = -not $event.NeedsReview
+    if ($event.NeedsReview) { $calButton.Text = 'Date needs review' }
+    $runButton.Text = 'Review PowerShell script...'
+    $runButton.AccessibleName = 'Review full script before running'
+    $runButton.Add_Click({
+        $timer.Stop()
+        try {
+            if (Confirm-ClipwarpCommand -CommandText $commandText -WorkingDirectory $env:USERPROFILE -Owner $form) {
+                Start-ClipwarpCommand -CommandText $commandText -ReviewedSnapshot -WorkingDirectory $env:USERPROFILE
+                $form.Close()
+            }
+        } catch { [void][Windows.Forms.MessageBox]::Show('Command could not be launched.', 'Clipwarp') }
+        finally { if (-not $form.IsDisposed) { $timer.Start() } }
     })
 
     $calButton.Add_Click({
+        if ($calendarWarnings.Count) { [void][Windows.Forms.MessageBox]::Show(($calendarWarnings -join "`r`n"), 'Calendar URL fields omitted') }
         $browser = New-Object Diagnostics.ProcessStartInfo
         $browser.FileName = $calendarUri.AbsoluteUri
         $browser.UseShellExecute = $true
@@ -294,7 +328,7 @@ if ($Kind -eq 'Text') {
 }
 # Enter must never activate the focused Run button, including command popups.
 $form.Add_KeyDown({
-    if ($Kind -eq 'Text' -and $_.KeyCode -eq [Windows.Forms.Keys]::Enter -and ($isCommand -or $runButton.Focused)) {
+    if ($Kind -eq 'Text' -and $_.KeyCode -eq [Windows.Forms.Keys]::Enter -and $isCommand -and -not $runButton.Focused) {
         $_.Handled = $true
         $_.SuppressKeyPress = $true
     }
@@ -310,6 +344,8 @@ $form.Add_Paint({
 $timer = New-Object Windows.Forms.Timer
 $timer.Interval = 1000
 $timer.Add_Tick({
+    $hovering = $form.Bounds.Contains([Windows.Forms.Cursor]::Position)
+    if ($hovering -or $form.ContainsFocus) { return }
     $script:remainingSeconds--
     if ($script:remainingSeconds -le 0) {
         $timer.Stop()
@@ -318,15 +354,8 @@ $timer.Add_Tick({
         $countdown.Text = "${script:remainingSeconds}s"
     }
 })
-$form.Add_Shown({
-    if ($Kind -eq 'Text') {
-        $calButton.Focus()
-    } else {
-        $button.Focus()
-    }
-    $timer.Start()
-})
-[void]$form.ShowDialog()
+$form.Add_Shown({ $timer.Start() })
+[Windows.Forms.Application]::Run($form)
 $timer.Dispose()
 $form.Dispose()
 try { $popupMutex.ReleaseMutex() } finally { $popupMutex.Dispose() }

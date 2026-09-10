@@ -19,6 +19,9 @@ function Get-HereStringValue([string]$Path, [string]$Contains) {
 
 $watchSource = Get-HereStringValue (Join-Path $root 'clipwarp-watch.ps1') 'namespace ClipwarpWatch'
 $watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-clipboard.cs'))
+$watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-image.cs'))
+$watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-policy.cs'))
+Add-Type -AssemblyName System.Drawing
 if ($PSVersionTable.PSEdition -eq 'Core') {
     # Prefer compilation contracts over runtime facades (notably System.Collections).
     $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
@@ -34,9 +37,10 @@ Write-Host 'PASS: compiled popup C#'
 
 $clipSource = Get-HereStringValue (Join-Path $root 'clipwarp.ps1') 'public static extern uint GetClipboardSequenceNumber'
 Add-Type -Namespace ('ClipwarpCompat' + [guid]::NewGuid().ToString('N')) -Name Clip -MemberDefinition $clipSource
-$dibSource = Get-HereStringValue (Join-Path $root 'clipwarp.ps1') 'public static byte[] DecodeMasked'
-Add-Type -Namespace ('ClipwarpCompat' + [guid]::NewGuid().ToString('N')) -Name Dib -MemberDefinition $dibSource
-Write-Host 'PASS: compiled conversion helper C#'
+if (-not ('ClipwarpImages.ImageHelper' -as [type])) { throw 'Shared image decoder was not compiled with watcher' }
+$converterSource = [IO.File]::ReadAllText((Join-Path $root 'clipwarp.ps1'))
+if ($converterSource -notmatch 'ClipwarpImages.ImageHelper') { throw 'Converter must reuse the shared bounded decoder' }
+Write-Host 'PASS: compiled shared conversion helper C#'
 # Exercise embedded helpers without constructing a watcher or opening the clipboard.
 function Assert-True([bool]$Value, [string]$Name) {
     if (-not $Value) { throw $Name }

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 Import-Module (Join-Path $root 'clipwarp-support.psm1') -Force
 
@@ -14,7 +14,8 @@ try {
     $config = Join-Path $temp 'clipwarp.json'
     Assert-Equal $true (Get-ClipwarpCalendarEnabled -ConfigPath $config) 'missing config preserves enabled default'
     [IO.File]::WriteAllText($config, '{broken', [Text.Encoding]::UTF8)
-    Assert-Equal $true (Get-ClipwarpCalendarEnabled -ConfigPath $config) 'corrupt config safely preserves enabled default'
+    Assert-Equal $false (Get-ClipwarpCalendarEnabled -ConfigPath $config) 'corrupt config fails closed'
+    Remove-Item -LiteralPath $config -Force
     [void](Set-ClipwarpCalendarEnabled -Enabled $false -ConfigPath $config)
     Assert-Equal $false (Get-ClipwarpCalendarEnabled -ConfigPath $config) 'calendar can be disabled persistently'
     [void](Set-ClipwarpCalendarEnabled -Enabled $true -ConfigPath $config)

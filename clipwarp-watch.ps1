@@ -34,6 +34,9 @@ param(
 )
 
 $scriptsDir = Join-Path $env:USERPROFILE '.claude\scripts'
+if ((Split-Path $PSScriptRoot -Leaf) -match '^v-[a-f0-9]{32}$' -and (Split-Path (Split-Path $PSScriptRoot -Parent) -Leaf) -eq 'versions') { $scriptsDir = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
+$watchLaunchPath = $PSCommandPath
+if ([IO.File]::Exists((Join-Path $scriptsDir 'active-version.json'))) { $watchLaunchPath = Join-Path $scriptsDir 'clipwarp-watch.ps1' }
 $pidFile    = Join-Path $scriptsDir 'clipwarp-watch.pid'
 $logFile    = Join-Path $scriptsDir 'clipwarp-watch.log'
 $clipwarpPath  = Join-Path $PSScriptRoot 'clipwarp.ps1'
@@ -67,6 +70,14 @@ function Get-WatchState {
     $targetPaths = @($PSCommandPath)
     $installedWatch = Join-Path $scriptsDir 'clipwarp-watch.ps1'
     if ($targetPaths -notcontains $installedWatch) { $targetPaths += $installedWatch }
+    $versionsRoot = Join-Path $scriptsDir 'versions'
+    if (Test-Path -LiteralPath $versionsRoot -PathType Container) {
+        foreach ($versionDir in Get-ChildItem -LiteralPath $versionsRoot -Directory -ErrorAction SilentlyContinue) {
+            if ($versionDir.Name -match '^v-[a-f0-9]{32}$' -and -not ($versionDir.Attributes -band [IO.FileAttributes]::ReparsePoint) -and [IO.File]::Exists((Join-Path $versionDir.FullName 'installed-manifest.json'))) {
+                $targetPaths += Join-Path $versionDir.FullName 'clipwarp-watch.ps1'
+            }
+        }
+    }
     $escaped = ($targetPaths | ForEach-Object { [regex]::Escape($_) }) -join '|'
     $fileRe = '-File\s+"?(' + $escaped + ')"?(\s|$)'
     if (($cmd -match $fileRe) -and ($cmd -match '(^|\s)-Daemon(\s|$)')) { return @{ State = 'watcher'; Pid = $watchPid } }
@@ -78,7 +89,7 @@ if ($Autostart) {
         $sh = New-Object -ComObject WScript.Shell
         $s  = $sh.CreateShortcut($startupLnk)
         $s.TargetPath  = 'powershell.exe'
-        $s.Arguments   = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`" -Daemon"
+        $s.Arguments   = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchLaunchPath`" -Daemon"
         $s.WindowStyle = 7                                   # minimized/hidden
         $s.Description  = 'clipwarp clipboard-image watcher for Claude Code'
         $s.Save()
@@ -113,8 +124,26 @@ if ($Stop) {
     $st = Get-WatchState
     switch ($st.State) {
         'watcher' {
-            try { Stop-Process -Id $st.Pid -Force -ErrorAction Stop }
-            catch { Write-Host "clipwarp watch: failed to stop pid $($st.Pid) - $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
+            $owned = Get-Process -Id $st.Pid -ErrorAction Stop
+            $startTicks = $owned.StartTime.ToUniversalTime().Ticks
+            $stopEvent = $null
+            try {
+                $eventName = 'Local\Clipwarp-watch-stop-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+                $stopEvent = [Threading.EventWaitHandle]::OpenExisting($eventName)
+                $null = $stopEvent.Set()
+            } catch { } finally { if ($stopEvent) { $stopEvent.Dispose() } }
+            if (-not $owned.WaitForExit(8000)) {
+                # Fallback only after timeout and a fresh command-line AND start-time identity check.
+                $again = Get-WatchState
+                $live = Get-Process -Id $st.Pid -ErrorAction SilentlyContinue
+                if ($again.State -ne 'watcher' -or $again.Pid -ne $st.Pid -or -not $live -or $live.StartTime.ToUniversalTime().Ticks -ne $startTicks) {
+                    Write-Host 'clipwarp watch: identity changed while stopping; refusing force stop' -ForegroundColor Yellow
+                    exit 1
+                }
+                try { $owned.Kill(); $null = $owned.WaitForExit(2000) }
+                catch { Write-Host "clipwarp watch: failed to stop pid $($st.Pid) - $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
+            }
+            $owned.Dispose()
             Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
             Write-Host "clipwarp watch: stopped (pid $($st.Pid))" -ForegroundColor Green
             exit 0
@@ -141,7 +170,7 @@ if (-not $Daemon) {
         Write-Host "clipwarp watch: a shell at pid $($st.Pid) could not be verified; not starting a second watcher. Run 'clipwarp stop' or end it manually first." -ForegroundColor Yellow
         exit 1
     }
-    $daemonCmd = "powershell.exe -NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`" -Daemon"
+    $daemonCmd = "powershell.exe -NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchLaunchPath`" -Daemon"
     $spawned = $false
     try {
         $wmi = [wmiclass]'Win32_Process'
@@ -151,7 +180,7 @@ if (-not $Daemon) {
     if (-not $spawned) {
         Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
             '-NoProfile', '-Sta', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass',
-            '-File', "`"$($MyInvocation.MyCommand.Path)`"", '-Daemon'
+            '-File', "`"$watchLaunchPath`"", '-Daemon'
         ) | Out-Null
     }
     $started = $false
@@ -172,7 +201,8 @@ if (-not $Daemon) {
 
 # ---------------- daemon mode ----------------
 
-$mutex = New-Object System.Threading.Mutex($false, 'clipwarp-watch-singleton')
+$userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$mutex = New-Object System.Threading.Mutex($false, ('Local\clipwarp-watch-singleton-' + $userSid))
 if (-not $mutex.WaitOne(0)) { exit 1 }   # another daemon already owns the clipboard watch
 
 New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null
@@ -190,6 +220,59 @@ using System.Windows.Forms;
 
 namespace ClipwarpWatch
 {
+    // At most one pending foreground and clipboard snapshot. No unbounded work queue.
+    public sealed class CoalescingStaWorker : IDisposable
+    {
+        private readonly object gate = new object();
+        private readonly System.Threading.AutoResetEvent wake = new System.Threading.AutoResetEvent(false);
+        private readonly System.Threading.Thread thread;
+        private Action foreground, clipboard;
+        private DateTime due = DateTime.MaxValue;
+        private bool stopping;
+        public int Interval { get; set; }
+        public event EventHandler Tick;
+        public Action Cleanup;
+        public CoalescingStaWorker() {
+            thread = new System.Threading.Thread(Run);
+            thread.IsBackground = true;
+            thread.Name = "ClipWarp image STA";
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.Start();
+        }
+        public bool IsStopping { get { lock(gate) return stopping; } }
+        public void EnqueueForeground(Action action) { lock(gate) { if(stopping) return; foreground=action; wake.Set(); } }
+        public void EnqueueClipboard(Action action) { lock(gate) { if(stopping) return; clipboard=action; wake.Set(); } }
+        public void Start() { lock(gate) { if(stopping) return; due=DateTime.UtcNow.AddMilliseconds(Interval); wake.Set(); } }
+        public void Stop() { lock(gate) due=DateTime.MaxValue; }
+        private void Run() {
+            try {
+                while(true) {
+                    Action fg=null, clip=null; bool tick=false; int wait=System.Threading.Timeout.Infinite;
+                    lock(gate) {
+                        if(stopping) break;
+                        fg=foreground; foreground=null; clip=clipboard; clipboard=null;
+                        if(due != DateTime.MaxValue) {
+                            double remaining=(due-DateTime.UtcNow).TotalMilliseconds;
+                            if(remaining<=0) { tick=true; due=DateTime.MaxValue; }
+                            else wait=(int)Math.Min(int.MaxValue,Math.Max(1,remaining));
+                        }
+                    }
+                    if(fg!=null) fg();
+                    if(IsStopping) break;
+                    if(clip!=null) clip();
+                    if(IsStopping) break;
+                    if(tick && Tick!=null) Tick(this,EventArgs.Empty);
+                    if(fg==null && clip==null && !tick) wake.WaitOne(wait);
+                }
+            } finally { if(Cleanup!=null) Cleanup(); }
+        }
+        public bool Shutdown(int timeout) {
+            lock(gate) { stopping=true; foreground=null; clipboard=null; due=DateTime.MaxValue; wake.Set(); }
+            return thread.Join(timeout);
+        }
+        public void Dispose() { if(Shutdown(3000)) wake.Dispose(); }
+    }
+
     public class OverlayTargetTracker
     {
         public const int MaxRetentionSeconds = 12;
@@ -309,11 +392,6 @@ namespace ClipwarpWatch
         private const int WM_CLIPBOARDUPDATE = 0x031D;
         private static readonly Regex ImgExt = new Regex(@"\.(png|jpe?g|gif|webp|bmp)$", RegexOptions.IgnoreCase);
         private static readonly Regex HtmlFileUri = new Regex(@"file:///[^""'\s>]+\.(png|jpe?g|gif|webp|bmp)", RegexOptions.IgnoreCase);
-        private static readonly Regex BrowserProcRegex = new Regex(@"^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|waterfox|floorp|librewolf|thorium|chromium)$", RegexOptions.IgnoreCase);
-        private static readonly Regex TerminalProcRegex = new Regex(@"^(windowsterminal|powershell|pwsh|cmd|conhost|mintty|bash|alacritty|wezterm|hyper|tabby)$", RegexOptions.IgnoreCase);
-        private static readonly Regex IdeProcRegex = new Regex(@"^(code|cursor|windsurf|idea|idea64|pycharm|pycharm64|webstorm|webstorm64|phpstorm|phpstorm64|rider|rider64|clion|clion64|goland|goland64|rubymine|rubymine64|rustrover|rustrover64|datagrip|datagrip64|studio64|fleet)$", RegexOptions.IgnoreCase);
-        private static readonly Regex IntegratedTermTitleRegex = new Regex(@"(^|[\s\-_–—|•·●:\[(])(terminal|claude|powershell|pwsh|cmd(\.exe)?|bash|zsh|wsl)([\s\-_–—|•·●:)\]]|$)", RegexOptions.IgnoreCase);
-        private static readonly Regex FileDialogTitleRegex = new Regex(@"(^|[\s\-_–—|•·:\[(])(open|save|save\s*as|select(\s*a)?\s*file|choose(\s*a)?\s*file|upload(\s*a)?\s*file|file\s*upload|browse|select\s*folder|choose\s*folder|all\s*files|öffnen|speichern|speichern\s*unter|datei(en)?\s*auswählen|ouvrir|enregistrer|enregistrer\s*sous|sélectionner\s*un\s*fichier|choisir\s*un\s*fichier|abrir|guardar|guardar\s*como|seleccionar\s*archivo|elegir\s*archivo|apri|salva|salva\s*con\s*nome|seleziona\s*file|salvar|salvar\s*como|открыть|сохранить|сохранить\s*как|выбор\s*файла|выбрать\s*файл|開く|保存|名前を付けて保存|ファイルの選択|ファイルを開く|ファイルの保存|打开|另存为|选择文件|上传文件|瀏覽|開啟|儲存|另存新檔|選擇檔案|上傳檔案|열기|저장|다른\s*이름으로\s*저장|파일\s*선택|파일\s*열기|เปิด|บันทึก|บันทึกเป็น|เลือกไฟล์|เลือกโฟลเดอร์|อัปโหลด)([\s\-_–—|•·:)\]]|$)", RegexOptions.IgnoreCase);
         private static readonly Regex OverlayProcRegex = new Regex(@"^(SnippingTool|ScreenClippingHost|ShellExperienceHost|Lightshot|ShareX|clipwarp)$", RegexOptions.IgnoreCase);
 
         public static bool IsOverlayProcess(string proc)
@@ -326,7 +404,20 @@ namespace ClipwarpWatch
         private readonly string logPath;
         private readonly string popupPath;
         private readonly string configPath;
-        private readonly Timer debounce;
+        private readonly CoalescingStaWorker debounce;
+        private long targetGeneration;
+        private long activeTargetGeneration;
+        private volatile bool stopping;
+        private readonly System.Threading.EventWaitHandle shutdownEvent;
+        private readonly System.Threading.RegisteredWaitHandle shutdownWait;
+        private ClipwarpImages.ImagePayload cachedImage;
+        private string cachedImagePath;
+        private System.Collections.Generic.Dictionary<uint, byte[]> cachedDual, cachedImageOnly;
+        [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
+        private const int WM_STOP = 0x8001;
+        public static string UserEventName {
+            get { return "Local\\Clipwarp-watch-stop-" + System.Security.Principal.WindowsIdentity.GetCurrent().User.Value; }
+        }
         private readonly WinEventProc winEventProc;
         private IntPtr winEventHook = IntPtr.Zero;
         private string lastManagedImagePath = null;
@@ -374,7 +465,12 @@ namespace ClipwarpWatch
                 throw new InvalidOperationException("AddClipboardFormatListener failed with Win32 error " + Marshal.GetLastWin32Error());
             winEventProc = new WinEventProc(OnWinEvent);
             winEventHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, winEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
-            debounce = new Timer();
+            debounce = new CoalescingStaWorker();
+            debounce.Cleanup = CleanupWorker;
+            shutdownEvent = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.ManualReset, UserEventName);
+            shutdownEvent.Reset();
+            shutdownWait = System.Threading.ThreadPool.RegisterWaitForSingleObject(shutdownEvent,
+                delegate(object state, bool timedOut) { PostMessage(this.Handle, WM_STOP, IntPtr.Zero, IntPtr.Zero); }, null, -1, true);
             debounce.Interval = EventDelayMs;      // coalesce format bursts without delaying the popup noticeably
             debounce.Tick += OnTick;
             CaptureForeground();
@@ -383,19 +479,19 @@ namespace ClipwarpWatch
 
         protected override void WndProc(ref Message m)
         {
-            if (m.Msg == WM_CLIPBOARDUPDATE)
+            if (m.Msg == WM_STOP) { Shutdown(); Application.ExitThread(); return; }
+            if (!stopping && m.Msg == WM_CLIPBOARDUPDATE)
             {
-                // A genuinely new clipboard change: give it a full, fresh retry
-                // budget (don't inherit a previous burst's exhausted counter).
-                busyRetries = 0;
-                convFails = 0;
                 POINT captured;
-                hasEventPointer = GetCursorPos(out captured);
-                if (hasEventPointer) eventPointer = captured;
+                bool hasPointer = GetCursorPos(out captured);
                 CaptureForeground();
-                debounce.Interval = EventDelayMs;
-                debounce.Stop();
-                debounce.Start();
+                debounce.EnqueueClipboard(delegate {
+                    busyRetries = 0; convFails = 0;
+                    hasEventPointer = hasPointer;
+                    if (hasPointer) eventPointer = captured;
+                    debounce.Interval = EventDelayMs;
+                    debounce.Stop(); debounce.Start();
+                });
             }
             base.WndProc(ref m);
         }
@@ -404,22 +500,36 @@ namespace ClipwarpWatch
         {
             debounce.Stop();
             try { Inspect(); }
-            catch (Exception ex) { Log("error: " + ex.Message); convFails++; if (convFails < 3) { debounce.Interval = 500; debounce.Start(); } }  // bounded retry, then wait for a new copy
+            catch (Exception ex) { Log("error: " + ex.GetType().Name); convFails++; if (convFails < 3) { debounce.Interval = 500; debounce.Start(); } }  // bounded retry, then wait for a new copy
         }
 
         private void OnWinEvent(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
         {
             if (eventType == EVENT_SYSTEM_FOREGROUND && hwnd != IntPtr.Zero)
             {
-                CaptureForegroundFromHwnd(hwnd);
-                OnForegroundWindowChanged();
+                QueueForeground(hwnd);
             }
         }
 
         private void CaptureForeground()
         {
             IntPtr hwnd = GetForegroundWindow();
-            if (hwnd != IntPtr.Zero) CaptureForegroundFromHwnd(hwnd);
+            if (hwnd != IntPtr.Zero) QueueForeground(hwnd);
+        }
+
+        private void QueueForeground(IntPtr hwnd)
+        {
+            if (stopping) return;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            long generation = System.Threading.Interlocked.Increment(ref targetGeneration);
+            debounce.EnqueueForeground(delegate {
+                if (generation != System.Threading.Interlocked.Read(ref targetGeneration)) return;
+                activeTargetGeneration = generation;
+                CaptureForegroundFromHwnd(hwnd);
+                try { OnForegroundWindowChanged(); }
+                catch (Exception ex) { Log("foreground error: " + ex.GetType().Name); }
+                Log("foreground queue+work ms=" + clock.ElapsedMilliseconds);
+            });
         }
 
         private void CaptureForegroundFromHwnd(IntPtr hwnd)
@@ -430,7 +540,7 @@ namespace ClipwarpWatch
                 uint pid;
                 GetWindowThreadProcessId(hwnd, out pid);
                 string pName = "";
-                try { pName = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch { }
+                try { using (var process = System.Diagnostics.Process.GetProcessById((int)pid)) pName = process.ProcessName; } catch { }
                 StringBuilder sbCls = new StringBuilder(256);
                 GetClassName(hwnd, sbCls, sbCls.Capacity);
                 string cls = sbCls.ToString();
@@ -447,88 +557,43 @@ namespace ClipwarpWatch
             catch { }
         }
 
-        private bool IsPaused()
-        {
-            try { return File.Exists(configPath) && Regex.IsMatch(File.ReadAllText(configPath), @"""paused""\s*:\s*true", RegexOptions.IgnoreCase); }
-            catch { return true; }
+        public sealed class ValidatedSettings {
+            public bool Paused;
+            public bool CalendarEnabled = true;
+            public string TargetMode = "auto";
+            public ClipwarpImages.ImageLimits ImageLimits = new ClipwarpImages.ImageLimits();
         }
-
-        private string ConfiguredTargetMode()
-        {
-            try
-            {
-                if (!File.Exists(configPath)) return "auto";
-                string json = File.ReadAllText(configPath, Encoding.UTF8);
-                Match m = Regex.Match(json, "\\\"targetMode\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"", RegexOptions.IgnoreCase);
-                if (m.Success) return m.Groups[1].Value.Trim().ToLowerInvariant();
-            }
-            catch { }
-            return "auto";
+        // Pure C# provider: worker threads must not invoke PowerShell scriptblock delegates.
+        public static Func<string, ValidatedSettings> SettingsProvider = LoadSharedSettings;
+        private static ValidatedSettings LoadSharedSettings(string path) {
+            var config = ClipwarpPolicy.ConfigStore.Read(path);
+            var limits = new ClipwarpImages.ImageLimits();
+            limits.MaxSourceBytes = Convert.ToInt64(ClipwarpPolicy.ConfigStore.Get(config.Data,"imageLimits.maxSourceBytes",limits.MaxSourceBytes));
+            limits.MaxDimension = Convert.ToInt32(ClipwarpPolicy.ConfigStore.Get(config.Data,"imageLimits.maxDimension",limits.MaxDimension));
+            limits.MaxWidth = Convert.ToInt32(ClipwarpPolicy.ConfigStore.Get(config.Data,"imageLimits.maxWidth",limits.MaxWidth));
+            limits.MaxHeight = Convert.ToInt32(ClipwarpPolicy.ConfigStore.Get(config.Data,"imageLimits.maxHeight",limits.MaxHeight));
+            limits.MaxPixels = Convert.ToInt64(ClipwarpPolicy.ConfigStore.Get(config.Data,"imageLimits.maxPixels",limits.MaxPixels));
+            limits.MaxDecodedBytes = Convert.ToInt64(ClipwarpPolicy.ConfigStore.Get(config.Data,"imageLimits.maxDecodedBytes",limits.MaxDecodedBytes));
+            limits.Validate();
+            return new ValidatedSettings { Paused=config.Paused, CalendarEnabled=config.ActionsEnabled, TargetMode=config.TargetMode, ImageLimits=limits };
         }
-
-        private bool IsFilePickerForeground()
-        {
-            try
-            {
-                string proc = foregroundProcess ?? "";
-                if (proc.Equals("PickerHost", StringComparison.OrdinalIgnoreCase)) return true;
-
-                IntPtr hwnd = currentForegroundHwnd;
-                string cls = foregroundClass ?? "";
-                string title = foregroundTitle ?? "";
-
-                bool isBrowser = proc.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase) || BrowserProcRegex.IsMatch(proc);
-                bool isIde = IdeProcRegex.IsMatch(proc);
-
-                if (cls.Equals("#32770", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (string.IsNullOrEmpty(title) || FileDialogTitleRegex.IsMatch(title)) return true;
-
-                    if (hwnd != IntPtr.Zero)
-                    {
-                        bool hasShellControls = false;
-                        EnumChildWindows(hwnd, (child, lParam) =>
-                        {
-                            StringBuilder sb = new StringBuilder(128);
-                            GetClassName(child, sb, sb.Capacity);
-                            string c = sb.ToString();
-                            if (c.Equals("SHELLDLL_DefView", StringComparison.OrdinalIgnoreCase) ||
-                                c.Equals("Address Band Root", StringComparison.OrdinalIgnoreCase) ||
-                                c.Equals("NamespaceTreeControl", StringComparison.OrdinalIgnoreCase))
-                            {
-                                hasShellControls = true;
-                                return false;
-                            }
-                            return true;
-                        }, IntPtr.Zero);
-
-                        if (hasShellControls) return true;
+        private ValidatedSettings ReadSettings() {
+            try {
+                if (SettingsProvider != null) {
+                    var settings = SettingsProvider(configPath);
+                    if (settings == null) throw new InvalidDataException("Unavailable settings");
+                    settings.ImageLimits.Validate();
+                    switch(settings.TargetMode) {
+                        case "auto": case "text": case "claude": case "dual": case "chatgpt": case "image-only": case "web": return settings;
+                        default: throw new InvalidDataException("Invalid target mode");
                     }
                 }
-
-                if (!isBrowser && !isIde && !string.IsNullOrEmpty(title) && FileDialogTitleRegex.IsMatch(title))
-                {
-                    return true;
-                }
-            }
-            catch { }
-            return false;
+                if (!File.Exists(configPath)) return new ValidatedSettings();
+            } catch { }
+            Log("configuration unavailable or invalid: automatic work paused");
+            return new ValidatedSettings { Paused = true, CalendarEnabled = false };
         }
-
-        private bool IsTerminalForeground()
-        {
-            string proc = foregroundProcess ?? "";
-            string title = foregroundTitle ?? "";
-            if (string.IsNullOrEmpty(proc) && string.IsNullOrEmpty(title)) return false;
-            if (proc.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase) || BrowserProcRegex.IsMatch(proc)) return false;
-            if (TerminalProcRegex.IsMatch(proc)) return true;
-            if (IdeProcRegex.IsMatch(proc))
-            {
-                return !string.IsNullOrEmpty(title) && IntegratedTermTitleRegex.IsMatch(title);
-            }
-            if (!string.IsNullOrEmpty(title) && IntegratedTermTitleRegex.IsMatch(title)) return true;
-            return false;
-        }
+        private bool IsPaused() { return ReadSettings().Paused; }
 
         private bool IsManagedClipboardActive() { return VerifyClipboardSafety(lastManagedImagePath); }
 
@@ -593,8 +658,15 @@ namespace ClipwarpWatch
 
             if (string.IsNullOrEmpty(lastManagedImagePath) || !File.Exists(lastManagedImagePath)) return;
 
-            string targetMode = ConfiguredTargetMode();
-            if (targetMode.Equals("text", StringComparison.OrdinalIgnoreCase)) return;
+            var snapshot = ClipwarpPolicy.ConfigStore.Read(configPath);
+            var captured = ClipwarpPolicy.TargetPolicy.CaptureForeground();
+            string targetMode = ClipwarpPolicy.TargetPolicy.Explain(snapshot,"auto",false,false,
+                foregroundProcess,foregroundTitle,foregroundClass,
+                captured.ProcessName == foregroundProcess && captured.HasFilePickerControls).Mode;
+            if (targetMode.Equals("text", StringComparison.OrdinalIgnoreCase)) {
+                if (currentPayloadMode != "text") PublishCached(lastManagedImagePath,"text");
+                return;
+            }
 
             if (!IsManagedClipboardActive()) return;
 
@@ -609,104 +681,88 @@ namespace ClipwarpWatch
                 return;
             }
 
-            // Auto mode per user rule:
-            // Paste as file path if:
-            // 1. File picker in Windows
-            // 2. Terminal / Claude Code (WindowsTerminal, powershell, pwsh, cmd)
-            // Paste as image:
-            // - Everything else
-            bool isFilePicker = IsFilePickerForeground();
-            bool isTerm = IsTerminalForeground();
-
-            if (isFilePicker || isTerm)
-            {
-                if (currentPayloadMode != "dual")
-                {
-                    SetClipboardDual(lastManagedImagePath);
-                }
-            }
-            else
-            {
-                if (currentPayloadMode != "image-only")
-                {
-                    SetClipboardImageOnly(lastManagedImagePath);
-                }
-            }
+            // Shared TargetPolicy already normalized auto/global/process rules above.
         }
 
-        private void SetClipboardImageOnly(string path)
+        private void ClearPayloadCache()
         {
-            for (int retry = 0; retry < 5; retry++)
-            {
-                if (!VerifyClipboardSafety(path)) return;
-
-                try
-                {
-                    if (!File.Exists(path)) return;
-                    byte[] bytes = File.ReadAllBytes(path);
-                    DataObject doObj = new DataObject();
-                    doObj.SetData("ClipwarpManaged", path);
-                    doObj.SetData("PNG", false, new MemoryStream(bytes));
-                    using (MemoryStream ms = new MemoryStream(bytes))
-                    {
-                        using (var bmp = new System.Drawing.Bitmap(ms))
-                        {
-                            doObj.SetImage(bmp);
-
-                            if (!VerifyClipboardSafety(path)) return;
-
-                            lastManagedSequence = ClipwarpTransport.ClipboardWriter.Publish(doObj, lastManagedSequence);
-                        }
-                    }
-                    currentPayloadMode = "image-only";
-                    lastHandledSequence = lastManagedSequence;
-                    Log("switched clipboard to image-only (paste as image)");
-                    return;
-                }
-                catch { Sleep(50); }
-            }
+            if (cachedImage != null) cachedImage.Dispose();
+            cachedImage = null; cachedImagePath = null; cachedDual = null; cachedImageOnly = null;
         }
 
-        private void SetClipboardDual(string path)
+        private void PreparePayloadCache(string path)
         {
-            for (int retry = 0; retry < 5; retry++)
-            {
-                if (!VerifyClipboardSafety(path)) return;
-
-                try
-                {
-                    if (!File.Exists(path)) return;
-                    byte[] bytes = File.ReadAllBytes(path);
-                    DataObject doObj = new DataObject();
-                    doObj.SetData(DataFormats.UnicodeText, path);
-                    doObj.SetData("ClipwarpManaged", path);
-                    doObj.SetData("PNG", false, new MemoryStream(bytes));
-                    using (MemoryStream ms = new MemoryStream(bytes))
-                    {
-                        using (var bmp = new System.Drawing.Bitmap(ms))
-                        {
-                            doObj.SetImage(bmp);
-                            var sc = new System.Collections.Specialized.StringCollection();
-                            sc.Add(path);
-                            doObj.SetFileDropList(sc);
-
-                            if (!VerifyClipboardSafety(path)) return;
-
-                            lastManagedSequence = ClipwarpTransport.ClipboardWriter.Publish(doObj, lastManagedSequence);
-                        }
-                    }
-                    currentPayloadMode = "dual";
-                    lastHandledSequence = lastManagedSequence;
-                    Log("switched clipboard to dual (file picker / terminal target)");
-                    return;
+            if (cachedImagePath == path && cachedImage != null) return;
+            ClearPayloadCache();
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var payload = ClipwarpImages.ImageHelper.FromFile(path, CurrentImageLimits());
+            try {
+                using (var bitmap = payload.CreateBitmap())
+                using (var png = new MemoryStream(payload.GetPngBytes(), false)) {
+                    var data = new DataObject();
+                    data.SetData("ClipwarpManaged", path);
+                    data.SetData("PNG", false, png);
+                    data.SetImage(bitmap);
+                    cachedImageOnly = ClipwarpTransport.ClipboardWriter.PrepareNative(data);
+                    data.SetData(DataFormats.UnicodeText, path);
+                    data.SetData(DataFormats.FileDrop, new string[] { path });
+                    // Image formats are immutable and shared between the two cache views.
+                    cachedDual = new System.Collections.Generic.Dictionary<uint, byte[]>(cachedImageOnly);
+                    var fileData = new DataObject();
+                    fileData.SetData(DataFormats.UnicodeText, path);
+                    fileData.SetData(DataFormats.FileDrop, new string[] { path });
+                    foreach (var item in ClipwarpTransport.ClipboardWriter.PrepareNative(fileData)) cachedDual[item.Key] = item.Value;
                 }
-                catch { Sleep(50); }
+                cachedImage = payload; cachedImagePath = path;
+                Log("image preparation ms=" + clock.ElapsedMilliseconds + " bytes=" + payload.ByteLength);
+            } catch { payload.Dispose(); ClearPayloadCache(); throw; }
+        }
+
+        // Integration point for the shared validated JSON config helper. The provider
+        // runs on the STA worker and must be a C# delegate (not a PowerShell scriptblock).
+        public static Func<string, ClipwarpImages.ImageLimits> ImageLimitsProvider;
+        private ClipwarpImages.ImageLimits CurrentImageLimits() {
+            var limits = ImageLimitsProvider == null ? ReadSettings().ImageLimits : ImageLimitsProvider(configPath);
+            if (limits == null) throw new InvalidDataException("Image configuration is unavailable");
+            limits.Validate();
+            return limits;
+        }
+        private void SetClipboardImageOnly(string path) { PublishCached(path, "image-only"); }
+        private void SetClipboardDual(string path) { PublishCached(path, "dual"); }
+        private void PublishCached(string path, string mode)
+        {
+            long generation = activeTargetGeneration;
+            if (stopping || !VerifyClipboardSafety(path)) return;
+            PreparePayloadCache(path);
+            var formats = mode == "dual" ? cachedDual : cachedImageOnly;
+            if (mode == "text") {
+                var textData = new DataObject();
+                textData.SetData(DataFormats.UnicodeText,path);
+                textData.SetData("ClipwarpManaged",path);
+                formats = ClipwarpTransport.ClipboardWriter.PrepareNative(textData);
+            }
+            for (int retry = 0; retry < 5 && !stopping && !debounce.IsStopping; retry++) {
+                if (generation != System.Threading.Interlocked.Read(ref targetGeneration) || !VerifyClipboardSafety(path)) return;
+                try {
+                    lastManagedSequence = ClipwarpTransport.ClipboardWriter.PublishPrepared(
+                        formats, lastManagedSequence,
+                        delegate { return !stopping && generation == System.Threading.Interlocked.Read(ref targetGeneration); });
+                    currentPayloadMode = mode;
+                    lastHandledSequence = lastManagedSequence;
+                    Log("switched clipboard mode=" + mode);
+                    return;
+                } catch (InvalidOperationException ex) {
+                    if (ex.Message == "clipboard-changed" || ex.Message == "target-changed") return;
+                    System.Threading.Thread.Sleep(50);
+                }
             }
         }
 
         private void Inspect()
         {
+            if (stopping || debounce.IsStopping) return;
             uint sequence = GetClipboardSequenceNumber();
+            if (lastManagedSequence != 0 && sequence != lastManagedSequence) ClearPayloadCache();
             // The same clipboard notification is ignored only when no conversion
             // child needs watchdog/reaping work.
             if (child == null && sequence != 0 && sequence == lastHandledSequence) return;
@@ -771,6 +827,7 @@ namespace ClipwarpWatch
             string txt = null;
             try { if (Clipboard.ContainsText()) txt = Clipboard.GetText(); }
             catch { Rearm(); return; }                         // clipboard busy -> retry soon, don't drop it
+            if (sequence != GetClipboardSequenceNumber()) { Rearm(); return; }
             if (!string.IsNullOrEmpty(txt))
             {
                 string p = txt.Trim().Trim('"');
@@ -788,7 +845,7 @@ namespace ClipwarpWatch
                 {
                     if (meaningful == lastTextFingerprint && (DateTime.Now - lastTextAt).TotalSeconds < 2)
                     { lastHandledSequence = sequence; return; }
-                    LaunchTextPopup(txt);
+                    LaunchTextPopup(txt,sequence);
                     lastTextFingerprint = meaningful;
                     lastTextAt = DateTime.Now;
                     lastHandledSequence = sequence;
@@ -844,14 +901,14 @@ namespace ClipwarpWatch
             }
 
             if (string.IsNullOrEmpty(proc) && string.IsNullOrEmpty(title)) return "";
-            string safeProc = (proc ?? "").Replace("\"", "").Replace("'", "").Replace(";", "").Replace("$", "");
-            string safeTitle = (title ?? "").Replace("\"", "").Replace("'", "").Replace(";", "").Replace("$", "").Replace("`", "");
-            string safeCls = (cls ?? "").Replace("\"", "").Replace("'", "").Replace(";", "").Replace("$", "");
-            if (safeTitle.Length > 100) safeTitle = safeTitle.Substring(0, 100);
-            return " -ForegroundProcess \"" + safeProc + "\" -ForegroundTitle \"" + safeTitle + "\" -ForegroundClass \"" + safeCls + "\"";
+            var captured = ClipwarpPolicy.TargetPolicy.CaptureForeground();
+            var decision = ClipwarpPolicy.TargetPolicy.Explain(ClipwarpPolicy.ConfigStore.Read(configPath),"auto",false,true,
+                proc,title,cls,captured.ProcessName == proc && captured.HasFilePickerControls);
+            // Only the resolved enum crosses the process boundary, never a sensitive caption.
+            return " -TargetMode " + decision.Mode;
         }
 
-        private void LaunchTextPopup(string title)
+        private void LaunchTextPopup(string title,uint expectedSequence)
         {
             if (!CalendarEnabled()) return;
             CloseOwnedPopup();
@@ -864,13 +921,32 @@ namespace ClipwarpWatch
             {
                 titleFile = Path.Combine(Path.GetDirectoryName(configPath), "clipwarp-title-" + Guid.NewGuid().ToString("N") + ".txt");
                 Directory.CreateDirectory(Path.GetDirectoryName(configPath));
-                File.WriteAllText(titleFile, title);
-                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleFile \"" + titleFile + "\"" + PointerArguments();
+                var ancestor = new DirectoryInfo(Path.GetDirectoryName(configPath));
+                while (ancestor != null) {
+                    if ((ancestor.Attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("Refusing redirected transport directory");
+                    ancestor = ancestor.Parent;
+                }
+                var security = new System.Security.AccessControl.FileSecurity();
+                security.SetAccessRuleProtection(true,false);
+                security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                    System.Security.Principal.WindowsIdentity.GetCurrent().User,
+                    System.Security.AccessControl.FileSystemRights.FullControl,
+                    System.Security.AccessControl.AccessControlType.Allow));
+                using (var transport = new FileStream(titleFile,FileMode.CreateNew,FileAccess.Write,FileShare.None)) {
+                    var method = typeof(FileStream).GetMethod("SetAccessControl",new Type[]{typeof(System.Security.AccessControl.FileSecurity)});
+                    if (method != null) method.Invoke(transport,new object[]{security});
+                    else {
+                        var extensions = Type.GetType("System.IO.FileSystemAclExtensions, System.IO.FileSystem.AccessControl",true);
+                        extensions.GetMethod("SetAccessControl",new Type[]{typeof(FileStream),typeof(System.Security.AccessControl.FileSecurity)}).Invoke(null,new object[]{transport,security});
+                    }
+                    transport.Write(titleBytes,0,titleBytes.Length);
+                }
+                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleFile \"" + titleFile + "\" -ExpectedSequence " + expectedSequence + PointerArguments();
             }
             else
             {
                 string encoded = Convert.ToBase64String(titleBytes);
-                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleBase64 " + encoded + PointerArguments();
+                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleBase64 " + encoded + " -ExpectedSequence " + expectedSequence + PointerArguments();
             }
             psi.CreateNoWindow = true;
             psi.UseShellExecute = false;
@@ -890,26 +966,21 @@ namespace ClipwarpWatch
             try {
                 string dir = Path.GetDirectoryName(configPath); if (!Directory.Exists(dir)) return;
                 int examined = 0, removed = 0;
-                foreach (string path in Directory.GetFiles(dir, "clipwarp-title-*.txt")) {
+                var ancestor = new DirectoryInfo(dir);
+                while (ancestor != null) {
+                    if ((ancestor.Attributes & FileAttributes.ReparsePoint) != 0) return;
+                    ancestor = ancestor.Parent;
+                }
+                foreach (string path in Directory.EnumerateFiles(dir, "clipwarp-title-*.txt")) {
                     if (++examined > 100) break;
                     string name = Path.GetFileName(path);
-                    if (Regex.IsMatch(name, "^clipwarp-title-[0-9a-f]{32}\\.txt$") && File.GetLastWriteTimeUtc(path) < DateTime.UtcNow.AddDays(-1)) { try { File.Delete(path); removed++; } catch { } }
+                    if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0 && Regex.IsMatch(name, "^clipwarp-title-[0-9a-f]{32}\\.txt$") && File.GetLastWriteTimeUtc(path) < DateTime.UtcNow.AddDays(-1)) { try { File.Delete(path); removed++; } catch { } }
                 }
                 if (removed > 0) Log("removed " + removed + " orphaned calendar title file(s)");
             } catch { }
         }
 
-        private bool CalendarEnabled()
-        {
-            try
-            {
-                if (!File.Exists(configPath)) return true;
-                string json = File.ReadAllText(configPath, Encoding.UTF8);
-                Match m = Regex.Match(json, "\\\"calendar\\\"\\s*:\\s*\\{[^}]*\\\"enabled\\\"\\s*:\\s*(true|false)", RegexOptions.IgnoreCase);
-                return !m.Success || !string.Equals(m.Groups[1].Value, "false", StringComparison.OrdinalIgnoreCase);
-            }
-            catch { return true; }
-        }
+        private bool CalendarEnabled() { return ReadSettings().CalendarEnabled; }
 
         // Tri-state: 1 = an image payload is present, 0 = none, -1 = clipboard
         // was busy (couldn't tell) so the caller should retry rather than drop.
@@ -940,15 +1011,31 @@ namespace ClipwarpWatch
             return 0;
         }
 
+        private void CleanupWorker()
+        {
+            // Only the unconfirmed conversion process is cancelled. Popup descendants executing
+            // an explicitly confirmed command are not killed (no process-tree termination).
+            try { if (child != null && !child.HasExited) { child.Kill(); child.WaitForExit(1000); } } catch { }
+            try { if (child != null) child.Dispose(); } catch { }
+            child = null;
+            CloseOwnedPopup();
+            ClearPayloadCache();
+        }
+
         public void Shutdown()
         {
+            if (stopping) return;
+            stopping = true;
+            System.Threading.Interlocked.Increment(ref targetGeneration);
             try { RemoveClipboardFormatListener(this.Handle); } catch { }
-            if (winEventHook != IntPtr.Zero)
-            {
+            if (winEventHook != IntPtr.Zero) {
                 try { UnhookWinEvent(winEventHook); } catch { }
                 winEventHook = IntPtr.Zero;
             }
-            CloseOwnedPopup();
+            shutdownWait.Unregister(null);
+            debounce.Dispose();
+            shutdownEvent.Dispose();
+            DestroyHandle();
             Log("watch stopped");
         }
 
@@ -969,10 +1056,10 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
     $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
     $references += @([AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator)
     $references += [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object Location | ForEach-Object Location
-    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs'))) -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
+    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-image.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-policy.cs'))) -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
 }
 else {
-    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs'))) -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
+    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-image.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-policy.cs'))) -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
 }
 
 $watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $configPath, $logFile)

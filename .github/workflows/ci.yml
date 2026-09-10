@@ -1,0 +1,35 @@
+name: Windows tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: WindowsPowerShell
+            shell: powershell
+          - engine: Pwsh
+            shell: pwsh
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runner regression fixtures (no desktop access)
+        run: ./tests/integration/runner-fixtures.ps1 -Engine ${{ matrix.engine }}
+      - name: Isolated unit suites
+        run: ./tests/run-all.ps1 -Engine ${{ matrix.engine }} -SuiteTimeoutSeconds 180 -ResultsPath ./test-results/${{ matrix.engine }}.json
+      - name: Upload machine-readable suite results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.engine }}
+          path: test-results/*.json
+          if-no-files-found: warn

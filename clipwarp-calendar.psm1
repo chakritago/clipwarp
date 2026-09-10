@@ -53,6 +53,25 @@ function Get-ClipwarpCalendarTimeZone {
     if ($map.ContainsKey($TimeZoneId)) { $map[$TimeZoneId] } else { $null }
 }
 
+function Get-ClipwarpBoundedUrlValue {
+    param([AllowNull()][string]$Value, [int]$Budget)
+    if (-not $Value -or $Budget -le 0) { return '' }
+    # Bound input BEFORE Framework EscapeDataString; binary search avoids quadratic work.
+    $low=0; $high=[Math]::Min($Value.Length,$Budget); $best=''
+    while ($low -le $high) {
+        $middle=[int][Math]::Floor(($low+$high)/2.0); $cut=$middle
+        if ($cut -gt 0 -and $cut -lt $Value.Length -and [char]::IsHighSurrogate($Value[$cut-1]) -and [char]::IsLowSurrogate($Value[$cut])) { $cut-- }
+        $encoded=[Uri]::EscapeDataString($Value.Substring(0,$cut))
+        if ($encoded.Length -le $Budget) { $best=$encoded; $low=$middle+1 } else { $high=$middle-1 }
+    }
+    $best
+}
+
+function New-ClipwarpReviewEvent {
+    param([string]$Text, [datetime]$LocalDate, [string]$Location)
+    [pscustomobject]@{ Title=$Text.Trim(); OriginalText=$Text; IsTimed=$false; Start=$null; End=$null; LocalDate=$LocalDate.Date; Location=$Location; NeedsReview=$true; Status='needs-review' }
+}
+
 function New-ClipwarpCalendarUrl {
     [CmdletBinding()]
     param(
@@ -73,23 +92,29 @@ function New-ClipwarpCalendarUrl {
         $startText = $LocalDate.Date.ToString('yyyyMMdd', [Globalization.CultureInfo]::InvariantCulture)
         $endText = $LocalDate.Date.AddDays(1).ToString('yyyyMMdd', [Globalization.CultureInfo]::InvariantCulture)
     }
-    $payload = Format-ClipwarpCalendarPayload -Title $Title -Details $Details -UrlOverhead 170
-    $baseUrl = "https://calendar.google.com/calendar/render?action=TEMPLATE&text=$([Uri]::EscapeDataString($payload.Title))&dates=$startText%2F$endText"
-    if (-not [string]::IsNullOrWhiteSpace($Location)) {
-        $baseUrl += '&location=' + [Uri]::EscapeDataString($Location.Trim())
-    }
+    $payload = Format-ClipwarpCalendarPayload -Title $Title -Details $Details
+    $prefix = 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='
+    $dates = "&dates=$startText%2F$endText"
     $suffix = ''
     if ($PSBoundParameters.ContainsKey('Start') -and $TimeZone) {
         $ctz = Get-ClipwarpCalendarTimeZone -TimeZoneId $TimeZone
-        if ($ctz) { $suffix = '&ctz=' + [Uri]::EscapeDataString($ctz) }
+        if ($ctz -and $ctz.Length -le 128) { $suffix = '&ctz=' + [Uri]::EscapeDataString($ctz) }
+        elseif ($ctz) { Write-Warning 'Timezone omitted from browser URL; retain full event for review/ICS.' }
     }
-    $safeDetails = $payload.Details
-    while ($safeDetails -and ($baseUrl.Length + 9 + [Uri]::EscapeDataString($safeDetails).Length + $suffix.Length) -gt 1900) {
-        $remove = 1
-        if ($safeDetails.Length -gt 1 -and [char]::IsLowSurrogate($safeDetails[$safeDetails.Length - 1]) -and [char]::IsHighSurrogate($safeDetails[$safeDetails.Length - 2])) { $remove = 2 }
-        $safeDetails = $safeDetails.Substring(0,$safeDetails.Length-$remove).TrimEnd()
+    $baseUrl = $prefix + (Get-ClipwarpBoundedUrlValue -Value $payload.Title -Budget (1900 - $prefix.Length - $dates.Length - $suffix.Length)) + $dates
+    if (-not [string]::IsNullOrWhiteSpace($Location)) {
+        $loc = $Location.Trim()
+        $budget = 1900 - $baseUrl.Length - $suffix.Length - 10
+        # Never truncate a meeting URL into a different or broken link.
+        if ($loc.Length -le $budget -and ([Uri]::EscapeDataString($loc)).Length -le $budget) {
+            $baseUrl += '&location=' + [Uri]::EscapeDataString($loc)
+        } else { Write-Warning 'Location omitted from browser URL because it exceeds the budget. Full location remains available for review/ICS.' }
     }
-    $baseUrl + $(if($safeDetails){'&details='+[Uri]::EscapeDataString($safeDetails)}else{''}) + $suffix
+    if ($payload.Details) {
+        $encodedDetails = Get-ClipwarpBoundedUrlValue -Value $payload.Details -Budget ([Math]::Max(0,1900 - $baseUrl.Length - $suffix.Length - 9))
+        if ($encodedDetails) { $baseUrl += '&details=' + $encodedDetails }
+    }
+    $baseUrl + $suffix
 }
 
 function ConvertFrom-ClipwarpCalendarText {
@@ -121,10 +146,12 @@ function ConvertFrom-ClipwarpCalendarText {
 
     # 2b. ISO Date: YYYY-MM-DD
     if (-not $hasExplicitDate) {
-        $isoMatch = [regex]::Match($work, '(?<!\d)(?<year>\d{4})-(?<month>0[1-9]|1[0-2])-(?<day>0[1-9]|[12]\d|3[01])(?!\d)')
+        $isoMatch = [regex]::Match($work, '(?<!\d)(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})(?!\d)')
         if ($isoMatch.Success) {
+            $candidate = [datetime]::MinValue
+            if (-not [datetime]::TryParseExact($isoMatch.Value, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$candidate)) { return New-ClipwarpReviewEvent -Text $Text -LocalDate $LocalDate -Location $location }
             $hasExplicitDate = $true
-            $parsedDate = [datetime]::new([int]$isoMatch.Groups['year'].Value, [int]$isoMatch.Groups['month'].Value, [int]$isoMatch.Groups['day'].Value, 0, 0, 0, [DateTimeKind]::Local)
+            $parsedDate = [datetime]::SpecifyKind($candidate, [DateTimeKind]::Local)
             $work = $work.Remove($isoMatch.Index, $isoMatch.Length)
         }
     }
@@ -158,7 +185,7 @@ function ConvertFrom-ClipwarpCalendarText {
                 $parsedDate = [datetime]::new($year, $month, $day, 0, 0, 0, [DateTimeKind]::Local)
                 $hasExplicitDate = $true
                 $work = $work.Remove($thaiMatch.Index, $thaiMatch.Length)
-            } catch {}
+            } catch { return New-ClipwarpReviewEvent -Text $Text -LocalDate $LocalDate -Location $location }
         }
     }
 
@@ -178,7 +205,7 @@ function ConvertFrom-ClipwarpCalendarText {
                 $parsedDate = [datetime]::new($year, $month, $day, 0, 0, 0, [DateTimeKind]::Local)
                 $hasExplicitDate = $true
                 $work = $work.Remove($dmyMatch.Index, $dmyMatch.Length)
-            } catch {}
+            } catch { return New-ClipwarpReviewEvent -Text $Text -LocalDate $LocalDate -Location $location }
         }
     }
 
@@ -208,7 +235,7 @@ function ConvertFrom-ClipwarpCalendarText {
             $end = $endCandidate
             $work = $work.Remove($t12r.Index, $t12r.Length)
         } else {
-            return [pscustomobject]@{ Title=$trimmed; OriginalText=$Text; IsTimed=$false; Start=$null; End=$null; LocalDate=$LocalDate.Date; Location=$location }
+            return New-ClipwarpReviewEvent -Text $Text -LocalDate $LocalDate -Location $location
         }
     }
 
@@ -230,7 +257,7 @@ function ConvertFrom-ClipwarpCalendarText {
                 $end = $endCandidate
                 $work = $work.Remove($t24r.Index, $t24r.Length)
             } else {
-                return [pscustomobject]@{ Title=$trimmed; OriginalText=$Text; IsTimed=$false; Start=$null; End=$null; LocalDate=$LocalDate.Date; Location=$location }
+                return New-ClipwarpReviewEvent -Text $Text -LocalDate $LocalDate -Location $location
             }
         }
     }
@@ -293,6 +320,7 @@ function Get-ClipwarpImageCalendarDetails {
 function Get-ClipwarpCalendarPreview {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Event, [ValidateRange(8,120)][int]$MaxTitleLength = 48)
+    if ($Event.NeedsReview) { return 'Needs review: invalid date or time. Other actions remain available.' }
     $title = [string]$Event.Title
     if ($title.Length -gt $MaxTitleLength) { $title = $title.Substring(0,$MaxTitleLength-1).TrimEnd() + [char]0x2026 }
     $culture = [Globalization.CultureInfo]::InvariantCulture
@@ -395,79 +423,6 @@ function Set-ClipwarpClipboardText {
     Invoke-ClipwarpStaClipboardWrite -Value $Value
 }
 
-if (-not ([System.Management.Automation.PSTypeName]'ClipwarpChatGptNative').Type) {
-    Add-Type -TypeDefinition @'
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-
-public static class ClipwarpChatGptNative {
-    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
-    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-
-    public static IntPtr FindChatGptWindow() {
-        IntPtr found = IntPtr.Zero;
-        EnumWindows((hWnd, lParam) => {
-            if (IsWindowVisible(hWnd)) {
-                StringBuilder sb = new StringBuilder(512);
-                if (GetWindowText(hWnd, sb, 512) > 0) {
-                    string title = sb.ToString();
-                    if (title.IndexOf("ChatGPT", StringComparison.OrdinalIgnoreCase) >= 0) {
-                        found = hWnd;
-                        return false;
-                    }
-                }
-            }
-            return true;
-        }, IntPtr.Zero);
-        return found;
-    }
-
-    public static void ActivateWindow(IntPtr hWnd) {
-        if (hWnd == IntPtr.Zero) return;
-
-        uint processId;
-        uint targetThread = GetWindowThreadProcessId(hWnd, out processId);
-        uint currentThread = GetCurrentThreadId();
-
-        if (currentThread != targetThread) {
-            AttachThreadInput(currentThread, targetThread, true);
-        }
-
-        ShowWindow(hWnd, 9);
-        BringWindowToTop(hWnd);
-        SetForegroundWindow(hWnd);
-
-        if (currentThread != targetThread) {
-            AttachThreadInput(currentThread, targetThread, false);
-        }
-    }
-
-    public static void SendPasteAndEnter() {
-        keybd_event(0x11, 0, 0, UIntPtr.Zero);
-        keybd_event(0x56, 0, 0, UIntPtr.Zero);
-        keybd_event(0x56, 0, 2, UIntPtr.Zero);
-        keybd_event(0x11, 0, 2, UIntPtr.Zero);
-
-        System.Threading.Thread.Sleep(400);
-
-        keybd_event(0x0D, 0, 0, UIntPtr.Zero);
-        keybd_event(0x0D, 0, 2, UIntPtr.Zero);
-    }
-}
-'@
-}
-
 function New-ClipwarpChatGptUrl {
     [CmdletBinding()]
     param(
@@ -482,29 +437,7 @@ function Find-ClipwarpChatGptPage {
         [string]$Url,
         [scriptblock]$ProcessFinder = $null
     )
-    if ($ProcessFinder) {
-        $processes = @(& $ProcessFinder)
-        foreach ($p in $processes) {
-            if ($null -ne $p -and
-                $p.ProcessName -match '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$' -and
-                $p.MainWindowTitle -match '(?i)ChatGPT' -and
-                $null -ne $p.MainWindowHandle -and
-                $p.MainWindowHandle -ne [IntPtr]::Zero -and
-                $p.MainWindowHandle -ne 0) {
-                return $p
-            }
-        }
-        return $null
-    }
-
-    $hWnd = [ClipwarpChatGptNative]::FindChatGptWindow()
-    if ($hWnd -ne [IntPtr]::Zero) {
-        return [pscustomobject]@{
-            MainWindowHandle = $hWnd
-            ProcessName = 'browser'
-            MainWindowTitle = 'ChatGPT'
-        }
-    }
+    # Titles do not prove origin, temporary mode or composer focus.
     return $null
 }
 
@@ -531,57 +464,64 @@ function Send-ClipwarpChatGptMessage {
         [scriptblock]$KeySender = $null,
         [scriptblock]$Delay = { Start-Sleep -Milliseconds 300 }
     )
-    if ($WindowActivator) {
-        & $WindowActivator $Page
-    } else {
-        if ($null -ne $Page -and $null -ne $Page.MainWindowHandle -and $Page.MainWindowHandle -ne [IntPtr]::Zero -and $Page.MainWindowHandle -ne 0) {
-            [ClipwarpChatGptNative]::ActivateWindow([IntPtr]$Page.MainWindowHandle)
-        }
-    }
-    & $Delay
+    # Fail closed even when legacy activation/key hooks are supplied.
+    [pscustomobject]@{ Status='manual-required'; Sent=$false }
+}
 
-    if ($KeySender) {
-        & $KeySender $Message
-    } else {
-        [ClipwarpChatGptNative]::SendPasteAndEnter()
+function Initialize-ClipwarpActionClipboard {
+    if (-not ('ClipwarpTransport.ClipboardWriter' -as [type])) {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        $references = @([Windows.Forms.Form].Assembly.Location, [Drawing.Bitmap].Assembly.Location)
+        if ($PSVersionTable.PSEdition -eq 'Core') { $references += @('System.Runtime','System.Runtime.InteropServices','System.Collections','System.Drawing.Primitives','System.ComponentModel.Primitives') }
+        Add-Type -Path (Join-Path $PSScriptRoot 'clipwarp-clipboard.cs') -ReferencedAssemblies $references
     }
+}
+
+function Get-ClipwarpActionClipboardSequence {
+    Initialize-ClipwarpActionClipboard
+    [ClipwarpTransport.ClipboardWriter]::GetClipboardSequenceNumber()
 }
 
 function Start-ClipwarpChatGptHandoff {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)][string]$Message,
-        [scriptblock]$ClipboardWriter = $null,
-        [scriptblock]$BrowserStarter = $null,
-        [scriptblock]$PageWaiter = { param($url) Wait-ClipwarpChatGptPage $url },
-        [scriptblock]$Submitter = { param($page,$text) Send-ClipwarpChatGptMessage $page $text }
+        [Parameter(Mandatory=$true)][string]$Message,
+        [uint32]$ExpectedSequence = 0,
+        [scriptblock]$ClipboardWriter,
+        [scriptblock]$BrowserStarter,
+        [scriptblock]$PageWaiter,
+        [scriptblock]$Submitter
     )
-
-    $ErrorActionPreference = 'Stop'
-    if ($ClipboardWriter) {
-        & $ClipboardWriter $Message
-    } else {
-        Set-ClipwarpClipboardText -Value $Message
+    $result = [pscustomobject]@{ Status='cancelled'; Copied=$false; Opened=$false; ManualRequired=$true; Sent=$false; Reason='clipboard-changed-or-unavailable' }
+    # Require the sequence belonging to the snapshot; never recapture it here.
+    if ($ExpectedSequence -eq 0) { return $result }
+    try {
+        if ($ClipboardWriter) { $written = & $ClipboardWriter $Message $ExpectedSequence }
+        else {
+            Initialize-ClipwarpActionClipboard
+            $data = New-Object Windows.Forms.DataObject
+            $data.SetText($Message, [Windows.Forms.TextDataFormat]::UnicodeText)
+            $written = [ClipwarpTransport.ClipboardWriter]::Publish($data, $ExpectedSequence)
+        }
+        if (-not $written) { return $result }
+        $result.Copied = $true; $result.Status = 'copied'; $result.Reason = $null
+    } catch {
+        $result.Status = if ($_.Exception.Message -match 'clipboard-changed') { 'cancelled' } else { 'failed' }
+        $result.Reason = 'clipboard-copy-failed'
+        return $result
     }
-
-    $url = New-ClipwarpChatGptUrl
-    if ($BrowserStarter) {
-        & $BrowserStarter $url
-    } else {
-        $browser = New-Object Diagnostics.ProcessStartInfo
-        $browser.FileName = $url
-        $browser.UseShellExecute = $true
-        [Diagnostics.Process]::Start($browser) | Out-Null
-    }
-
-    $page = & $PageWaiter $url
-    if ($null -eq $page) { throw 'ChatGPT is not ready. Nothing was sent.' }
-
-    if (-not $BrowserStarter) {
-        Start-Sleep -Milliseconds 1500
-    }
-
-    & $Submitter $page $Message
+    try {
+        $url = New-ClipwarpChatGptUrl
+        if ($BrowserStarter) { & $BrowserStarter $url | Out-Null }
+        else {
+            $browser = New-Object Diagnostics.ProcessStartInfo
+            $browser.FileName = $url; $browser.UseShellExecute = $true
+            [Diagnostics.Process]::Start($browser) | Out-Null
+        }
+        $result.Opened = $true; $result.Status = 'manual-required'
+    } catch { $result.Status = 'failed'; $result.Reason = 'browser-open-failed' }
+    $result
 }
 
 function Get-ClipwarpPopupLocation {
@@ -640,14 +580,15 @@ function New-ClipwarpCalendarPopupArguments {
         [Nullable[int]]$PointerX,
         [Nullable[int]]$PointerY,
         [string]$TransportDirectory = ([IO.Path]::GetTempPath()),
-        [int]$FileThreshold = 6000
+        [int]$FileThreshold = 6000,
+        [uint32]$ExpectedSequence = 0
     )
-    $arguments = @('-NoProfile', '-Sta', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PopupPath + '"'), '-Kind', $Kind)
+    $arguments = @('-NoProfile', '-Sta', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PopupPath + '"'), '-Kind', $Kind, '-ExpectedSequence', [string]$ExpectedSequence)
     $titleBytes = [Text.Encoding]::UTF8.GetBytes($Title)
     if ($titleBytes.Length -gt $FileThreshold) {
         if (-not (Test-Path -LiteralPath $TransportDirectory)) { New-Item -ItemType Directory -Path $TransportDirectory -Force -ErrorAction Stop | Out-Null }
         $titleFile = Join-Path $TransportDirectory ('clipwarp-title-' + [guid]::NewGuid().ToString('N') + '.txt')
-        try { [IO.File]::WriteAllText($titleFile, $Title, (New-Object Text.UTF8Encoding($false))) }
+        try { $titleFile = New-ClipwarpPrivateTransportFile -Text $Title -Directory $TransportDirectory -Prefix 'clipwarp-title-' }
         catch { Remove-Item -LiteralPath $titleFile -Force -ErrorAction SilentlyContinue; throw }
         $titleFileBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($titleFile))
         $arguments += @('-TitleFileBase64', $titleFileBase64)
@@ -672,7 +613,8 @@ function Start-ClipwarpCalendarPopup {
         [string]$ImagePath,
         [Nullable[int]]$PointerX,
         [Nullable[int]]$PointerY,
-        [string]$ScriptRoot = $PSScriptRoot
+        [string]$ScriptRoot = $PSScriptRoot,
+        [uint32]$ExpectedSequence = 0
     )
     $popup = Join-Path $ScriptRoot 'clipwarp-calendar-popup.ps1'
     if (-not (Test-Path -LiteralPath $popup)) { return }
@@ -681,7 +623,7 @@ function Start-ClipwarpCalendarPopup {
         try { $script:ClipwarpCalendarPopupProcess.Dispose() } catch {}
         $script:ClipwarpCalendarPopupProcess = $null
     }
-    $args = New-ClipwarpCalendarPopupArguments -PopupPath $popup -Kind $Kind -Title $Title -ImagePath $ImagePath -PointerX $PointerX -PointerY $PointerY
+    $args = New-ClipwarpCalendarPopupArguments -PopupPath $popup -Kind $Kind -Title $Title -ImagePath $ImagePath -PointerX $PointerX -PointerY $PointerY -ExpectedSequence $ExpectedSequence
     try { $script:ClipwarpCalendarPopupProcess = Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $args -PassThru -ErrorAction Stop }
     catch {
         $fileIndex = [array]::IndexOf($args, '-TitleFile')
@@ -748,16 +690,90 @@ function Test-ClipwarpCommandLine {
     return $false
 }
 
+function Confirm-ClipwarpCommand {
+    [CmdletBinding()]
+    param([string]$CommandText, [string]$WorkingDirectory=$env:USERPROFILE, $Owner)
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $review = New-Object Windows.Forms.Form
+    try {
+        $review.Text = 'Review full PowerShell script - nothing has run'
+        $review.Size = New-Object Drawing.Size 760,560
+        $review.StartPosition = 'CenterScreen'
+        $review.MinimizeBox = $false
+        $review.AutoScaleMode = 'Dpi'
+        $label = New-Object Windows.Forms.Label
+        $label.Dock = 'Top'; $label.Height = 58
+        $label.Text = "Interpreter: powershell.exe`r`nWorking directory: $WorkingDirectory`r`nRun only scripts you trust. The entire script below will execute."
+        $text = New-Object Windows.Forms.TextBox
+        $text.Multiline = $true; $text.ReadOnly = $true; $text.ScrollBars = 'Both'; $text.WordWrap = $false
+        $text.Dock = 'Fill'; $text.Text = $CommandText
+        $text.AccessibleName = 'Complete script to execute'; $text.Font = New-Object Drawing.Font 'Consolas',10
+        $buttons = New-Object Windows.Forms.FlowLayoutPanel
+        $buttons.Dock = 'Bottom'; $buttons.Height = 45
+        $cancel = New-Object Windows.Forms.Button
+        $cancel.Text = 'Cancel'; $cancel.DialogResult = 'Cancel'; $cancel.AccessibleName = 'Cancel without running'
+        $confirm = New-Object Windows.Forms.Button
+        $confirm.Text = 'Run script'; $confirm.DialogResult = 'OK'; $confirm.AccessibleName = 'Confirm execution of the entire reviewed script'
+        $buttons.Controls.Add($cancel); $buttons.Controls.Add($confirm)
+        $review.Controls.Add($text); $review.Controls.Add($label); $review.Controls.Add($buttons)
+        $review.CancelButton = $cancel
+        # No default Run button; Enter alone never confirms execution.
+        return ($review.ShowDialog($Owner) -eq [Windows.Forms.DialogResult]::OK)
+    } finally { $review.Dispose() }
+}
+
+function New-ClipwarpPrivateTransportFile {
+    param([string]$Text, [string]$Directory, [string]$Prefix='clipwarp-command-')
+    if (-not (Test-Path -LiteralPath $Directory)) { [void][IO.Directory]::CreateDirectory($Directory) }
+    $ancestor = Get-Item -LiteralPath $Directory -Force
+    while ($ancestor) {
+        if ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Transport directory cannot traverse a reparse point.' }
+        $ancestor = $ancestor.Parent
+    }
+    # Transports expire before execution; stale direct-child files are safe to reclaim.
+    $cutoff = [datetime]::UtcNow.AddHours(-24)
+    foreach ($stale in Get-ChildItem -LiteralPath $Directory -File -ErrorAction Stop) {
+        if ($stale.Name -match '^clipwarp-(?:command|title)-[0-9a-f]{32}\.txt$' -and $stale.LastWriteTimeUtc -lt $cutoff -and -not ($stale.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            try {
+                $owner = (Get-Acl -LiteralPath $stale.FullName).GetOwner([Security.Principal.SecurityIdentifier])
+                if ($owner -eq [Security.Principal.WindowsIdentity]::GetCurrent().User) { Remove-Item -LiteralPath $stale.FullName -Force -ErrorAction Stop }
+            } catch { }
+        }
+    }
+    $path = Join-Path $Directory ($Prefix + [guid]::NewGuid().ToString('N') + '.txt')
+    # Create with exclusive ownership, set a protected current-user-only DACL before writing content.
+    $acl = New-Object Security.AccessControl.FileSecurity
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl.SetOwner($sid)
+    $acl.SetAccessRuleProtection($true,$false)
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')))
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        $stream = [IO.FileSystemAclExtensions]::Create([IO.FileInfo]::new($path), [IO.FileMode]::CreateNew, [Security.AccessControl.FileSystemRights]::FullControl, [IO.FileShare]::None, 4096, [IO.FileOptions]::None, $acl)
+    } else {
+        $stream = [IO.FileStream]::new($path, [IO.FileMode]::CreateNew, [Security.AccessControl.FileSystemRights]::FullControl, [IO.FileShare]::None, 4096, [IO.FileOptions]::None, $acl)
+    }
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+        $stream.Write($bytes,0,$bytes.Length)
+    } catch {
+        $stream.Dispose(); Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        throw
+    } finally { $stream.Dispose() }
+    $path
+}
+
 function Start-ClipwarpCommand {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$CommandText,
         [string]$WorkingDirectory = $env:USERPROFILE,
         [scriptblock]$ProcessStarter = $null,
+        [switch]$ReviewedSnapshot,
         [scriptblock]$CommandLookup = { param($name) Get-Command $name -ErrorAction SilentlyContinue }
     )
 
-    $clean = Get-ClipwarpCommandText -Text $CommandText
+    $clean = if ($ReviewedSnapshot) { $CommandText } else { Get-ClipwarpCommandText -Text $CommandText }
     if ([string]::IsNullOrWhiteSpace($clean)) { return }
 
     $bytes = [System.Text.Encoding]::Unicode.GetBytes($clean)
@@ -772,9 +788,9 @@ function Start-ClipwarpCommand {
     # 1. Prefer Windows Terminal (wt.exe) if available and genuinely startable
     $wt = & $CommandLookup 'wt.exe'
     if ($wt) {
-        $wtPsi = New-ClipwarpCommandProcessStartInfo -CommandText $clean -WorkingDirectory $workDir -Launcher 'wt' -CommandLookup $CommandLookup
+        $wtPsi = New-ClipwarpCommandProcessStartInfo -CommandText $clean -ReviewedSnapshot -WorkingDirectory $workDir -Launcher 'wt' -CommandLookup $CommandLookup
         if ($ProcessStarter) {
-            $started = & $ProcessStarter $wtPsi
+            try { $started = & $ProcessStarter $wtPsi } catch { if ($wtPsi.TransportPath) { Remove-Item -LiteralPath $wtPsi.TransportPath -Force -ErrorAction SilentlyContinue }; throw }
             if ($started) { return }
         } else {
             try {
@@ -789,17 +805,19 @@ function Start-ClipwarpCommand {
         }
     }
 
+    if ($wtPsi -and $wtPsi.TransportPath) { Remove-Item -LiteralPath $wtPsi.TransportPath -Force -ErrorAction SilentlyContinue }
     # 2. Fallback to Windows PowerShell, ensuring it is visibly detached from the hidden parent
-    $psPsi = New-ClipwarpCommandProcessStartInfo -CommandText $clean -WorkingDirectory $workDir -Launcher 'powershell' -CommandLookup $CommandLookup
+    $psPsi = New-ClipwarpCommandProcessStartInfo -CommandText $clean -ReviewedSnapshot -WorkingDirectory $workDir -Launcher 'powershell' -CommandLookup $CommandLookup
     if ($ProcessStarter) {
-        & $ProcessStarter $psPsi | Out-Null
+        try { $started = & $ProcessStarter $psPsi; if (-not $started) { throw 'Command launch failed.' } }
+        catch { if ($psPsi.TransportPath) { Remove-Item -LiteralPath $psPsi.TransportPath -Force -ErrorAction SilentlyContinue }; throw }
         return
     }
-
-   try {
+    try {
         Start-Process -FilePath $psPsi.FileName -WorkingDirectory $workDir -ArgumentList $psPsi.ArgumentList -WindowStyle Normal -ErrorAction Stop | Out-Null
-   } catch {
-        [System.Diagnostics.Process]::Start($psPsi) | Out-Null
+    } catch {
+        if ($psPsi.TransportPath) { Remove-Item -LiteralPath $psPsi.TransportPath -Force -ErrorAction SilentlyContinue }
+        throw
     }
 }
 
@@ -809,14 +827,24 @@ function New-ClipwarpCommandProcessStartInfo {
         [Parameter(Mandatory = $true)][string]$CommandText,
         [string]$WorkingDirectory = $env:USERPROFILE,
         [AllowNull()][AllowEmptyString()][ValidateSet('wt', 'powershell')][string]$Launcher = $null,
+        [switch]$ReviewedSnapshot,
         [scriptblock]$CommandLookup = { param($name) Get-Command $name -ErrorAction SilentlyContinue }
     )
 
-    $clean = Get-ClipwarpCommandText -Text $CommandText
+    $clean = if ($ReviewedSnapshot) { $CommandText } else { Get-ClipwarpCommandText -Text $CommandText }
     if ([string]::IsNullOrWhiteSpace($clean)) { return $null }
 
     $bytes = [System.Text.Encoding]::Unicode.GetBytes($clean)
     $b64 = [Convert]::ToBase64String($bytes)
+
+    $transportPath = $null
+    if ($b64.Length -gt 24000) {
+        $transportPath = New-ClipwarpPrivateTransportFile -Text $clean -Directory (Join-Path ([IO.Path]::GetTempPath()) 'clipwarp-transport')
+        $path64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($transportPath))
+        $loader = '$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(''{PATH}'')); try { if ([IO.File]::GetLastWriteTimeUtc($p) -lt [datetime]::UtcNow.AddHours(-24)) { throw ''Command transport expired; review again.'' }; $s=[IO.File]::ReadAllText($p,[Text.Encoding]::UTF8) } finally { Remove-Item -LiteralPath $p -Force }; & ([scriptblock]::Create($s))'
+        $loader = $loader.Replace('{PATH}', $path64)
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($loader))
+    }
 
     $targetLauncher = $Launcher
     if ([string]::IsNullOrWhiteSpace($targetLauncher)) {
@@ -845,6 +873,8 @@ function New-ClipwarpCommandProcessStartInfo {
         $psi.Arguments = "-NoExit -ExecutionPolicy Bypass -EncodedCommand $b64"
     }
 
+    if (($psi.FileName.Length + $psi.Arguments.Length + 4) -ge 32767) { if ($transportPath) { Remove-Item -LiteralPath $transportPath -Force }; throw 'Windows process command line exceeds 32767 characters.' }
+    Add-Member -InputObject $psi -MemberType NoteProperty -Name 'TransportPath' -Value $transportPath -Force
     Add-Member -InputObject $psi -MemberType NoteProperty -Name 'Launcher' -Value $targetLauncher -Force
     Add-Member -InputObject $psi -MemberType NoteProperty -Name 'EncodedCommand' -Value $b64 -Force
     Add-Member -InputObject $psi -MemberType NoteProperty -Name 'CleanCommand' -Value $clean -Force
@@ -859,15 +889,17 @@ function Get-ClipwarpCommandProcessStartInfo {
         [Parameter(Mandatory = $true)][string]$CommandText,
         [string]$WorkingDirectory = $env:USERPROFILE,
         [AllowNull()][AllowEmptyString()][ValidateSet('wt', 'powershell')][string]$Launcher = $null,
+        [switch]$ReviewedSnapshot,
         [scriptblock]$CommandLookup = { param($name) Get-Command $name -ErrorAction SilentlyContinue }
     )
     $params = @{
         CommandText      = $CommandText
         WorkingDirectory = $WorkingDirectory
         CommandLookup    = $CommandLookup
+        ReviewedSnapshot = $ReviewedSnapshot
     }
     if ($Launcher) { $params.Launcher = $Launcher }
     New-ClipwarpCommandProcessStartInfo @params
 }
 
-Export-ModuleMember -Function Get-ClipwarpPayloadKind, Format-ClipwarpCalendarPayload, Get-ClipwarpCalendarTimeZone, New-ClipwarpCalendarUrl, ConvertFrom-ClipwarpCalendarText, Get-ClipwarpImageCalendarDetails, Get-ClipwarpCalendarPreview, Export-ClipwarpIcsEvent, Set-ClipwarpClipboardText, New-ClipwarpChatGptUrl, Start-ClipwarpChatGptHandoff, Get-ClipwarpPopupLocation, Get-ClipwarpPopupMetrics, New-ClipwarpCalendarPopupArguments, Start-ClipwarpCalendarPopup, Get-ClipwarpCommandText, Test-ClipwarpCommandLine, Start-ClipwarpCommand, New-ClipwarpCommandProcessStartInfo, Get-ClipwarpCommandProcessStartInfo
+Export-ModuleMember -Function Confirm-ClipwarpCommand, Get-ClipwarpActionClipboardSequence, Get-ClipwarpPayloadKind, Format-ClipwarpCalendarPayload, Get-ClipwarpCalendarTimeZone, New-ClipwarpCalendarUrl, ConvertFrom-ClipwarpCalendarText, Get-ClipwarpImageCalendarDetails, Get-ClipwarpCalendarPreview, Export-ClipwarpIcsEvent, Set-ClipwarpClipboardText, New-ClipwarpChatGptUrl, Start-ClipwarpChatGptHandoff, Get-ClipwarpPopupLocation, Get-ClipwarpPopupMetrics, New-ClipwarpCalendarPopupArguments, Start-ClipwarpCalendarPopup, Get-ClipwarpCommandText, Test-ClipwarpCommandLine, Start-ClipwarpCommand, New-ClipwarpCommandProcessStartInfo, Get-ClipwarpCommandProcessStartInfo

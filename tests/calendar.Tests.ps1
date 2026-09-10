@@ -24,14 +24,13 @@ Assert-Equal 0 $acceptRunAssignments.Count 'command popup source does not assign
 $acceptCalAssignments = @($popupAst.FindAll({ $args[0] -is [Management.Automation.Language.AssignmentStatementAst] }, $true) |
     Where-Object { $_.Left.Extent.Text -match 'AcceptButton' -and $_.Right.Extent.Text -match 'calButton' })
 Assert-Equal 1 $acceptCalAssignments.Count 'calendar popup source preserves calButton as AcceptButton for non-command text'
-$runClickHandler = @($popupAst.FindAll({ $args[0] -is [Management.Automation.Language.InvokeMemberExpressionAst] }, $true) |
-    Where-Object { $_.Expression.Extent.Text.Trim() -eq '$runButton' -and $_.Member.Extent.Text -eq 'Add_MouseClick' -and $_.Extent.Text -match 'Start-ClipwarpCommand' })
-Assert-Equal 1 $runClickHandler.Count 'command popup source retains explicit runButton click handler'
+$runClickHandler = @($popupAst.FindAll({ $args[0] -is [Management.Automation.Language.InvokeMemberExpressionAst] }, $true) | Where-Object { $_.Expression.Extent.Text.Trim() -eq '$runButton' -and $_.Member.Extent.Text -eq 'Add_Click' -and $_.Extent.Text -match 'Confirm-ClipwarpCommand' })
+Assert-Equal 1 $runClickHandler.Count 'keyboard and mouse Run actions require full script confirmation'
 
 $date = [datetime]::new(2026, 8, 31, 22, 15, 0, [DateTimeKind]::Local)
 # Inspect source only: never start the watcher or access the system clipboard.
 $watchSource = [IO.File]::ReadAllText((Join-Path $root 'clipwarp-watch.ps1'))
-$rawTextBranch = 'string meaningful = txt\.Trim\(\);\s*if \(meaningful\.Length > 0\)\s*\{\s*if \(meaningful == lastTextFingerprint && \(DateTime\.Now - lastTextAt\)\.TotalSeconds < 2\)\s*\{ lastHandledSequence = sequence; return; \}\s*LaunchTextPopup\(txt\);\s*lastTextFingerprint = meaningful;'
+$rawTextBranch = 'string meaningful = txt\.Trim\(\);\s*if \(meaningful\.Length > 0\)\s*\{\s*if \(meaningful == lastTextFingerprint && \(DateTime\.Now - lastTextAt\)\.TotalSeconds < 2\)\s*\{ lastHandledSequence = sequence; return; \}\s*LaunchTextPopup\(txt,\s*sequence\);\s*lastTextFingerprint = meaningful;'
 Assert-Equal $true ($watchSource -match $rawTextBranch) 'watcher passes raw txt to popup while retaining trimmed empty and fingerprint checks'
 Assert-Equal $false ($watchSource -match 'LaunchTextPopup\(meaningful\)') 'watcher never sends normalized text to popup'
 
@@ -48,78 +47,27 @@ Assert-Equal $true (Test-ClipwarpCommandLine -Text $rawCommandText) 'command det
 Assert-Equal 'npm test' (Get-ClipwarpCommandText -Text $rawCommandText) 'raw command cleanup still strips whitespace and prompt'
 Assert-Equal $false (Test-ClipwarpCommandLine -Text " `t`r`n`r`n ") 'raw blank lines do not become a command'
 
-# Handoff tests use injected operations only: no browser or system clipboard.
-$temporaryUrl = 'https://chatgpt.com/?temporary-chat=true'
-Assert-Equal $temporaryUrl (New-ClipwarpChatGptUrl) 'ChatGPT URL is exactly the temporary chat URL'
-$handoffText = "  PS C:\Users\Test> echo 'hello'`r`nReview 2026-09-15 14:30`n" + ([string][char]0x4F60) * 5000 + '` & ?q=secret C:\private\image.png  '
-$handoffCalls = New-Object Collections.Generic.List[object]
-Start-ClipwarpChatGptHandoff -Message $handoffText -ClipboardWriter {
-    param($value) $handoffCalls.Add([pscustomobject]@{ Kind='clipboard'; Value=$value })
-} -BrowserStarter {
-    param($value) $handoffCalls.Add([pscustomobject]@{ Kind='browser'; Value=$value })
-} -PageWaiter { param($url) $handoffCalls.Add([pscustomobject]@{ Kind='wait'; Value=$url }); 'verified-page' } -Submitter {
-    param($page, $message) $handoffCalls.Add([pscustomobject]@{ Kind='submit'; Value=$message; Page=$page })
-}
-Assert-Equal 4 $handoffCalls.Count 'handoff writes and opens exactly once'
-Assert-Equal 'clipboard' $handoffCalls[0].Kind 'handoff writes before opening browser'
-Assert-Equal $handoffText $handoffCalls[0].Value 'handoff preserves full multiline Unicode text and whitespace'
-Assert-Equal 'browser' $handoffCalls[1].Kind 'handoff opens browser after writing'
-Assert-Equal $temporaryUrl $handoffCalls[1].Value 'browser URL leaks neither message nor local image path'
-Assert-Equal 'wait' $handoffCalls[2].Kind 'wait follows browser launch'
-Assert-Equal $temporaryUrl $handoffCalls[2].Value 'wait targets exact temporary URL'
-Assert-Equal 'submit' $handoffCalls[3].Kind 'submit follows verified page wait'
-Assert-Equal 'verified-page' $handoffCalls[3].Page 'submit receives identified page'
-Assert-Equal $handoffText $handoffCalls[3].Value 'submit preserves exact original message'
-foreach ($stage in @('clipboard','browser','wait','submit')) {
-    $order = New-Object Collections.Generic.List[string]
-    try {
-        Start-ClipwarpChatGptHandoff -Message $handoffText -ClipboardWriter { $order.Add('clipboard'); if ($stage -eq 'clipboard') { throw 'stop' } } -BrowserStarter { $order.Add('browser'); if ($stage -eq 'browser') { throw 'stop' } } -PageWaiter { $order.Add('wait'); if ($stage -eq 'wait') { throw 'stop' }; 'page' } -Submitter { $order.Add('submit'); throw 'stop' }
-        throw 'Expected failure'
-    } catch { Assert-Equal 'stop' $_.Exception.Message 'operation failure propagates' }
-    $expected = @('clipboard','browser','wait','submit')
-    Assert-Equal ($expected[0..([array]::IndexOf($expected,$stage))] -join ',') ($order -join ',') 'failure prevents all later actions'
-}
-$browserAfterFailure = New-Object Collections.Generic.List[string]
-try {
-    Start-ClipwarpChatGptHandoff -Message 'test' -ClipboardWriter { throw 'injected write failure' } -BrowserStarter { param($value) $browserAfterFailure.Add($value) }
-    throw 'Expected injected write failure'
-} catch { Assert-Equal 'injected write failure' $_.Exception.Message 'clipboard failure propagates' }
-Assert-Equal 0 $browserAfterFailure.Count 'failed clipboard write does not open browser'
-
-$chatHandler = @($popupAst.FindAll({ $args[0] -is [Management.Automation.Language.InvokeMemberExpressionAst] }, $true) |
-    Where-Object { $_.Expression.Extent.Text -eq '$chatGptButton' -and $_.Member.Extent.Text -eq 'Add_Click' })
-Assert-Equal 1 $chatHandler.Count 'text popup has an explicit ChatGPT click handler'
-$textBranch = $chatHandler[0].Parent
-while ($textBranch -and $textBranch -isnot [Management.Automation.Language.IfStatementAst]) { $textBranch = $textBranch.Parent }
-Assert-Equal '$Kind -eq ''Text''' $textBranch.Clauses[0].Item1.Extent.Text 'ChatGPT button is restricted to text popup'
+# Manual handoff regressions live in chatgpt.Tests.ps1; no real browser/clipboard calls.
 $popupSource = [IO.File]::ReadAllText($popupPath)
-Assert-Equal $true ($popupSource.Contains('$chatGptButton.Text = ''Open ChatGPT && Send (Temporary)''')) 'ChatGPT button has visible label'
-Assert-Equal $true ($popupSource.Contains('$chatGptButton.AccessibleName = ''Open ChatGPT & Send (Temporary)''')) 'ChatGPT button has accessible name'
-Assert-Equal $true ($popupSource.Contains('Automatically pastes full text and sends it in ChatGPT.')) 'popup explains automatic submission'
-Assert-Equal $false ($popupSource -match 'AcceptButton\s*=\s*\$chatGptButton') 'handoff is not the form default action'
-# Execute the actual extracted handler with a fake form and injected helper wrapper.
-& {
-    $Title = $handoffText
-    $form = [pscustomobject]@{ Closed=$false }
-    $form | Add-Member ScriptMethod Close { $this.Closed = $true }
-    $calls = New-Object Collections.Generic.List[string]
-    function Start-ClipwarpChatGptHandoff {
-        param($Message)
-        clipwarp-calendar\Start-ClipwarpChatGptHandoff -Message $Message -ClipboardWriter { param($value) $calls.Add($value) } -BrowserStarter { param($value) $calls.Add($value) } -PageWaiter { 'page' } -Submitter { param($page,$message) $calls.Add($message) }
-    }
-    & ([scriptblock]::Create($chatHandler[0].Arguments[0].ScriptBlock.Extent.Text.Trim().Substring(1).TrimEnd('}')))
-    Assert-Equal 3 $calls.Count 'actual popup handler invokes injected handoff once'
-    Assert-Equal $Title $calls[0] 'actual popup handler passes full original Title'
-    Assert-Equal $temporaryUrl $calls[1] 'actual popup handler opens only temporary URL'
-    Assert-Equal $Title $calls[2] 'actual popup handler submits original Title'
-    Assert-Equal $true $form.Closed 'actual popup handler closes popup after handoff'
-}
 $moduleSource = [IO.File]::ReadAllText($module)
-Assert-Equal $false (($popupSource + $moduleSource) -match '(?i)Invoke-WebRequest|Invoke-RestMethod') 'popup and handoff contain no HTTP submission'
-Assert-Equal $true ($moduleSource.Contains('ClipwarpChatGptNative')) 'calendar module defines native automation helper'
-Assert-Equal $true ($moduleSource.Contains('SendPasteAndEnter')) 'calendar module provides paste and enter submission'
-Assert-Equal $true ($popupSource.Contains('[Windows.Forms.MessageBox]::Show')) 'handoff errors are user-visible'
-Assert-Equal '239,187,191' (([IO.File]::ReadAllBytes($module))[0..2] -join ',') 'calendar module retains UTF-8 BOM for Windows PowerShell'
+Assert-Equal $false (($popupSource + $moduleSource) -match 'keybd_event|SendPasteAndEnter|SetForegroundWindow') 'no global paste/send automation'
+Assert-Equal $true ($popupSource.Contains('ShowWithoutActivation')) 'initial display is nonactivating'
+Assert-Equal $true ($popupSource.Contains('$hovering -or $form.ContainsFocus')) 'countdown pauses while hovered or interacting'
+Assert-Equal $true ($popupSource.Contains('$config.ChatGptEnabled')) 'ChatGPT preference is independent'
+Assert-Equal $true ($popupSource.Contains('$config.RunCommandEnabled')) 'Run preference is independent'
+Assert-Equal $true ($popupSource.Contains('Confirm-ClipwarpCommand')) 'full script review precedes launch'
+Assert-Equal '239,187,191' (([IO.File]::ReadAllBytes($module))[0..2] -join ',') 'calendar module retains UTF-8 BOM'
+foreach ($invalid in @('2026-02-31','2026-13-01','0000-01-01','2026-00-12','31/02/2026')) {
+    $parsed = ConvertFrom-ClipwarpCalendarText -Text ('Review ' + $invalid + ' 14:00') -LocalDate $date
+    Assert-Equal $true $parsed.NeedsReview "invalid date needs review: $invalid"
+    Assert-Equal $false $parsed.IsTimed 'invalid date never schedules an inferred time'
+}
+$hugeLocation='https://meet.google.com/' + ('x' * 100000)
+$hugeUrl=New-ClipwarpCalendarUrl -Title (([char]::ConvertFromUtf32(0x1F680))*50000) -Details ('x'*100000) -Location $hugeLocation -WarningVariable omitted -WarningAction SilentlyContinue
+Assert-Equal $true ($hugeUrl.Length -le 1900) 'all fields share a hard 1900 encoded URL budget'
+Assert-Equal $false ($hugeUrl.Contains('&location=')) 'oversized meeting URL omitted, never truncated'
+Assert-Equal $true ($omitted.Count -gt 0) 'omitted location produces a review warning'
+Assert-Equal $false ($hugeUrl.Contains('%EF%BF%BD')) 'bounded encoding preserves surrogate pairs'
 
 $textUrl = New-ClipwarpCalendarUrl -Title 'Plan A & B / review' -LocalDate $date
 Assert-Equal 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=Plan%20A%20%26%20B%20%2F%20review&dates=20260831%2F20260901' $textUrl 'URL safely encodes title and uses exclusive next-day end'
@@ -485,9 +433,3 @@ Assert-Equal 'powershell.exe' $directPsCalls[0] 'missing wt launches powershell.
 
 if ($failures) { throw "$failures calendar test(s) failed" }
 Write-Host 'All calendar tests passed.' -ForegroundColor Cyan
-
-if ([IO.File]::ReadAllText($popupPath) -notmatch 'SuppressKeyPress = \$true') { throw 'Popup must suppress Enter before focused Run can activate' }
-
-$keyboardRunHandlers = @($popupAst.FindAll({ $args[0] -is [Management.Automation.Language.InvokeMemberExpressionAst] }, $true) |
-    Where-Object { $_.Expression.Extent.Text.Trim() -eq '$runButton' -and $_.Member.Extent.Text -eq 'Add_Click' })
-if ($keyboardRunHandlers.Count) { throw 'Run must not use keyboard/default-button Click activation' }

@@ -1,64 +1,26 @@
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'clipwarp-calendar.psm1') -Force
 & (Get-Module clipwarp-calendar) {
-    function Check($ok, $name) { if (-not $ok) { throw $name }; Write-Host "PASS: $name" }
-
-    # Test Send-ClipwarpChatGptMessage invokes window activation and key sending
-    $state = @{ ActivatedPage=$null; SentMessage=$null }
-    $fakePage = [pscustomobject]@{ MainWindowHandle=[IntPtr]5678 }
-    $testMsg = "Hello ChatGPT `r`n" + [char]0x4F60 + " line 2"
-
-    Send-ClipwarpChatGptMessage -Page $fakePage -Message $testMsg `
-        -WindowActivator { param($p) $state.ActivatedPage = $p } `
-        -KeySender { param($m) $state.SentMessage = $m } `
-        -Delay { }
-
-    Check ($state.ActivatedPage -eq $fakePage) 'window activator receives target page'
-    Check ($state.SentMessage -eq $testMsg) 'key sender receives exact original message'
-
-    # Test Start-ClipwarpChatGptHandoff full workflow
-    $calls = New-Object Collections.Generic.List[object]
-    Start-ClipwarpChatGptHandoff -Message $testMsg `
-        -ClipboardWriter { param($v) $calls.Add([pscustomobject]@{ Kind='clip'; Value=$v }) } `
-        -BrowserStarter { param($v) $calls.Add([pscustomobject]@{ Kind='browser'; Value=$v }) } `
-        -PageWaiter { param($u) $calls.Add([pscustomobject]@{ Kind='wait'; Value=$u }); $fakePage } `
-        -Submitter { param($p, $m) $calls.Add([pscustomobject]@{ Kind='submit'; Page=$p; Message=$m }) }
-
-    Check ($calls.Count -eq 4) 'handoff runs exactly 4 steps'
-    Check ($calls[0].Kind -eq 'clip' -and $calls[0].Value -eq $testMsg) 'handoff writes clipboard first'
-    Check ($calls[1].Kind -eq 'browser' -and $calls[1].Value -eq 'https://chatgpt.com/?temporary-chat=true') 'handoff starts browser with temporary chat URL'
-    Check ($calls[2].Kind -eq 'wait') 'handoff waits for page'
-    Check ($calls[3].Kind -eq 'submit' -and $calls[3].Page -eq $fakePage -and $calls[3].Message -eq $testMsg) 'handoff submits page and message'
-
-    # Test failure propagation
-    $failed = $false
-    try {
-        Start-ClipwarpChatGptHandoff -Message $testMsg -ClipboardWriter { throw 'clip err' }
-    } catch {
-        if ($_.Exception.Message -like '*clip err*') { $failed = $true }
-    }
-    Check $failed 'clipboard failure propagates'
-
-    $failed = $false
-    try {
-        Start-ClipwarpChatGptHandoff -Message $testMsg `
-            -ClipboardWriter { } `
-            -BrowserStarter { } `
-            -PageWaiter { throw 'wait err' }
-    } catch {
-        if ($_.Exception.Message -like '*wait err*') { $failed = $true }
-    }
-    Check $failed 'waiter failure propagates'
-
-    $failed = $false
-    try {
-        Start-ClipwarpChatGptHandoff -Message $testMsg `
-            -ClipboardWriter { } `
-            -BrowserStarter { } `
-            -PageWaiter { $fakePage } `
-            -Submitter { throw 'submit err' }
-    } catch {
-        if ($_.Exception.Message -like '*submit err*') { $failed = $true }
-    }
-    Check $failed 'submitter failure propagates'
+    function Check($ok,$name) { if (-not $ok) { throw $name }; Write-Host "PASS: $name" }
+    $calls = New-Object Collections.Generic.List[string]
+    $text = "  private`r`n" + [char]::ConvertFromUtf32(0x1F680)
+    $result = Start-ClipwarpChatGptHandoff -Message $text -ExpectedSequence 123 -ClipboardWriter {
+        param($value,$expected)
+        Check ($value -ceq $text -and $expected -eq 123) 'guarded copy receives exact snapshot and sequence'
+        $calls.Add('copy'); return 124
+    } -BrowserStarter { param($url); Check ($url -eq 'https://chatgpt.com/?temporary-chat=true') 'URL contains no message'; $calls.Add('open') } -PageWaiter { throw 'must not wait' } -Submitter { throw 'must not submit' }
+    Check (($calls -join ',') -eq 'copy,open') 'only explicit copy and open occur'
+    Check ($result.Status -eq 'manual-required' -and $result.Copied -and $result.Opened -and -not $result.Sent) 'manual result never claims sent'
+    $result = Start-ClipwarpChatGptHandoff -Message $text -ClipboardWriter { throw 'must not copy' } -BrowserStarter { throw 'must not open' }
+    Check ($result.Status -eq 'cancelled') 'unknown sequence fails closed'
+    $result = Start-ClipwarpChatGptHandoff -Message $text -ExpectedSequence 123 -ClipboardWriter { throw 'clipboard-changed' } -BrowserStarter { throw 'must not open' }
+    Check ($result.Status -eq 'cancelled' -and -not $result.Opened) 'newer copy cancels browser handoff'
+    $result = Start-ClipwarpChatGptHandoff -Message $text -ExpectedSequence 123 -ClipboardWriter { 124 } -BrowserStarter { throw 'private text must not escape' }
+    Check ($result.Status -eq 'failed' -and $result.Copied -and -not $result.Opened -and $result.Reason -eq 'browser-open-failed') 'partial failure retains copy state without error content'
+    $result = Send-ClipwarpChatGptMessage -Page ([pscustomobject]@{MainWindowHandle=123}) -Message $text -WindowActivator { throw 'must not activate' } -KeySender { throw 'must not send' } -Delay { throw 'must not delay' }
+    Check ($result.Status -eq 'manual-required' -and -not $result.Sent) 'legacy send entrypoint fails closed'
+    $source = [IO.File]::ReadAllText((Join-Path (Split-Path $PSScriptRoot -Parent) 'clipwarp-calendar.psm1'))
+    Check ($source -notmatch 'keybd_event|SendPasteAndEnter|SetForegroundWindow|AttachThreadInput') 'no global keyboard or activation native APIs remain'
+    Initialize-ClipwarpActionClipboard
+    Check ($null -ne ('ClipwarpTransport.ClipboardWriter' -as [type])) 'native writer compiles without calling clipboard APIs'
 }

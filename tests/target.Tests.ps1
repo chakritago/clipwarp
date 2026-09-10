@@ -2,6 +2,10 @@
 $root = Split-Path $PSScriptRoot -Parent
 Import-Module (Join-Path $root 'clipwarp-support.psm1') -Force
 
+$fixtureRoot=Join-Path ([IO.Path]::GetTempPath()) ('clipwarp-target-'+[guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($fixtureRoot)
+$PSDefaultParameterValues['Resolve-ClipwarpPublicationMode:ConfigPath']=Join-Path $fixtureRoot 'default.json'
+try {
 # 1. Test-ClipwarpChatGptTarget detection
 $browsers = @('chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc', 'zen')
 foreach ($b in $browsers) {
@@ -157,7 +161,7 @@ if ($mode -ne 'image-only') { throw "Expected -ImageOnly switch to force image-o
 Write-Host 'PASS: -ImageOnly switch forces image-only mode'
 
 # 3. Configurable targetMode
-$tempConfig = Join-Path $env:TEMP ('test-clipwarp-' + [guid]::NewGuid().ToString('N') + '.json')
+$tempConfig = Join-Path $fixtureRoot 'saved.json'
 try {
     $def = Get-ClipwarpTargetMode -ConfigPath $tempConfig
     if ($def -ne 'auto') { throw "Expected default target mode auto, got $def" }
@@ -223,11 +227,11 @@ $watchSource = Get-Content (Join-Path $root 'clipwarp-watch.ps1') -Raw
 if ($watchSource -notmatch 'TargetArguments') {
     throw 'Watcher script must incorporate TargetArguments'
 }
-if ($watchSource -notmatch '-ForegroundProcess') {
-    throw 'Watcher script must pass -ForegroundProcess to clipwarp.ps1'
+if ($watchSource -notmatch 'ClipwarpPolicy.TargetPolicy.Explain' -or $watchSource -notmatch 'return " -TargetMode " \+ decision.Mode') {
+    throw 'Watcher must pass a shared-policy resolved mode to the converter'
 }
-if ($watchSource -notmatch '-ForegroundTitle') {
-    throw 'Watcher script must pass -ForegroundTitle to clipwarp.ps1'
+if ($watchSource -match 'return.*-ForegroundTitle') {
+    throw 'Watcher must not expose sensitive window captions in process arguments'
 }
 if ($watchSource -notmatch 'EVENT_SYSTEM_FOREGROUND') {
     throw 'Watcher script must register EVENT_SYSTEM_FOREGROUND hook'
@@ -250,3 +254,5 @@ foreach ($browser in @('chrome','msedge','chatgpt')) {
     if (-not (Test-ClipwarpFilePickerTarget $browser 'Öffnen' '#32770')) { throw 'localized picker missed' }
 }
 Write-Host 'PASS: integrated terminal and localized picker classification boundaries'
+
+} finally { $testBmp.Dispose(); $pngStream.Dispose(); $PSDefaultParameterValues.Remove('Resolve-ClipwarpPublicationMode:ConfigPath'); Remove-Item -LiteralPath $fixtureRoot -Recurse -Force }

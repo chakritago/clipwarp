@@ -24,6 +24,8 @@ $temp = Join-Path ([IO.Path]::GetTempPath()) ('clipwarp-cli-test-' + [guid]::New
 New-Item -ItemType Directory -Path $temp | Out-Null
 try {
     $originalUserProfile = $env:USERPROFILE
+    $originalTestRoot = $env:CLIPWARP_TEST_ROOT
+    $env:CLIPWARP_TEST_ROOT = $temp
     $env:USERPROFILE = $temp
     & $engine -NoProfile -File $clipwarp calendar status *> $null
     Assert-Equal 0 $LASTEXITCODE 'calendar status is a safe successful command'
@@ -63,8 +65,32 @@ try {
     Assert-Equal $true ((Invoke-ClipwarpExitCode ('calendar export -Path "' + (Join-Path $temp 'missing.ics') + '"')) -ne 0) 'calendar export rejects a missing title'
     Assert-Equal 1 (Invoke-ClipwarpExitCode 'calendar nonsense') 'calendar rejects an unknown action with usage status'
     Assert-Equal 0 (Invoke-ClipwarpExitCode 'help') 'help is a safe successful command'
+    Assert-Equal 0 (Invoke-ClipwarpExitCode 'version -Json') 'version reports checkout metadata without installing'
+    foreach ($actionName in @('calendar','chatgpt','runCommand')) {
+        foreach ($actionState in @('disable','status','enable')) {
+            Assert-Equal 0 (Invoke-ClipwarpExitCode ('actions '+$actionName+' '+$actionState)) "independent action command: $actionName $actionState"
+        }
+    }
+    Assert-Equal 0 (Invoke-ClipwarpExitCode 'popup duration 15') 'popup accepts a validated duration'
+    Assert-Equal 0 (Invoke-ClipwarpExitCode 'popup duration status') 'popup duration is inspectable'
+    Assert-Equal $true ((Invoke-ClipwarpExitCode 'popup duration 0') -ne 0) 'popup rejects invalid duration'
+    Assert-Equal 0 (Invoke-ClipwarpExitCode ('doctor -Json -OutDir "' + $images + '"')) 'doctor offers machine-readable diagnostics'
+    $beforeConfig = [IO.File]::ReadAllText((Join-Path $temp '.claude\clipwarp.json'))
+    Assert-Equal 0 (Invoke-ClipwarpExitCode 'privacy pause -WhatIf') 'WhatIf does not persist pause'
+    Assert-Equal $beforeConfig ([IO.File]::ReadAllText((Join-Path $temp '.claude\clipwarp.json'))) 'WhatIf preserves exact configuration bytes'
+    foreach ($safePreview in @('convert','watch','stop','autostart','unautostart','recopy')) {
+        Assert-Equal 0 (Invoke-ClipwarpExitCode ($safePreview + ' -WhatIf')) "WhatIf blocks external effects: $safePreview"
+    }
+    $managedPreview = Join-Path $images 'clip-20200101-000000-000.png'
+    [IO.File]::WriteAllText($managedPreview, 'isolated fixture, not an image')
+    (Get-Item -LiteralPath $managedPreview).LastWriteTime = [datetime]'2000-01-01'
+    Assert-Equal 0 (Invoke-ClipwarpExitCode ('clean -WhatIf -OutDir "' + $images + '"')) 'clean per-file WhatIf succeeds'
+    Assert-Equal $true (Test-Path -LiteralPath $managedPreview) 'clean WhatIf preserves managed image'
+    Assert-Equal 0 (Invoke-ClipwarpExitCode ('clean -Preview -OutDir "' + $images + '"')) 'clean Preview succeeds'
+    Assert-Equal $true (Test-Path -LiteralPath $managedPreview) 'clean Preview preserves managed image'
 } finally {
     $env:USERPROFILE = $originalUserProfile
+    $env:CLIPWARP_TEST_ROOT = $originalTestRoot
     Remove-Item -LiteralPath $temp -Recurse -Force
 }
 

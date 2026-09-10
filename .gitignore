@@ -8,3 +8,6 @@ desktop.ini
 .vs/
 *.user
 _demo/
+
+# Local assistant settings, worktrees, and verification artifacts
+.claude/
