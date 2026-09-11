@@ -12,6 +12,11 @@
     (mixed-version) install.
 #>
 
+[CmdletBinding()]
+param(
+    [switch]$NoAutostart
+)
+
 # GitHub's raw host requires TLS 1.2 on Windows PowerShell 5.1.
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
@@ -170,6 +175,16 @@ if ($problems.Count -eq 0) {
             Write-Host "$verb the clipboard watcher" -ForegroundColor Green
         }
         else { $problems += "the watcher did not start - run 'clipwarp watch' to start it manually." }
+
+        # Enable autostart on Windows startup / PC power-on by default unless -NoAutostart is passed
+        if (-not $NoAutostart) {
+            & $installedWatch -Autostart *> $null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "enabled autostart on Windows startup" -ForegroundColor Green
+            } else {
+                Write-Host "could not register startup shortcut automatically - run 'clipwarp autostart' manually." -ForegroundColor Yellow
+            }
+        }
     }
 }
 
@@ -191,6 +206,11 @@ Write-Host "clipwarp installed and the clipboard watcher is running." -Foregroun
 Write-Host "  1) snip or Ctrl+C an image anywhere (Win+Shift+S, Lightshot, browser...)"
 Write-Host "  2) in Claude Code, press Ctrl+V"
 Write-Host ""
-Write-Host "Login autostart is opt-in. Run 'clipwarp autostart' to enable it; existing shortcuts are preserved." -ForegroundColor DarkGray
+if (-not $NoAutostart) {
+    Write-Host "Autostart on Windows startup is ENABLED. The watcher will run automatically when you turn on your PC." -ForegroundColor Green
+    Write-Host "To disable autostart anytime, run: clipwarp unautostart" -ForegroundColor DarkGray
+} else {
+    Write-Host "Autostart is disabled. Run 'clipwarp autostart' to enable it on Windows startup." -ForegroundColor DarkGray
+}
 Write-Host ""
 Write-Host "Open a NEW terminal (or run '. `$PROFILE') if 'clipwarp' isn't found yet." -ForegroundColor DarkGray

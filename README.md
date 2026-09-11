@@ -57,8 +57,9 @@ The installer copies the scripts to `%USERPROFILE%\.claude\scripts` and register
 `clipwarp` command (plus a short **`cw`** alias) in the all-hosts profile of **both**
 PowerShell editions — Windows PowerShell 5.1 and PowerShell 7 — so it works whichever
 one you open. Idempotent; re-run any time to update. After a successful install,
-the clipboard watcher starts immediately for the current session. Login autostart
-is opt-in via `clipwarp autostart`; updates preserve any existing login shortcut. Open a **new** terminal afterwards (or run `. $PROFILE`) so
+the clipboard watcher starts immediately and autostart on Windows startup is enabled
+automatically (so it runs whenever you turn on your PC). To disable autostart anytime,
+run `clipwarp unautostart`. Open a **new** terminal afterwards (or run `. $PROFILE`) so
 the command is found.
 
 > No admin rights, no services, no dependencies — plain PowerShell and .NET classes
@@ -69,8 +70,9 @@ the command is found.
 ### Automatic (recommended) — plain `Ctrl+C` → `Ctrl+V`
 
 ```powershell
-clipwarp watch       # start it again if you previously ran `clipwarp stop`
-clipwarp autostart   # optional: also start it at every login
+clipwarp watch         # start it again if you previously ran `clipwarp stop`
+clipwarp unautostart   # optional: disable autostart on Windows startup
+clipwarp autostart     # re-enable autostart on Windows startup
 ```
 
 While the watcher runs, **every image that lands on the clipboard is converted

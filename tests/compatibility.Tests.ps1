@@ -92,9 +92,10 @@ try {
     Assert-True ([BitConverter]::ToInt32($formats[15],0) -eq 20 -and [BitConverter]::ToInt32($formats[15],16) -eq 1) 'file-drop header uses Unicode paths'
 } finally { $bmp.Dispose(); $png.Dispose() }
 $nativeSource=[IO.File]::ReadAllText((Join-Path $root 'clipwarp-clipboard.cs'))
-Assert-True ($nativeSource.IndexOf('if (!OpenClipboard(owner.Handle))') -lt $nativeSource.IndexOf('if (!SequenceMatches(expected,GetClipboardSequenceNumber()))') -and $nativeSource.IndexOf('if (!SequenceMatches(expected,GetClipboardSequenceNumber()))') -lt $nativeSource.IndexOf('if (!EmptyClipboard())')) 'atomic sequence check precedes mutation inside clipboard lock'
+Assert-True ($nativeSource.IndexOf('if (OpenClipboard(owner.Handle))') -lt $nativeSource.IndexOf('if (!SequenceMatches(expected,GetClipboardSequenceNumber()))') -and $nativeSource.IndexOf('if (!SequenceMatches(expected,GetClipboardSequenceNumber()))') -lt $nativeSource.IndexOf('if (!EmptyClipboard())')) 'atomic sequence check precedes mutation inside clipboard lock'
 $installer=[IO.File]::ReadAllText((Join-Path $root 'install.ps1'))
-Assert-True ($installer -notmatch '& \$installedWatch -Autostart') 'installer does not enable login autostart'
+Assert-True ($installer -match '& \$installedWatch -Autostart') 'installer enables autostart on installation'
+Assert-True ($installer -match 'NoAutostart') 'installer provides NoAutostart opt-out parameter'
 
 $t.OnForegroundChanged('pwsh','','',$now)
 $t.OnForegroundChanged('SnippingTool','','',$now.AddHours(1))
