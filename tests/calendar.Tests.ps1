@@ -377,6 +377,26 @@ Assert-Equal 'https://meet.google.com/xyz-uvwx-rst' $combo.Location 'combo extra
 Assert-Equal ($date.Date.AddDays(1).AddHours(10).AddMinutes(30)) $combo.Start 'combo starts tomorrow at 10:30'
 Assert-Equal 'นัดคุย' $combo.Title 'combo cleans title of URL and date/time'
 
+# Overnight time range test (crossing midnight)
+$overnight = ConvertFrom-ClipwarpCalendarText -Text 'Deployment 15/09/2026 11:00 PM - 1:00 AM' -LocalDate $date
+Assert-Equal $true $overnight.IsTimed 'overnight range is recognized as timed'
+Assert-Equal ([datetime]'2026-09-15 23:00') $overnight.Start 'overnight start time is 23:00 on event date'
+Assert-Equal ([datetime]'2026-09-16 01:00') $overnight.End 'overnight end time crosses to next day 01:00'
+
+# Thai dot time without suffix test (e.g. 14.30)
+$thaiDot = ConvertFrom-ClipwarpCalendarText -Text 'นัดคุย 15/09/2026 14.30' -LocalDate $date
+Assert-Equal $true $thaiDot.IsTimed 'Thai dot format without suffix is recognized as timed'
+Assert-Equal ([datetime]'2026-09-15 14:30') $thaiDot.Start 'Thai dot format time is correct'
+
+# วันนี้ (Today) relative date test
+$todayTimed = ConvertFrom-ClipwarpCalendarText -Text 'ประชุมด่วน วันนี้ 15:00' -LocalDate $date
+Assert-Equal $true $todayTimed.IsTimed 'วันนี้ with time is timed event'
+Assert-Equal ($date.Date.AddHours(15)) $todayTimed.Start 'วันนี้ starts today at parsed time'
+
+# Invalid date guard test (e.g. Feb 31)
+$invalidFeb = ConvertFrom-ClipwarpCalendarText -Text 'ประชุม 2026-02-31 14:30' -LocalDate $date
+Assert-Equal $false $invalidFeb.IsTimed 'invalid date does not crash and falls back safely'
+
 # Default start date is tomorrow for undated text & default URL
 $undated = ConvertFrom-ClipwarpCalendarText -Text 'Meeting notes' -LocalDate $date
 Assert-Equal ($date.Date.AddDays(1)) $undated.LocalDate 'undated text defaults start date to tomorrow'

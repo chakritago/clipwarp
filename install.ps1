@@ -43,6 +43,18 @@ function Get-FileEncoding([string]$Path) {
     }
 }
 
+# --- 0. Stop any running watcher BEFORE file changes to avoid file-in-use locks. ---
+$installedWatch = Join-Path $scriptsDir 'clipwarp-watch.ps1'
+$watcherWasRunning = $false
+if (Test-Path -LiteralPath $installedWatch) {
+    & $installedWatch -Status *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $watcherWasRunning = $true
+        & $installedWatch -Stop *> $null
+        Write-Host "stopped running watcher before file update" -ForegroundColor DarkGray
+    }
+}
+
 # --- 1. Install the scripts: stage all to temp, then swap in with backup/rollback. ---
 $files    = @('clipwarp.ps1', 'clipwarp-watch.ps1', 'clipwarp-calendar.psm1', 'clipwarp-calendar-popup.ps1', 'clipwarp-support.psm1', 'clipwarp-clipboard.cs', 'uninstall.ps1')
 $staged   = @{}

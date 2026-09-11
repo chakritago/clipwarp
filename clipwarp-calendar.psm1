@@ -49,6 +49,12 @@ function Get-ClipwarpCalendarTimeZone {
         'Central Europe Standard Time'='Europe/Budapest'; 'Romance Standard Time'='Europe/Paris'; 'India Standard Time'='Asia/Kolkata'
         'SE Asia Standard Time'='Asia/Bangkok'; 'China Standard Time'='Asia/Shanghai'; 'Tokyo Standard Time'='Asia/Tokyo'; 'AUS Eastern Standard Time'='Australia/Sydney'
         'New Zealand Standard Time'='Pacific/Auckland'
+        'Singapore Standard Time'='Asia/Singapore'; 'Taipei Standard Time'='Asia/Taipei'; 'Korea Standard Time'='Asia/Seoul'
+        'Western Brazilian Standard Time'='America/Rio_Branco'; 'Central Brazilian Standard Time'='America/Cuiaba'; 'E. South America Standard Time'='America/Sao_Paulo'
+        'Greenwich Standard Time'='Atlantic/Reykjavik'; 'W. Central Africa Standard Time'='Africa/Lagos'; 'South Africa Standard Time'='Africa/Johannesburg'
+        'E. Europe Standard Time'='Europe/Chisinau'; 'FLE Standard Time'='Europe/Kyiv'; 'Middle East Standard Time'='Asia/Beirut'
+        'Arabic Standard Time'='Asia/Baghdad'; 'Arab Standard Time'='Asia/Riyadh'; 'Russian Standard Time'='Europe/Moscow'
+        'Hawaiian Standard Time'='Pacific/Honolulu'; 'Alaskan Standard Time'='America/Anchorage'
     }
     if ($map.ContainsKey($TimeZoneId)) { $map[$TimeZoneId] } else { $null }
 }
@@ -84,10 +90,30 @@ function New-ClipwarpCalendarUrl {
         if ($ctz) { $suffix = '&ctz=' + [Uri]::EscapeDataString($ctz) }
     }
     $safeDetails = $payload.Details
-    while ($safeDetails -and ($baseUrl.Length + 9 + [Uri]::EscapeDataString($safeDetails).Length + $suffix.Length) -gt 1900) {
-        $remove = 1
-        if ($safeDetails.Length -gt 1 -and [char]::IsLowSurrogate($safeDetails[$safeDetails.Length - 1]) -and [char]::IsHighSurrogate($safeDetails[$safeDetails.Length - 2])) { $remove = 2 }
-        $safeDetails = $safeDetails.Substring(0,$safeDetails.Length-$remove).TrimEnd()
+    $overhead = $baseUrl.Length + 9 + $suffix.Length
+    if ($safeDetails -and ($overhead + [Uri]::EscapeDataString($safeDetails).Length) -gt 1900) {
+        # Fast binary-search truncation with surrogate pair protection to avoid O(N^2) re-escaping
+        $low = 0
+        $high = $safeDetails.Length
+        $best = ''
+        while ($low -le $high) {
+            $mid = [int][Math]::Floor(($low + $high) / 2.0)
+            $midCandidate = $mid
+            if ($midCandidate -gt 0 -and $midCandidate -lt $safeDetails.Length) {
+                if ([char]::IsHighSurrogate($safeDetails[$midCandidate - 1])) {
+                    $midCandidate--
+                }
+            }
+            $candidate = $safeDetails.Substring(0, $midCandidate).TrimEnd()
+            $candEncLen = if ($candidate) { [Uri]::EscapeDataString($candidate).Length } else { 0 }
+            if (($overhead + $candEncLen) -le 1900) {
+                $best = $candidate
+                $low = $mid + 1
+            } else {
+                $high = $mid - 1
+            }
+        }
+        $safeDetails = $best
     }
     $baseUrl + $(if($safeDetails){'&details='+[Uri]::EscapeDataString($safeDetails)}else{''}) + $suffix
 }
@@ -111,21 +137,42 @@ function ConvertFrom-ClipwarpCalendarText {
     $hasExplicitDate = $false
     $parsedDate = $LocalDate.Date
 
-    # 2a. Tomorrow / พรุ่งนี้
-    $tmrwMatch = [regex]::Match($work, '(?:พรุ่งนี้|\b(?:tomorrow|tmrw)\b)', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
-    if ($tmrwMatch.Success) {
+    # 2a. Today / วันนี้
+    $todayMatch = [regex]::Match($work, '(?:วันนี้|\b(?:today|tonight)\b)', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($todayMatch.Success) {
         $hasExplicitDate = $true
-        $parsedDate = $LocalDate.Date.AddDays(1)
-        $work = $work.Remove($tmrwMatch.Index, $tmrwMatch.Length)
+        $parsedDate = $LocalDate.Date
+        $work = $work.Remove($todayMatch.Index, $todayMatch.Length)
     }
 
-    # 2b. ISO Date: YYYY-MM-DD
+    # 2b. Tomorrow / พรุ่งนี้
+    if (-not $hasExplicitDate) {
+        $tmrwMatch = [regex]::Match($work, '(?:พรุ่งนี้|\b(?:tomorrow|tmrw)\b)', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($tmrwMatch.Success) {
+            $hasExplicitDate = $true
+            $parsedDate = $LocalDate.Date.AddDays(1)
+            $work = $work.Remove($tmrwMatch.Index, $tmrwMatch.Length)
+        }
+    }
+
+    # 2c. ISO Date: YYYY-MM-DD
     if (-not $hasExplicitDate) {
         $isoMatch = [regex]::Match($work, '(?<!\d)(?<year>\d{4})-(?<month>0[1-9]|1[0-2])-(?<day>0[1-9]|[12]\d|3[01])(?!\d)')
         if ($isoMatch.Success) {
-            $hasExplicitDate = $true
-            $parsedDate = [datetime]::new([int]$isoMatch.Groups['year'].Value, [int]$isoMatch.Groups['month'].Value, [int]$isoMatch.Groups['day'].Value, 0, 0, 0, [DateTimeKind]::Local)
-            $work = $work.Remove($isoMatch.Index, $isoMatch.Length)
+            $iYear = [int]$isoMatch.Groups['year'].Value
+            $iMonth = [int]$isoMatch.Groups['month'].Value
+            $iDay = [int]$isoMatch.Groups['day'].Value
+            $maxDays = [datetime]::DaysInMonth($iYear, $iMonth)
+            if ($iDay -le $maxDays) {
+                try {
+                    $parsedDate = [datetime]::new($iYear, $iMonth, $iDay, 0, 0, 0, [DateTimeKind]::Local)
+                    $hasExplicitDate = $true
+                    $work = $work.Remove($isoMatch.Index, $isoMatch.Length)
+                } catch { }
+            } else {
+                # Invalid calendar date (e.g. Feb 31) - leave as unparsed title text
+                return [pscustomobject]@{ Title=$trimmed; OriginalText=$Text; IsTimed=$false; Start=$null; End=$null; LocalDate=$LocalDate.Date; Location=$location }
+            }
         }
     }
 
@@ -202,6 +249,10 @@ function ConvertFrom-ClipwarpCalendarText {
         $targetDate = if ($hasExplicitDate) { $parsedDate } else { $LocalDate.Date.AddDays(1) }
         $startCandidate = $targetDate.AddHours($sh).AddMinutes($sm)
         $endCandidate = $targetDate.AddHours($eh).AddMinutes($em)
+        if ($endCandidate -le $startCandidate -and $sh -ge 18 -and $eh -le 6) {
+            # Overnight event crossing midnight (e.g. 11:00 PM - 1:00 AM)
+            $endCandidate = $endCandidate.AddDays(1)
+        }
         if ($endCandidate -gt $startCandidate) {
             $hasTime = $true
             $start = $startCandidate
@@ -224,6 +275,10 @@ function ConvertFrom-ClipwarpCalendarText {
             $targetDate = if ($hasExplicitDate) { $parsedDate } else { $LocalDate.Date.AddDays(1) }
             $startCandidate = $targetDate.AddHours($sh).AddMinutes($sm)
             $endCandidate = $targetDate.AddHours($eh).AddMinutes($em)
+            if ($endCandidate -le $startCandidate -and $sh -ge 18 -and $eh -le 6) {
+                # Overnight event crossing midnight (e.g. 23:00 - 01:00)
+                $endCandidate = $endCandidate.AddDays(1)
+            }
             if ($endCandidate -gt $startCandidate) {
                 $hasTime = $true
                 $start = $startCandidate
@@ -252,9 +307,9 @@ function ConvertFrom-ClipwarpCalendarText {
         }
     }
 
-    # 3d. 24-hour Single: e.g. 14:30, 14:30 น., 14.30 น.
+    # 3d. 24-hour Single: e.g. 14:30, 14:30 น., 14.30 น., 14.30
     if (-not $hasTime) {
-        $t24sPattern = '(?<!\d)(?:(?<hour>[01]\d|2[0-3]):(?<min>[0-5]\d)(?:\s*น\.?)?|(?<hour>[01]\d|2[0-3])\.(?<min>[0-5]\d)\s*น\.?)(?!\d)'
+        $t24sPattern = '(?<!\d)(?:(?<hour>[01]\d|2[0-3]):(?<min>[0-5]\d)(?:\s*น\.?)?|(?<hour>[01]\d|2[0-3])\.(?<min>[0-5]\d)(?:\s*น\.?)?)(?!\d)'
         $t24s = [regex]::Match($work, $t24sPattern)
         if ($t24s.Success) {
             $h = [int]$t24s.Groups['hour'].Value
@@ -414,11 +469,20 @@ public static class ClipwarpChatGptNative {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+
+    public const int DWMWA_CLOAKED = 14;
 
     public static IntPtr FindChatGptWindow() {
         IntPtr found = IntPtr.Zero;
         EnumWindows((hWnd, lParam) => {
             if (IsWindowVisible(hWnd)) {
+                int cloaked = 0;
+                try {
+                    DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, out cloaked, 4);
+                } catch { }
+                if (cloaked != 0) return true;
+
                 StringBuilder sb = new StringBuilder(512);
                 if (GetWindowText(hWnd, sb, 512) > 0) {
                     string title = sb.ToString();
@@ -439,17 +503,20 @@ public static class ClipwarpChatGptNative {
         uint processId;
         uint targetThread = GetWindowThreadProcessId(hWnd, out processId);
         uint currentThread = GetCurrentThreadId();
+        bool attached = false;
 
-        if (currentThread != targetThread) {
-            AttachThreadInput(currentThread, targetThread, true);
-        }
+        try {
+            if (currentThread != targetThread && targetThread != 0) {
+                attached = AttachThreadInput(currentThread, targetThread, true);
+            }
 
-        ShowWindow(hWnd, 9);
-        BringWindowToTop(hWnd);
-        SetForegroundWindow(hWnd);
-
-        if (currentThread != targetThread) {
-            AttachThreadInput(currentThread, targetThread, false);
+            ShowWindow(hWnd, 9);
+            BringWindowToTop(hWnd);
+            SetForegroundWindow(hWnd);
+        } finally {
+            if (attached) {
+                AttachThreadInput(currentThread, targetThread, false);
+            }
         }
     }
 
@@ -462,7 +529,7 @@ public static class ClipwarpChatGptNative {
         System.Threading.Thread.Sleep(400);
 
         keybd_event(0x0D, 0, 0, UIntPtr.Zero);
-        keybd_event(0x0D, 0, 2, UIntPtr.Zero);
+        keybd_event(0x0D, 2, 2, UIntPtr.Zero);
     }
 }
 '@
@@ -499,9 +566,25 @@ function Find-ClipwarpChatGptPage {
 
     $hWnd = [ClipwarpChatGptNative]::FindChatGptWindow()
     if ($hWnd -ne [IntPtr]::Zero) {
+        $procName = 'browser'
+        try {
+            $pidVal = 0
+            [ClipwarpChatGptNative]::GetWindowThreadProcessId($hWnd, [ref]$pidVal)
+            if ($pidVal -gt 0) {
+                $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
+                if ($proc) {
+                    $procName = $proc.ProcessName.ToLowerInvariant()
+                    # Re-verify that the process is a recognized browser or official ChatGPT app
+                    if ($procName -notmatch '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium|chatgpt)$') {
+                        return $null
+                    }
+                }
+            }
+        } catch { }
+
         return [pscustomobject]@{
             MainWindowHandle = $hWnd
-            ProcessName = 'browser'
+            ProcessName = $procName
             MainWindowTitle = 'ChatGPT'
         }
     }

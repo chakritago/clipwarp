@@ -356,6 +356,13 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
                 Set-ClipboardChecked { [void][ClipwarpTransport.ClipboardWriter]::Publish($do, $seq0) }
             }
             elseif ($PublicationMode -eq 'dual') {
+                if (-not $Img -and -not $PngBytes) {
+                    if ($DropFile -and (Test-Path -LiteralPath $DropFile -PathType Leaf)) {
+                        try { $PngBytes = [System.IO.File]::ReadAllBytes($DropFile) } catch {}
+                    } elseif ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+                        try { $PngBytes = [System.IO.File]::ReadAllBytes($Path) } catch {}
+                    }
+                }
                 $do = New-Object System.Windows.Forms.DataObject
                 $do.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $Path)
                 if ($Path) { $do.SetData('ClipwarpManaged', $Path) }
@@ -387,7 +394,9 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
         if (-not (Test-Path -LiteralPath $OutDir)) {
             New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
         }
-        Join-Path $OutDir ('clip-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.png')
+        $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+        $randHex = [guid]::NewGuid().ToString('N').Substring(0, 4)
+        Join-Path $OutDir ("clip-${timestamp}-${randHex}.png")
     }
 
     # Load an image from bytes into an INDEPENDENT Bitmap. Image.FromStream keeps a
@@ -532,6 +541,7 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
 
                 if ($biBitCount -eq 32 -and $canonicalBgra -and $w -gt 0 -and $h -ne 0) {
                     # Manual decode: canonical BGRA rows, 4-byte aligned by construction.
+                    if ($w -gt 32768 -or [math]::Abs($h) -gt 32768) { continue }
                     $absH = [math]::Abs($h)
                     $stride = $w * 4
                     $need = $srcOff + $stride * $absH
@@ -578,6 +588,7 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
                 elseif ($biBitCount -eq 32 -and $biCompression -eq 3 -and $w -gt 0 -and $h -ne 0) {
                     # Non-canonical BITFIELDS masks: GDI+ can't parse
                     # BITMAPV5HEADER+BITFIELDS, so decode the channels ourselves.
+                    if ($w -gt 32768 -or [math]::Abs($h) -gt 32768) { continue }
                     $absH = [math]::Abs($h)
                     $stride = $w * 4
                     $need = $srcOff + $stride * $absH
@@ -694,35 +705,50 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
 }
 
 $rs = [runspacefactory]::CreateRunspace()
-$rs.ApartmentState = 'STA'
-$rs.ThreadOptions = 'ReuseThread'
-$rs.Open()
-$ps = [powershell]::Create()
-$ps.Runspace = $rs
-[void]$ps.AddScript($work).AddArgument($OutDir).AddArgument([bool]$KeepImage).AddArgument([string]$resolvedMode).AddArgument($PSScriptRoot)
+$invoked = @()
 $changed  = $false
 $writeErr = $null
-try { $invoked = $ps.Invoke() }
-catch {
-    # Some hosts do surface a terminating error here; classify it too.
-    if ($_.Exception.Message -match 'clipboard-changed') { $changed = $true }
-    elseif (-not $writeErr) { $writeErr = $_.Exception.Message }
-    $invoked = @()
+try {
+    $rs.ApartmentState = 'STA'
+    $rs.ThreadOptions = 'ReuseThread'
+    $rs.Open()
+    $ps = [powershell]::Create()
+    try {
+        $ps.Runspace = $rs
+        [void]$ps.AddScript($work).AddArgument($OutDir).AddArgument([bool]$KeepImage).AddArgument([string]$resolvedMode).AddArgument($PSScriptRoot)
+        try { $invoked = $ps.Invoke() }
+        catch {
+            # Some hosts do surface a terminating error here; classify it too.
+            if ($_.Exception.Message -match 'clipboard-changed') { $changed = $true }
+            elseif (-not $writeErr) { $writeErr = $_.Exception.Message }
+            $invoked = @()
+        }
+        finally {
+            # In the PowerShell SDK a terminating error inside Invoke() usually lands in
+            # Streams.Error rather than the host try/catch above (verified on PS 7.4:
+            # Invoke returns 0 objects, HadErrors=$true, catch not entered). Read and
+            # classify it BEFORE disposing, or 'clipboard-changed' / a real write failure
+            # would be lost and misreported as "no image".
+            try {
+                foreach ($e in @($ps.Streams.Error)) {
+                    $m = "$e"
+                    if ($m -match 'clipboard-changed') { $changed = $true }
+                    elseif ($m -and -not $writeErr)    { $writeErr = $m }
+                }
+            } catch {}
+        }
+    }
+    finally {
+        if ($ps) { $ps.Dispose() }
+    }
 }
 finally {
-    # In the PowerShell SDK a terminating error inside Invoke() usually lands in
-    # Streams.Error rather than the host try/catch above (verified on PS 7.4:
-    # Invoke returns 0 objects, HadErrors=$true, catch not entered). Read and
-    # classify it BEFORE disposing, or 'clipboard-changed' / a real write failure
-    # would be lost and misreported as "no image".
-    try {
-        foreach ($e in @($ps.Streams.Error)) {
-            $m = "$e"
-            if ($m -match 'clipboard-changed') { $changed = $true }
-            elseif ($m -and -not $writeErr)    { $writeErr = $m }
+    if ($rs) {
+        if ($rs.RunspaceStateInfo.State -eq 'Opened') {
+            try { $rs.Close() } catch { }
         }
-    } catch {}
-    $ps.Dispose(); $rs.Close(); $rs.Dispose()
+        $rs.Dispose()
+    }
 }
 
 $r = $invoked | Where-Object { $_ -is [pscustomobject] } | Select-Object -Last 1

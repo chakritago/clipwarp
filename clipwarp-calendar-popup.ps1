@@ -90,6 +90,12 @@ if ($Kind -eq 'Text') {
 }
 $location = Get-ClipwarpPopupLocation -PointerX $pointer.X -PointerY $pointer.Y -PopupWidth $metrics.Width -PopupHeight $metrics.Height -WorkingLeft $area.Left -WorkingTop $area.Top -WorkingRight $area.Right -WorkingBottom $area.Bottom -Gap $metrics.Gap
 
+$isDark = $false
+try {
+    $reg = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -ErrorAction SilentlyContinue
+    if ($null -ne $reg -and $reg.AppsUseLightTheme -eq 0) { $isDark = $true }
+} catch { }
+
 $form = New-Object Windows.Forms.Form
 $form.Text = if ($isCommand) { 'Run in PowerShell' } else { 'Send to Google Calendar' }
 $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
@@ -102,7 +108,7 @@ $form.ShowIcon = $false
 $form.AutoScaleMode = [Windows.Forms.AutoScaleMode]::None
 $form.ClientSize = New-Object Drawing.Size $metrics.Width, $metrics.Height
 $form.Location = New-Object Drawing.Point $location.X, $location.Y
-$form.BackColor = [Drawing.Color]::FromArgb(248, 250, 252)
+$form.BackColor = if ($isDark) { [Drawing.Color]::FromArgb(30, 41, 59) } else { [Drawing.Color]::FromArgb(248, 250, 252) }
 $form.Font = New-Object Drawing.Font 'Segoe UI', 9
 $form.KeyPreview = $true
 $form.AccessibleName = if ($isCommand) { 'Run command in PowerShell' } else { 'Send clipboard data to Google Calendar' }
@@ -124,7 +130,7 @@ $heading.AutoSize = $false
 $heading.Location = New-Object Drawing.Point $metrics.Padding, $metrics.HeadingTop
 $heading.Size = New-Object Drawing.Size ($countdownLeft - $metrics.Padding - [int][Math]::Round(4 * $scale)), $metrics.HeadingHeight
 $heading.Font = New-Object Drawing.Font 'Segoe UI Semibold', 12
-$heading.ForeColor = [Drawing.Color]::FromArgb(30, 41, 59)
+$heading.ForeColor = if ($isDark) { [Drawing.Color]::FromArgb(241, 245, 249) } else { [Drawing.Color]::FromArgb(30, 41, 59) }
 $heading.Text = if ($isCommand) { 'Run in PowerShell' } else { 'Add to Google Calendar' }
 $heading.AccessibleName = $heading.Text
 $form.Controls.Add($heading)
@@ -134,7 +140,7 @@ $countdown.AutoSize = $false
 $countdown.Location = New-Object Drawing.Point $countdownLeft, $metrics.HeadingTop
 $countdown.Size = New-Object Drawing.Size $countdownWidth, $metrics.HeadingHeight
 $countdown.Font = New-Object Drawing.Font 'Segoe UI', 9
-$countdown.ForeColor = [Drawing.Color]::FromArgb(100, 116, 139)
+$countdown.ForeColor = if ($isDark) { [Drawing.Color]::FromArgb(148, 163, 184) } else { [Drawing.Color]::FromArgb(100, 116, 139) }
 $countdown.TextAlign = [Drawing.ContentAlignment]::MiddleRight
 $countdown.Text = "${script:remainingSeconds}s"
 $countdown.AccessibleName = "Auto close in ${script:remainingSeconds} seconds"
@@ -146,7 +152,7 @@ $close.Size = New-Object Drawing.Size $metrics.CloseSize, $metrics.CloseSize
 $close.FlatStyle = [Windows.Forms.FlatStyle]::Flat
 $close.FlatAppearance.BorderSize = 0
 $close.BackColor = $form.BackColor
-$close.ForeColor = [Drawing.Color]::FromArgb(100, 116, 139)
+$close.ForeColor = if ($isDark) { [Drawing.Color]::FromArgb(148, 163, 184) } else { [Drawing.Color]::FromArgb(100, 116, 139) }
 $close.Font = New-Object Drawing.Font 'Segoe UI', 11
 $close.Text = [char]0x00D7
 $close.TabIndex = 2
@@ -158,7 +164,7 @@ $message = New-Object Windows.Forms.Label
 $message.AutoSize = $false
 $message.Location = New-Object Drawing.Point $metrics.Padding, $metrics.MessageTop
 $message.Size = New-Object Drawing.Size $contentWidth, $metrics.MessageHeight
-$message.ForeColor = [Drawing.Color]::FromArgb(71, 85, 105)
+$message.ForeColor = if ($isDark) { [Drawing.Color]::FromArgb(203, 213, 225) } else { [Drawing.Color]::FromArgb(71, 85, 105) }
 if ($isCommand) { $message.Font = New-Object Drawing.Font 'Consolas', 9 }
 $message.Text = $preview
 $message.AccessibleName = $message.Text
@@ -318,6 +324,44 @@ $timer.Add_Tick({
         $countdown.Text = "${script:remainingSeconds}s"
     }
 })
+
+$pauseCountdown = {
+    try {
+        $timer.Stop()
+        $countdown.Text = "paused"
+    } catch { }
+}
+$resumeCountdown = {
+    try {
+        if ($script:remainingSeconds -gt 0) {
+            $countdown.Text = "${script:remainingSeconds}s"
+            $timer.Start()
+        }
+    } catch { }
+}
+
+$form.Add_MouseEnter($pauseCountdown)
+$form.Add_MouseLeave($resumeCountdown)
+foreach ($ctrl in @($heading, $countdown, $close, $message, $accent)) {
+    if ($ctrl) {
+        $ctrl.Add_MouseEnter($pauseCountdown)
+        $ctrl.Add_MouseLeave($resumeCountdown)
+    }
+}
+if ($Kind -eq 'Text') {
+    foreach ($ctrl in @($runButton, $calButton, $chatGptButton, $handoffHint)) {
+        if ($ctrl) {
+            $ctrl.Add_MouseEnter($pauseCountdown)
+            $ctrl.Add_MouseLeave($resumeCountdown)
+        }
+    }
+} else {
+    if ($button) {
+        $button.Add_MouseEnter($pauseCountdown)
+        $button.Add_MouseLeave($resumeCountdown)
+    }
+}
+
 $form.Add_Shown({
     if ($Kind -eq 'Text') {
         $calButton.Focus()

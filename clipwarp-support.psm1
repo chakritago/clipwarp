@@ -18,17 +18,45 @@ function Get-ClipwarpCalendarEnabled {
 function Get-ClipwarpConfig {
     param([string]$ConfigPath = (Get-ClipwarpDefaultConfigPath))
     if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
-        try { return Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch {}
+        for ($i = 0; $i -lt 5; $i++) {
+            try {
+                $raw = Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction Stop
+                if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                    return $raw | ConvertFrom-Json -ErrorAction Stop
+                }
+            } catch {
+                Start-Sleep -Milliseconds (20 * ($i + 1))
+            }
+        }
     }
     [pscustomobject]@{ version=1; calendar=[pscustomobject]@{} }
 }
 
 function Save-ClipwarpConfig($Config, [string]$ConfigPath) {
-    $dir = Split-Path -Parent $ConfigPath
-    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
-    $tmp = Join-Path $dir ('.clipwarp-config-' + [guid]::NewGuid().ToString('N') + '.tmp')
-    try { [IO.File]::WriteAllText($tmp, ($Config | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false))); Move-Item -LiteralPath $tmp -Destination $ConfigPath -Force -ErrorAction Stop }
-    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    $mutex = New-Object System.Threading.Mutex($false, 'clipwarp-config-lock')
+    $hasLock = $false
+    try {
+        try {
+            $hasLock = $mutex.WaitOne(3000, $false)
+        } catch [System.Threading.AbandonedMutexException] {
+            $hasLock = $true
+        }
+        $dir = Split-Path -Parent $ConfigPath
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+        $tmp = Join-Path $dir ('.clipwarp-config-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        try {
+            [IO.File]::WriteAllText($tmp, ($Config | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
+            Move-Item -LiteralPath $tmp -Destination $ConfigPath -Force -ErrorAction Stop
+        }
+        finally {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+    finally {
+        if ($hasLock) {
+            try { $mutex.ReleaseMutex() } catch { }
+        }
+    }
 }
 
 function Set-ClipwarpCalendarProperty([string]$Name, $Value, [string]$ConfigPath) {

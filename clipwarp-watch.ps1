@@ -173,7 +173,15 @@ if (-not $Daemon) {
 # ---------------- daemon mode ----------------
 
 $mutex = New-Object System.Threading.Mutex($false, 'clipwarp-watch-singleton')
-if (-not $mutex.WaitOne(0)) { exit 1 }   # another daemon already owns the clipboard watch
+$ownsMutex = $false
+try {
+    $ownsMutex = $mutex.WaitOne(0, $false)
+}
+catch [System.Threading.AbandonedMutexException] {
+    # If a prior daemon was killed abruptly, take ownership of the abandoned mutex.
+    $ownsMutex = $true
+}
+if (-not $ownsMutex) { exit 1 }   # another daemon already owns the clipboard watch
 
 New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null
 Set-Content -LiteralPath $pidFile -Value $PID
@@ -976,11 +984,22 @@ else {
 }
 
 $watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $configPath, $logFile)
+
+$cleanupScript = {
+    try {
+        if ($watcher) { $watcher.Shutdown() }
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+        if ($ownsMutex) {
+            try { $mutex.ReleaseMutex() } catch { }
+        }
+    } catch { }
+}
+
+[System.AppDomain]::CurrentDomain.add_ProcessExit({ & $cleanupScript })
+
 try {
     [System.Windows.Forms.Application]::Run()   # message pump; blocks until the process is killed
 }
 finally {
-    $watcher.Shutdown()
-    Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
-    $mutex.ReleaseMutex()
+    & $cleanupScript
 }

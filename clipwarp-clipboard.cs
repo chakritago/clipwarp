@@ -76,7 +76,15 @@ namespace ClipwarpTransport {
                 var owner = new NativeWindow();
                 owner.CreateHandle(new CreateParams());
                 try {
-                    if (!OpenClipboard(owner.Handle)) throw new InvalidOperationException("Clipboard busy");
+                    bool opened = false;
+                    for (int retry = 0; retry < 10; retry++) {
+                        if (OpenClipboard(owner.Handle)) {
+                            opened = true;
+                            break;
+                        }
+                        System.Threading.Thread.Sleep(20 * (retry + 1));
+                    }
+                    if (!opened) throw new InvalidOperationException("Clipboard busy");
                     try {
                         if (!SequenceMatches(expected,GetClipboardSequenceNumber())) throw new InvalidOperationException("clipboard-changed");
                         if (!EmptyClipboard()) throw new InvalidOperationException("EmptyClipboard failed");
