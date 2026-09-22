@@ -86,7 +86,7 @@ $metrics = Get-ClipwarpPopupMetrics -Dpi ([ClipwarpPopupNative]::GetDpi($pointer
 $contentWidth = $metrics.Width - (2 * $metrics.Padding)
 if ($Kind -eq 'Text') {
     # Preserve the existing action row; add a full-width deliberate handoff below it.
-    $metrics.Height += [int][Math]::Round(70 * ($metrics.Width / 400.0))
+    $metrics.Height += [int][Math]::Round(112 * ($metrics.Width / 400.0))
 }
 $location = Get-ClipwarpPopupLocation -PointerX $pointer.X -PointerY $pointer.Y -PopupWidth $metrics.Width -PopupHeight $metrics.Height -WorkingLeft $area.Left -WorkingTop $area.Top -WorkingRight $area.Right -WorkingBottom $area.Bottom -Gap $metrics.Gap
 
@@ -239,10 +239,32 @@ if ($Kind -eq 'Text') {
     $close.TabIndex = 3
     $form.Controls.Add($chatGptButton)
 
+    $geminiButton = New-Object Windows.Forms.Button
+    $geminiButton.Location = New-Object Drawing.Point $metrics.Padding, ($chatGptButton.Bottom + $btnGap)
+    $geminiButton.Size = New-Object Drawing.Size $contentWidth, $metrics.ButtonHeight
+    $geminiButton.Text = 'Send to Gemini Spark'
+    $geminiButton.AccessibleName = 'Send to Gemini Spark'
+    $geminiButton.AccessibleDescription = 'Sends the exact original clipboard text to Gemini Spark.'
+    $geminiButton.TabIndex = 3
+    $close.TabIndex = 4
+    $form.Controls.Add($geminiButton)
+    # Deliberate left click only; never activate through a form default or Enter.
+    $geminiButton.Add_MouseClick({
+        if ($_.Button -ne [Windows.Forms.MouseButtons]::Left) { return }
+        $geminiButton.Enabled = $false
+        if ($null -ne $timer) { $timer.Stop() }
+        $form.Hide()
+        try {
+            Start-ClipwarpGeminiSparkHandoff -Message $Title
+        } catch {
+            [void][Windows.Forms.MessageBox]::Show('Gemini Spark automatic send failed or could not be verified. Check sign-in, accessibility, and the browser draft before sending again. Send was not retried.', 'Clipwarp - Gemini Spark', [Windows.Forms.MessageBoxButtons]::OK, [Windows.Forms.MessageBoxIcon]::Error)
+        } finally { $form.Close() }
+    })
+
     $handoffHint = New-Object Windows.Forms.Label
-    $handoffHint.Location = New-Object Drawing.Point $metrics.Padding, ($chatGptButton.Bottom + [int][Math]::Round(4 * $scale))
+    $handoffHint.Location = New-Object Drawing.Point $metrics.Padding, ($geminiButton.Bottom + [int][Math]::Round(4 * $scale))
     $handoffHint.Size = New-Object Drawing.Size $contentWidth, ([int][Math]::Round(20 * $scale))
-    $handoffHint.Text = 'Automatically pastes full text and sends it in ChatGPT.'
+    $handoffHint.Text = 'Sends full text to ChatGPT or Gemini Spark.'
     $handoffHint.AccessibleName = $handoffHint.Text
     $form.Controls.Add($handoffHint)
     $chatGptButton.Add_Click({
@@ -349,7 +371,7 @@ foreach ($ctrl in @($heading, $countdown, $close, $message, $accent)) {
     }
 }
 if ($Kind -eq 'Text') {
-    foreach ($ctrl in @($runButton, $calButton, $chatGptButton, $handoffHint)) {
+    foreach ($ctrl in @($runButton, $calButton, $chatGptButton, $geminiButton, $handoffHint)) {
         if ($ctrl) {
             $ctrl.Add_MouseEnter($pauseCountdown)
             $ctrl.Add_MouseLeave($resumeCountdown)

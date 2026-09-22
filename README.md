@@ -89,6 +89,33 @@ The clipboard is rewritten as **dual format**, so nothing else breaks:
 | Claude Code / any terminal | the saved image's **path** (auto-attaches) |
 | Photoshop, Word, Discord, a browser… | the original **image** |
 
+### Send text to Gemini Spark
+
+The text popup includes **Send to Gemini Spark**. A deliberate left click copies
+the exact original text (including whitespace, line breaks, and Unicode), opens
+only `https://gemini.google.com/spark`, and attempts automatic submission using
+scoped Windows UI Automation. The button is absent from image popups and is not
+a keyboard or form-default action. Calendar, PowerShell, and ChatGPT actions remain
+available.
+
+Sign in beforehand and leave one visible Spark document with an empty composer.
+The browser must expose the exact document URL, one writable ValuePattern composer,
+and one enabled InvokePattern send button (named `Send`, `Send message`, or `Submit`).
+Unsupported accessibility providers or localized controls fail closed. Clipwarp
+checks exact text and page/control identity before invoking Send once, then polls
+for the same composer to clear. Discovery polls for up to 20 seconds and verification
+for up to 5 seconds, excluding browser accessibility call time.
+
+Login pages, existing drafts, ambiguous controls/documents, navigation, text
+normalization, and unverifiable submission show an error. Send is never retried
+automatically; inspect the browser before trying again because a failed verification
+may follow an accepted send. A pre-send failure may leave the filled draft. No text
+or local paths are placed in URLs or logs, and no API or global keyboard injection
+is used for Gemini. Clicking this button sends text to Google's service.
+
+Fake-only regression tests run through `tests/run-all.ps1` on PowerShell 5.1 and 7;
+they do not open a browser, access the real clipboard, or send messages.
+
 ### ChatGPT Web & Target Awareness
 
 When using ChatGPT on the web (e.g. in Chrome, Edge, Firefox, Brave, Vivaldi, Opera), pasting a copied image pastes the **actual image**, never a local file path.

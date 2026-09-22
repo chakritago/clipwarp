@@ -95,7 +95,7 @@ Assert-Equal '$Kind -eq ''Text''' $textBranch.Clauses[0].Item1.Extent.Text 'Chat
 $popupSource = [IO.File]::ReadAllText($popupPath)
 Assert-Equal $true ($popupSource.Contains('$chatGptButton.Text = ''Open ChatGPT && Send (Temporary)''')) 'ChatGPT button has visible label'
 Assert-Equal $true ($popupSource.Contains('$chatGptButton.AccessibleName = ''Open ChatGPT & Send (Temporary)''')) 'ChatGPT button has accessible name'
-Assert-Equal $true ($popupSource.Contains('Automatically pastes full text and sends it in ChatGPT.')) 'popup explains automatic submission'
+Assert-Equal $true ($popupSource.Contains('Sends full text to ChatGPT or Gemini Spark.')) 'popup explains automatic submission'
 Assert-Equal $false ($popupSource -match 'AcceptButton\s*=\s*\$chatGptButton') 'handoff is not the form default action'
 # Execute the actual extracted handler with a fake form and injected helper wrapper.
 & {
