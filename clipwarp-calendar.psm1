@@ -442,7 +442,9 @@ function Set-ClipwarpClipboardText {
         Add-Type -AssemblyName System.Windows.Forms
         if ([Windows.Forms.Clipboard]::ContainsText()) {
             $current = [Windows.Forms.Clipboard]::GetText()
-            if ([string]::Equals($current, $Value, [StringComparison]::Ordinal)) {
+            if ([string]::Equals($current, $Value, [StringComparison]::Ordinal) -or
+                [string]::Equals($current.Trim(), $Value.Trim(), [StringComparison]::Ordinal) -or
+                [string]::Equals(($current -replace "`r`n","`n"), ($Value -replace "`r`n","`n"), [StringComparison]::Ordinal)) {
                 return
             }
         }
@@ -500,36 +502,46 @@ public static class ClipwarpChatGptNative {
     public static void ActivateWindow(IntPtr hWnd) {
         if (hWnd == IntPtr.Zero) return;
 
-        uint processId;
-        uint targetThread = GetWindowThreadProcessId(hWnd, out processId);
-        uint currentThread = GetCurrentThreadId();
-        bool attached = false;
+        IntPtr fgWnd = GetForegroundWindow();
+        uint fgPid;
+        uint fgThread = GetWindowThreadProcessId(fgWnd, out fgPid);
+        uint targetPid;
+        uint targetThread = GetWindowThreadProcessId(hWnd, out targetPid);
+        uint curThread = GetCurrentThreadId();
+
+        bool attachedFg = false;
+        bool attachedTarget = false;
 
         try {
-            if (currentThread != targetThread && targetThread != 0) {
-                attached = AttachThreadInput(currentThread, targetThread, true);
+            if (fgThread != 0 && fgThread != curThread) {
+                attachedFg = AttachThreadInput(curThread, fgThread, true);
             }
+            if (targetThread != 0 && targetThread != curThread) {
+                attachedTarget = AttachThreadInput(curThread, targetThread, true);
+            }
+
+            keybd_event(0x12, 0, 0, UIntPtr.Zero);
+            keybd_event(0x12, 0, 2, UIntPtr.Zero);
 
             ShowWindow(hWnd, 9);
             BringWindowToTop(hWnd);
             SetForegroundWindow(hWnd);
         } finally {
-            if (attached) {
-                AttachThreadInput(currentThread, targetThread, false);
-            }
+            if (attachedFg) AttachThreadInput(curThread, fgThread, false);
+            if (attachedTarget) AttachThreadInput(curThread, targetThread, false);
         }
     }
 
     public static void SendPasteAndEnter() {
-        keybd_event(0x11, 0, 0, UIntPtr.Zero);
-        keybd_event(0x56, 0, 0, UIntPtr.Zero);
-        keybd_event(0x56, 0, 2, UIntPtr.Zero);
-        keybd_event(0x11, 0, 2, UIntPtr.Zero);
+        keybd_event(0x11, 0x1D, 0, UIntPtr.Zero);
+        keybd_event(0x56, 0x2F, 0, UIntPtr.Zero);
+        keybd_event(0x56, 0x2F, 2, UIntPtr.Zero);
+        keybd_event(0x11, 0x1D, 2, UIntPtr.Zero);
 
-        System.Threading.Thread.Sleep(400);
+        System.Threading.Thread.Sleep(600);
 
-        keybd_event(0x0D, 0, 0, UIntPtr.Zero);
-        keybd_event(0x0D, 2, 2, UIntPtr.Zero);
+        keybd_event(0x0D, 0x1C, 0, UIntPtr.Zero);
+        keybd_event(0x0D, 0x1C, 2, UIntPtr.Zero);
     }
 }
 '@
@@ -704,7 +716,7 @@ function Start-ClipwarpGeminiSparkHandoff {
     if ($null -eq $page) { throw 'Gemini Spark is not ready. Nothing was sent.' }
 
     if (-not $BrowserStarter) {
-        Start-Sleep -Milliseconds 1500
+        Start-Sleep -Milliseconds 2500
     }
 
     & $Submitter $page $Message
@@ -838,7 +850,7 @@ function Start-ClipwarpChatGptHandoff {
     if ($null -eq $page) { throw 'ChatGPT is not ready. Nothing was sent.' }
 
     if (-not $BrowserStarter) {
-        Start-Sleep -Milliseconds 1500
+        Start-Sleep -Milliseconds 2500
     }
 
     & $Submitter $page $Message
