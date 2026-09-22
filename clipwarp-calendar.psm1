@@ -535,147 +535,182 @@ public static class ClipwarpChatGptNative {
 '@
 }
 
-function New-ClipwarpGeminiSparkUrl { 'https://gemini.google.com/spark' }
+if (-not ([System.Management.Automation.PSTypeName]'ClipwarpGeminiNative').Type) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
 
-# UIA is lazy and scoped to visible browser documents exposing the exact URL.
-function Get-ClipwarpGeminiDocuments {
-    Add-Type -AssemblyName UIAutomationClient
-    Add-Type -AssemblyName UIAutomationTypes
-    $root = [Windows.Automation.AutomationElement]::RootElement
-    foreach ($window in $root.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)) {
-        if ($window.Current.IsOffscreen) { continue }
-        $process = Get-Process -Id $window.Current.ProcessId -ErrorAction Stop
-        if ($process.ProcessName -notmatch '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$') { continue }
-        $handle = [IntPtr]$window.Current.NativeWindowHandle
-        if ($handle -eq [IntPtr]::Zero -or -not [ClipwarpChatGptNative]::IsWindowVisible($handle)) { continue }
-        $cloaked=0
-        if ([ClipwarpChatGptNative]::DwmGetWindowAttribute($handle,14,[ref]$cloaked,4) -ne 0 -or $cloaked -ne 0) { continue }
-        $condition = New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ControlTypeProperty), ([Windows.Automation.ControlType]::Document)
-        foreach ($doc in $window.FindAll([Windows.Automation.TreeScope]::Descendants,$condition)) {
-            if ($doc.Current.IsOffscreen) { continue }
-            $value=$null
-            if (-not $doc.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern,[ref]$value)) { continue }
-            if (-not [string]::Equals($value.Current.Value,(New-ClipwarpGeminiSparkUrl),[StringComparison]::Ordinal)) { continue }
-            $composers=@(); $sends=@(); $login=$false
-            foreach ($control in $doc.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition)) {
-                $current=$control.Current
-                if ($current.IsOffscreen) { continue }
-                if ($current.Name -match '^(Sign in|Log in|Login)$') { $login=$true }
-                if ($current.ControlType -eq [Windows.Automation.ControlType]::Edit) {
-                    $pattern=$null
-                    $supported=$control.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)
-                    $writable=$supported -and $current.IsEnabled
-                    $text=$null
-                    if ($supported) { $text=$pattern.Current.Value; $writable=$writable -and -not $pattern.Current.IsReadOnly }
-                    $composers += [pscustomobject]@{ Id=($control.GetRuntimeId() -join '.'); Text=$text; Writable=$writable; Element=$control; Pattern=$pattern }
-                }
-                if ($current.ControlType -eq [Windows.Automation.ControlType]::Button -and $current.Name -cmatch '^(Send|Send message|Submit)$') {
-                    $pattern=$null
-                    $supported=$control.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)
-                    $sends += [pscustomobject]@{ Id=($control.GetRuntimeId() -join '.'); Supported=$supported; Enabled=($supported -and $current.IsEnabled); Element=$control; Pattern=$pattern }
+public static class ClipwarpGeminiNative {
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+
+    public const int DWMWA_CLOAKED = 14;
+
+    public static IntPtr FindGeminiWindow() {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((hWnd, lParam) => {
+            if (IsWindowVisible(hWnd)) {
+                int cloaked = 0;
+                try {
+                    DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, out cloaked, 4);
+                } catch { }
+                if (cloaked != 0) return true;
+
+                StringBuilder sb = new StringBuilder(512);
+                if (GetWindowText(hWnd, sb, 512) > 0) {
+                    string title = sb.ToString();
+                    if (title.IndexOf("Gemini", StringComparison.OrdinalIgnoreCase) >= 0) {
+                        found = hWnd;
+                        return false;
+                    }
                 }
             }
-            [pscustomobject]@{ Url=$value.Current.Value; Id=($doc.GetRuntimeId() -join '.'); Visible=$true; Browser=$true; Login=$login; Document=$doc; Composers=$composers; Sends=$sends }
-        }
+            return true;
+        }, IntPtr.Zero);
+        return found;
     }
+}
+'@
+}
+
+function New-ClipwarpGeminiSparkUrl {
+    [CmdletBinding()]
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        $Ignored
+    )
+    'https://gemini.google.com/spark'
 }
 
 function Find-ClipwarpGeminiSparkPage {
-    param([scriptblock]$DocumentReader = { Get-ClipwarpGeminiDocuments })
-    $matches=@(& $DocumentReader | Where-Object { $_.Browser -and $_.Visible -and [string]::Equals($_.Url,(New-ClipwarpGeminiSparkUrl),[StringComparison]::Ordinal) })
-    if ($matches.Count -gt 1) { throw 'Multiple Gemini Spark documents are visible.' }
-    if ($matches.Count -eq 1) { return $matches[0] }
+    param(
+        [string]$Url,
+        [scriptblock]$ProcessFinder = $null
+    )
+    if ($ProcessFinder) {
+        $processes = @(& $ProcessFinder)
+        foreach ($p in $processes) {
+            if ($null -ne $p -and
+                $p.ProcessName -match '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$' -and
+                $p.MainWindowTitle -match '(?i)Gemini' -and
+                $null -ne $p.MainWindowHandle -and
+                $p.MainWindowHandle -ne [IntPtr]::Zero -and
+                $p.MainWindowHandle -ne 0) {
+                return $p
+            }
+        }
+        return $null
+    }
+
+    $hWnd = [ClipwarpGeminiNative]::FindGeminiWindow()
+    if ($hWnd -ne [IntPtr]::Zero) {
+        $procName = 'browser'
+        try {
+            $pidVal = 0
+            [ClipwarpGeminiNative]::GetWindowThreadProcessId($hWnd, [ref]$pidVal)
+            if ($pidVal -gt 0) {
+                $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
+                if ($proc) {
+                    $procName = $proc.ProcessName.ToLowerInvariant()
+                    # Re-verify that the process is a recognized browser
+                    if ($procName -notmatch '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$') {
+                        return $null
+                    }
+                }
+            }
+        } catch { }
+
+        return [pscustomobject]@{
+            MainWindowHandle = $hWnd
+            ProcessName = $procName
+            MainWindowTitle = 'Gemini'
+        }
+    }
+    return $null
 }
 
 function Wait-ClipwarpGeminiSparkPage {
-    param([scriptblock]$PageFinder = { Find-ClipwarpGeminiSparkPage }, [scriptblock]$Delay = { Start-Sleep -Milliseconds 250 }, [ValidateRange(1,80)][int]$Attempts=80)
-    $ErrorActionPreference='Stop'
-    $pageId=$null
-    for ($i=0; $i -lt $Attempts; $i++) {
-        $candidate=& $PageFinder
-        if ($null -ne $candidate) {
-            if ([string]::IsNullOrEmpty($candidate.Id)) { throw 'Missing Gemini page identity.' }
-            if ($null -eq $pageId) { $pageId=$candidate.Id }
-            if (-not $candidate.Browser -or -not $candidate.Visible -or $candidate.Login -or
-                -not [string]::Equals($candidate.Url,(New-ClipwarpGeminiSparkUrl),[StringComparison]::Ordinal) -or
-                -not [string]::Equals($candidate.Id,$pageId,[StringComparison]::Ordinal)) { throw 'Gemini page identity changed or sign-in is required.' }
-            if (@($candidate.Composers).Count -gt 1 -or @($candidate.Sends).Count -gt 1) { throw 'Gemini controls are ambiguous. Nothing was sent.' }
-            if (@($candidate.Composers).Count -eq 1 -and $candidate.Composers[0].Writable -and
-                $null -ne $candidate.Composers[0].Text -and @($candidate.Sends).Count -eq 1 -and $candidate.Sends[0].Supported) {
-                return $candidate
-            }
-        } elseif ($null -ne $pageId) { throw 'Gemini page disappeared. Nothing was sent.' }
-        if ($i -lt ($Attempts-1)) { & $Delay }
+    param(
+        [string]$Url,
+        [scriptblock]$PageFinder = { param($u) Find-ClipwarpGeminiSparkPage $u },
+        [scriptblock]$Delay = { Start-Sleep -Milliseconds 250 },
+        [int]$Attempts = 80
+    )
+    for ($attempt = 0; $attempt -lt $Attempts; $attempt++) {
+        $page = & $PageFinder $Url
+        if ($null -ne $page) { return $page }
+        & $Delay
     }
-    throw 'Gemini Spark readiness timed out: exactly one writable composer with readable text and one supported send control are required. Nothing was sent.'
-}
-
-function Assert-ClipwarpGeminiSnapshot {
-    param($Snapshot,[string]$PageId,[string]$ComposerId)
-    if ($null -eq $Snapshot -or -not $Snapshot.Browser -or -not $Snapshot.Visible -or $Snapshot.Login -or
-        -not [string]::Equals($Snapshot.Url,(New-ClipwarpGeminiSparkUrl),[StringComparison]::Ordinal) -or
-        -not [string]::Equals($Snapshot.Id,$PageId,[StringComparison]::Ordinal)) { throw 'Gemini page identity changed or sign-in is required.' }
-    if (@($Snapshot.Composers).Count -ne 1 -or -not $Snapshot.Composers[0].Writable -or $null -eq $Snapshot.Composers[0].Text) { throw 'Gemini must expose exactly one writable composer.' }
-    if ($ComposerId -and -not [string]::Equals($Snapshot.Composers[0].Id,$ComposerId,[StringComparison]::Ordinal)) { throw 'Gemini composer changed.' }
+    throw 'Gemini Spark is not ready or the browser window was not found.'
 }
 
 function Send-ClipwarpGeminiSparkMessage {
-    param($Page,[string]$Message,
-        [scriptblock]$SnapshotReader = { param($p) Find-ClipwarpGeminiSparkPage },
-        [scriptblock]$TextSetter = { param($c,$v) $c.Pattern.SetValue($v) },
-        [scriptblock]$SendInvoker = { param($s) $s.Pattern.Invoke() },
-        [scriptblock]$Delay = { Start-Sleep -Milliseconds 250 },
-        [ValidateRange(1,40)][int]$Attempts=20)
-    $ErrorActionPreference='Stop'
-    $pageId=$Page.Id
-    if ([string]::IsNullOrEmpty($pageId)) { throw 'Missing Gemini page identity.' }
-    $snapshot=& $SnapshotReader $Page
-    Assert-ClipwarpGeminiSnapshot $snapshot $pageId
-    $composerId=$snapshot.Composers[0].Id
-    if ($snapshot.Composers[0].Text.Length -ne 0) { throw 'Gemini already contains a draft. Nothing was sent.' }
-    # Send may be disabled until text is entered; require its unique identity now.
-    if (@($snapshot.Sends).Count -ne 1 -or -not $snapshot.Sends[0].Supported) { throw 'Gemini send control is missing, ambiguous, or unsupported. Nothing was sent.' }
-    $sendId=$snapshot.Sends[0].Id
-    & $TextSetter $snapshot.Composers[0] $Message
-    for ($i=0; $i -lt $Attempts; $i++) {
-        $snapshot=& $SnapshotReader $Page
-        Assert-ClipwarpGeminiSnapshot $snapshot $pageId $composerId
-        if (-not [string]::Equals($snapshot.Composers[0].Text,$Message,[StringComparison]::Ordinal)) { throw 'Gemini did not preserve the exact original text. Nothing was sent.' }
-        if (@($snapshot.Sends).Count -ne 1 -or -not $snapshot.Sends[0].Supported -or
-            -not [string]::Equals($snapshot.Sends[0].Id,$sendId,[StringComparison]::Ordinal)) { throw 'Gemini send control changed or is unsupported. Nothing was sent.' }
-        if ($snapshot.Sends[0].Enabled) { break }
-        if ($i -lt ($Attempts-1)) { & $Delay }
+    param(
+        $Page,
+        [string]$Message,
+        [scriptblock]$WindowActivator = $null,
+        [scriptblock]$KeySender = $null,
+        [scriptblock]$Delay = { Start-Sleep -Milliseconds 300 }
+    )
+    if ($WindowActivator) {
+        & $WindowActivator $Page
+    } else {
+        if ($null -ne $Page -and $null -ne $Page.MainWindowHandle -and $Page.MainWindowHandle -ne [IntPtr]::Zero -and $Page.MainWindowHandle -ne 0) {
+            [ClipwarpChatGptNative]::ActivateWindow([IntPtr]$Page.MainWindowHandle)
+        }
     }
-    if (-not $snapshot.Sends[0].Enabled) { throw 'Gemini pre-send readiness timed out: send control remained disabled. Nothing was sent.' }
-    # Never retry, including an Invoke exception after the browser accepted it.
-    & $SendInvoker $snapshot.Sends[0]
-    for ($i=0; $i -lt $Attempts; $i++) {
-        & $Delay
-        $snapshot=& $SnapshotReader $Page
-        Assert-ClipwarpGeminiSnapshot $snapshot $pageId $composerId
-        if ($snapshot.Composers[0].Text.Length -eq 0) { return }
-        if (-not [string]::Equals($snapshot.Composers[0].Text,$Message,[StringComparison]::Ordinal)) { throw 'Gemini submission state changed unexpectedly. Send will not be retried.' }
+    & $Delay
+
+    if ($KeySender) {
+        & $KeySender $Message
+    } else {
+        [ClipwarpChatGptNative]::SendPasteAndEnter()
     }
-    throw 'Gemini submission could not be verified. Send will not be retried; inspect the browser before sending again.'
 }
 
 function Start-ClipwarpGeminiSparkHandoff {
     [CmdletBinding()]
-    param([Parameter(Mandatory=$true)][string]$Message,
-        [scriptblock]$ClipboardWriter = { param($v) Set-ClipwarpClipboardText -Value $v },
-        [scriptblock]$BrowserStarter = { param($u) $info=New-Object Diagnostics.ProcessStartInfo; $info.FileName=$u; $info.UseShellExecute=$true; [void][Diagnostics.Process]::Start($info) },
-        [scriptblock]$PageWaiter = { param($u) Wait-ClipwarpGeminiSparkPage },
-        [scriptblock]$Submitter = { param($p,$m) Send-ClipwarpGeminiSparkMessage -Page $p -Message $m })
-    $ErrorActionPreference='Stop'
-    & $ClipboardWriter $Message
-    $url=New-ClipwarpGeminiSparkUrl
-    & $BrowserStarter $url
-    $page=& $PageWaiter $url
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [scriptblock]$ClipboardWriter = $null,
+        [scriptblock]$BrowserStarter = $null,
+        [scriptblock]$PageWaiter = { param($url) Wait-ClipwarpGeminiSparkPage $url },
+        [scriptblock]$Submitter = { param($page, $text) Send-ClipwarpGeminiSparkMessage $page $text }
+    )
+
+    $ErrorActionPreference = 'Stop'
+    if ($ClipboardWriter) {
+        & $ClipboardWriter $Message
+    } else {
+        Set-ClipwarpClipboardText -Value $Message
+    }
+
+    $url = New-ClipwarpGeminiSparkUrl
+    if ($BrowserStarter) {
+        & $BrowserStarter $url
+    } else {
+        $browser = New-Object Diagnostics.ProcessStartInfo
+        $browser.FileName = $url
+        $browser.UseShellExecute = $true
+        [Diagnostics.Process]::Start($browser) | Out-Null
+    }
+
+    $page = & $PageWaiter $url
     if ($null -eq $page) { throw 'Gemini Spark is not ready. Nothing was sent.' }
+
+    if (-not $BrowserStarter) {
+        Start-Sleep -Milliseconds 1500
+    }
+
     & $Submitter $page $Message
 }
 
-Export-ModuleMember -Function Start-ClipwarpGeminiSparkHandoff
+Export-ModuleMember -Function Start-ClipwarpGeminiSparkHandoff, New-ClipwarpGeminiSparkUrl
 
 function New-ClipwarpChatGptUrl {
     [CmdletBinding()]
@@ -1095,4 +1130,4 @@ function Get-ClipwarpCommandProcessStartInfo {
     New-ClipwarpCommandProcessStartInfo @params
 }
 
-Export-ModuleMember -Function Get-ClipwarpPayloadKind, Format-ClipwarpCalendarPayload, Get-ClipwarpCalendarTimeZone, New-ClipwarpCalendarUrl, ConvertFrom-ClipwarpCalendarText, Get-ClipwarpImageCalendarDetails, Get-ClipwarpCalendarPreview, Export-ClipwarpIcsEvent, Set-ClipwarpClipboardText, New-ClipwarpChatGptUrl, Start-ClipwarpChatGptHandoff, Get-ClipwarpPopupLocation, Get-ClipwarpPopupMetrics, New-ClipwarpCalendarPopupArguments, Start-ClipwarpCalendarPopup, Get-ClipwarpCommandText, Test-ClipwarpCommandLine, Start-ClipwarpCommand, New-ClipwarpCommandProcessStartInfo, Get-ClipwarpCommandProcessStartInfo
+Export-ModuleMember -Function Get-ClipwarpPayloadKind, Format-ClipwarpCalendarPayload, Get-ClipwarpCalendarTimeZone, New-ClipwarpCalendarUrl, ConvertFrom-ClipwarpCalendarText, Get-ClipwarpImageCalendarDetails, Get-ClipwarpCalendarPreview, Export-ClipwarpIcsEvent, Set-ClipwarpClipboardText, New-ClipwarpChatGptUrl, Start-ClipwarpChatGptHandoff, New-ClipwarpGeminiSparkUrl, Start-ClipwarpGeminiSparkHandoff, Get-ClipwarpPopupLocation, Get-ClipwarpPopupMetrics, New-ClipwarpCalendarPopupArguments, Start-ClipwarpCalendarPopup, Get-ClipwarpCommandText, Test-ClipwarpCommandLine, Start-ClipwarpCommand, New-ClipwarpCommandProcessStartInfo, Get-ClipwarpCommandProcessStartInfo

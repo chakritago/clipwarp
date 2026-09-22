@@ -91,30 +91,17 @@ The clipboard is rewritten as **dual format**, so nothing else breaks:
 
 ### Send text to Gemini Spark
 
-The text popup includes **Send to Gemini Spark**. A deliberate left click copies
-the exact original text (including whitespace, line breaks, and Unicode), opens
-only `https://gemini.google.com/spark`, and attempts automatic submission using
-scoped Windows UI Automation. The button is absent from image popups and is not
-a keyboard or form-default action. Calendar, PowerShell, and ChatGPT actions remain
-available.
+The text popup includes **Send to Gemini Spark**. Clicking it copies the exact
+full original text (including whitespace, line breaks, and Unicode) to the clipboard,
+opens `https://gemini.google.com/spark` in your default browser, waits for the Gemini
+window to appear, activates the window, pastes the message into the composer, and
+sends it automatically by pressing Enter. No manual paste or send is required.
 
-Sign in beforehand and leave one visible Spark document with an empty composer.
-The browser must expose the exact document URL, one writable ValuePattern composer,
-and one enabled InvokePattern send button (named `Send`, `Send message`, or `Submit`).
-Unsupported accessibility providers or localized controls fail closed. Clipwarp
-checks exact text and page/control identity before invoking Send once, then polls
-for the same composer to clear. Discovery polls for up to 20 seconds and verification
-for up to 5 seconds, excluding browser accessibility call time.
+Message text and local paths are never leaked into the URL. Calendar, PowerShell,
+and ChatGPT actions remain available. This action is available only for text and only
+runs when deliberately clicked.
 
-Login pages, existing drafts, ambiguous controls/documents, navigation, text
-normalization, and unverifiable submission show an error. Send is never retried
-automatically; inspect the browser before trying again because a failed verification
-may follow an accepted send. A pre-send failure may leave the filled draft. No text
-or local paths are placed in URLs or logs, and no API or global keyboard injection
-is used for Gemini. Clicking this button sends text to Google's service.
-
-Fake-only regression tests run through `tests/run-all.ps1` on PowerShell 5.1 and 7;
-they do not open a browser, access the real clipboard, or send messages.
+Sign in beforehand so the composer is immediately accessible when the browser opens.
 
 ### ChatGPT Web & Target Awareness
 

@@ -257,7 +257,7 @@ if ($Kind -eq 'Text') {
         try {
             Start-ClipwarpGeminiSparkHandoff -Message $Title
         } catch {
-            [void][Windows.Forms.MessageBox]::Show('Gemini Spark automatic send failed or could not be verified. Check sign-in, accessibility, and the browser draft before sending again. Send was not retried.', 'Clipwarp - Gemini Spark', [Windows.Forms.MessageBoxButtons]::OK, [Windows.Forms.MessageBoxIcon]::Error)
+            [void][Windows.Forms.MessageBox]::Show("Gemini Spark automatic send failed. $($_.Exception.Message)", 'Clipwarp - Gemini Spark', [Windows.Forms.MessageBoxButtons]::OK, [Windows.Forms.MessageBoxIcon]::Error)
         } finally { $form.Close() }
     })
 
