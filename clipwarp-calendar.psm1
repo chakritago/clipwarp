@@ -685,6 +685,34 @@ function Send-ClipwarpGeminiSparkMessage {
     }
 }
 
+function Open-ClipwarpExternalUrl {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$Url)
+    $ErrorActionPreference = 'Stop'
+    # Ordinal comparison deliberately rejects URL normalization and extra content.
+    if (-not [string]::Equals($Url, (New-ClipwarpGeminiSparkUrl), [StringComparison]::Ordinal) -and
+        -not [string]::Equals($Url, (New-ClipwarpChatGptUrl), [StringComparison]::Ordinal)) {
+        throw 'External HTTPS URL is not allowed.'
+    }
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $Url
+    $info.UseShellExecute = $true
+    $info.Verb = 'open'
+    try {
+        [void][Diagnostics.Process]::Start($info)
+        return
+    } catch {
+        # Invoke the Windows URL handler directly, without a command shell.
+        # Exact allowlisting above excludes whitespace, quotes and extra arguments.
+        try {
+            Start-Process -FilePath (Join-Path $env:WINDIR 'System32\rundll32.exe') -ArgumentList @('url.dll,FileProtocolHandler', $Url) -WindowStyle Hidden -ErrorAction Stop | Out-Null
+            return
+        } catch {
+            # Do not expose process exception details or local paths in the popup.
+            throw 'Unable to open the allowed HTTPS URL: both the default browser launch and Windows URL handler failed.'
+        }
+    }
+}
 function Start-ClipwarpGeminiSparkHandoff {
     [CmdletBinding()]
     param(
@@ -706,10 +734,7 @@ function Start-ClipwarpGeminiSparkHandoff {
     if ($BrowserStarter) {
         & $BrowserStarter $url
     } else {
-        $browser = New-Object Diagnostics.ProcessStartInfo
-        $browser.FileName = $url
-        $browser.UseShellExecute = $true
-        [Diagnostics.Process]::Start($browser) | Out-Null
+        Open-ClipwarpExternalUrl -Url $url
     }
 
     $page = & $PageWaiter $url
@@ -840,10 +865,7 @@ function Start-ClipwarpChatGptHandoff {
     if ($BrowserStarter) {
         & $BrowserStarter $url
     } else {
-        $browser = New-Object Diagnostics.ProcessStartInfo
-        $browser.FileName = $url
-        $browser.UseShellExecute = $true
-        [Diagnostics.Process]::Start($browser) | Out-Null
+        Open-ClipwarpExternalUrl -Url $url
     }
 
     $page = & $PageWaiter $url
