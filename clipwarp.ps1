@@ -298,6 +298,14 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
     $seq0 = [ClipwarpNative.Clip]::GetClipboardSequenceNumber()
 
     $out = [pscustomobject]@{ Path = $null; Kind = $null; Error = $null }
+    $generatedPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $committedPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+    function Register-GeneratedPath {
+        param([string]$Path)
+        if (-not [string]::IsNullOrWhiteSpace($Path)) { [void]$generatedPaths.Add($Path) }
+        return $Path
+    }
 
     # Clipboard calls fail with an ExternalException ("OpenClipboard failed")
     # whenever another app is holding the clipboard open at that instant - a
@@ -335,6 +343,16 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
     # Mode 'image-only' (e.g. ChatGPT web in browser): pure image/PNG, NO text/file path.
     # Mode 'dual' (-KeepImage): text path for Claude Code + original image/file.
     # Mode 'text': text only (the path).
+    function Remove-GeneratedPath {
+        param([string]$Path)
+        if ([string]::IsNullOrWhiteSpace($Path)) { return }
+        try {
+            if (Test-Path -LiteralPath $Path -PathType Leaf) {
+                Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
+    }
+
     function Publish-Result {
         param([string]$Path, $Img, [byte[]]$PngBytes, [string]$DropFile)
         try {
@@ -354,6 +372,7 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
                 }
                 if ($Img) { $do.SetImage($Img) }
                 Set-ClipboardChecked { [void][ClipwarpTransport.ClipboardWriter]::Publish($do, $seq0) }
+                if ($generatedPaths.Contains($Path)) { [void]$committedPaths.Add($Path) }
             }
             elseif ($PublicationMode -eq 'dual') {
                 if (-not $Img -and -not $PngBytes) {
@@ -377,12 +396,14 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
                     $do.SetFileDropList($sc)
                 }
                 Set-ClipboardChecked { [void][ClipwarpTransport.ClipboardWriter]::Publish($do, $seq0) }
+                if ($generatedPaths.Contains($Path)) { [void]$committedPaths.Add($Path) }
             }
             else {
                 $do = New-Object System.Windows.Forms.DataObject
                 $do.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $Path)
                 $do.SetData('ClipwarpManaged', $Path)
                 Set-ClipboardChecked { [void][ClipwarpTransport.ClipboardWriter]::Publish($do, $seq0) }
+                if ($generatedPaths.Contains($Path)) { [void]$committedPaths.Add($Path) }
             }
         }
         finally {
@@ -396,7 +417,7 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
         }
         $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
         $randHex = [guid]::NewGuid().ToString('N').Substring(0, 4)
-        Join-Path $OutDir ("clip-${timestamp}-${randHex}.png")
+        Register-GeneratedPath (Join-Path $OutDir ("clip-${timestamp}-${randHex}.png"))
     }
 
     # Load an image from bytes into an INDEPENDENT Bitmap. Image.FromStream keeps a
@@ -418,6 +439,8 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
     # or $null on failure. Reads through a byte[] so the source file isn't locked.
     function ConvertTo-PngFile {
         param([string]$SrcFile)
+        $im = $null
+        $path = $null
         try {
             $bytes = [System.IO.File]::ReadAllBytes($SrcFile)
             $im = New-ImageFromBytes $bytes
@@ -425,7 +448,11 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
             $path = New-OutPath
             $im.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
             return @{ Path = $path; Img = $im }
-        } catch { return $null }
+        } catch {
+            if ($path) { Remove-GeneratedPath $path }
+            if ($im) { try { $im.Dispose() } catch {} }
+            return $null
+        }
     }
 
     function Read-StreamBytes ($obj) {
@@ -439,7 +466,8 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
         return $null
     }
 
-    $data = Invoke-Retry { [System.Windows.Forms.Clipboard]::GetDataObject() }
+    try {
+        $data = Invoke-Retry { [System.Windows.Forms.Clipboard]::GetDataObject() }
 
     # --- 1. A real image FILE on the clipboard (Ctrl+C on a .png in Explorer) ---
     $dropList = Invoke-Retry { [System.Windows.Forms.Clipboard]::GetFileDropList() }
@@ -643,7 +671,7 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
                     $bytes = [Convert]::FromBase64String(($m.Groups[2].Value -replace '\s', ''))
                     $ext = $m.Groups[1].Value -replace 'jpg', 'jpeg'
                     $path = New-OutPath
-                    if ($ext -ne 'png') { $path = $path -replace '\.png$', ".$ext" }
+                    if ($ext -ne 'png') { $path = Register-GeneratedPath ($path -replace '\.png$', ".$ext") }
                     [System.IO.File]::WriteAllBytes($path, $bytes)
                     if ($ext -eq 'png') {
                         Publish-Result -Path $path -PngBytes $bytes
@@ -702,6 +730,12 @@ public static byte[] DecodeMasked(byte[] dib, int srcOff, int w, int absH, int s
 
     $out.Error = 'no-image'
     return $out
+    }
+    finally {
+        foreach ($path in $generatedPaths) {
+            if (-not $committedPaths.Contains($path)) { Remove-GeneratedPath $path }
+        }
+    }
 }
 
 $rs = [runspacefactory]::CreateRunspace()

@@ -71,6 +71,9 @@ Assert-True (-not [ClipwarpWatch.Watcher]::IsClipboardOwnershipValid(11,10,$data
 Assert-True ([ClipwarpTransport.ClipboardWriter]::SequenceMatches(10,10)) 'compare-and-set accepts original source sequence'
 Assert-True (-not [ClipwarpTransport.ClipboardWriter]::SequenceMatches(10,11)) 'compare-and-set rejects newer clipboard'
 Assert-True (-not [ClipwarpTransport.ClipboardWriter]::SequenceMatches(0,0)) 'compare-and-set rejects zero sequence'
+Assert-True (-not [ClipwarpWatch.Watcher]::IsStaleConversion(10,10)) 'same clipboard sequence is not stale'
+Assert-True ([ClipwarpWatch.Watcher]::IsStaleConversion(11,10)) 'newer clipboard sequence retires stale conversion'
+Assert-True (-not [ClipwarpWatch.Watcher]::IsStaleConversion(0,10)) 'unknown current sequence does not classify stale conversion'
 $raw = New-Object Windows.Forms.DataObject
 $raw.SetData('ClipwarpManaged',(New-Object IO.MemoryStream (,[Text.Encoding]::Unicode.GetBytes("C:\test.png`0"))))
 Assert-True ([ClipwarpTransport.ClipboardWriter]::Marker($raw) -eq 'C:\test.png') 'native marker decodes from stream'

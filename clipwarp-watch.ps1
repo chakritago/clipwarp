@@ -330,6 +330,11 @@ namespace ClipwarpWatch
             return OverlayProcRegex.IsMatch(proc);
         }
 
+        public static bool IsStaleConversion(uint currentSequence, uint childSequence)
+        {
+            return currentSequence != 0 && childSequence != 0 && currentSequence != childSequence;
+        }
+
         private readonly string scriptPath;
         private readonly string logPath;
         private readonly string popupPath;
@@ -340,6 +345,8 @@ namespace ClipwarpWatch
         private string lastManagedImagePath = null;
         private string currentPayloadMode = "dual";
         private System.Diagnostics.Process child;
+        private uint childSequence;
+        private uint awaitingManagedSequence;
         private System.Diagnostics.Process popupChild;
         private DateTime childStarted;
         private const int ChildTimeoutSec = 15;   // a conversion that runs longer is treated as hung
@@ -356,6 +363,8 @@ namespace ClipwarpWatch
         private string foregroundClass = "";
         private readonly OverlayTargetTracker overlayTracker = new OverlayTargetTracker();
         private uint lastManagedSequence;
+        private uint lastObservedSequence;
+        private bool foregroundDirty;
         private const int EventDelayMs = 75;
         private const int WatchdogDelayMs = 200;
 
@@ -393,10 +402,13 @@ namespace ClipwarpWatch
         {
             if (m.Msg == WM_CLIPBOARDUPDATE)
             {
-                // A genuinely new clipboard change: give it a full, fresh retry
-                // budget (don't inherit a previous burst's exhausted counter).
+                // Notifications caused by our own managed publication must not
+                // reset the conversion failure budget. A target rewrite is still
+                // a clipboard notification, but it is not a new source image.
                 busyRetries = 0;
-                convFails = 0;
+                // Inspect classifies the stable payload and decides whether it is
+                // an external source; WM_CLIPBOARDUPDATE only schedules work.
+                // This avoids resetting failure state for our own publications.
                 POINT captured;
                 hasEventPointer = GetCursorPos(out captured);
                 if (hasEventPointer) eventPointer = captured;
@@ -411,7 +423,15 @@ namespace ClipwarpWatch
         private void OnTick(object sender, EventArgs e)
         {
             debounce.Stop();
-            try { Inspect(); }
+            try
+            {
+                Inspect();
+                if (foregroundDirty && child == null)
+                {
+                    foregroundDirty = false;
+                    OnForegroundWindowChanged();
+                }
+            }
             catch (Exception ex) { Log("error: " + ex.Message); convFails++; if (convFails < 3) { debounce.Interval = 500; debounce.Start(); } }  // bounded retry, then wait for a new copy
         }
 
@@ -420,7 +440,10 @@ namespace ClipwarpWatch
             if (eventType == EVENT_SYSTEM_FOREGROUND && hwnd != IntPtr.Zero)
             {
                 CaptureForegroundFromHwnd(hwnd);
-                OnForegroundWindowChanged();
+                foregroundDirty = true;
+                debounce.Interval = EventDelayMs;
+                debounce.Stop();
+                debounce.Start();
             }
         }
 
@@ -716,14 +739,38 @@ namespace ClipwarpWatch
         {
             uint sequence = GetClipboardSequenceNumber();
             // The same clipboard notification is ignored only when no conversion
-            // child needs watchdog/reaping work.
-            if (child == null && sequence != 0 && sequence == lastHandledSequence) return;
-            // Observe any conversion child: keep polling while it runs, reap it if
-            // it hangs, and inspect its exit code when it finishes so a failed or
-            // hung conversion is retried a bounded number of times (never forever).
+            // child needs watchdog/reaping work or foreground reconciliation.
+            if (child == null && !foregroundDirty && sequence != 0 && sequence == lastHandledSequence) return;
+            // Observe any conversion child: a child belongs to the source
+            // sequence captured when it was launched. If a newer copy arrived,
+            // retire the old child immediately and never let its exit status or
+            // timeout affect the newer source's retry budget.
             if (child != null)
             {
-                if (!child.HasExited)
+                bool staleChild = IsStaleConversion(sequence, childSequence);
+                if (staleChild)
+                {
+                    // Let a superseded converter finish its compare-and-set and
+                    // run its own generated-file cleanup. Killing it here would
+                    // bypass that finally block and recreate the file leak.
+                    if (!child.HasExited && (DateTime.Now - childStarted).TotalSeconds < ChildTimeoutSec)
+                    {
+                        debounce.Interval = WatchdogDelayMs;
+                        debounce.Start();
+                        return;
+                    }
+                    if (!child.HasExited)
+                    {
+                        try { child.Kill(); child.WaitForExit(1000); } catch { }
+                        Log("superseded conversion hung -> killed");
+                    }
+                    try { child.Dispose(); } catch { }
+                    child = null;
+                    childSequence = 0;
+                    awaitingManagedSequence = 0;
+                    Log("previous conversion superseded by newer clipboard sequence");
+                }
+                else if (!child.HasExited)
                 {
                     if ((DateTime.Now - childStarted).TotalSeconds < ChildTimeoutSec)
                     {
@@ -739,14 +786,33 @@ namespace ClipwarpWatch
                 {
                     int code = -1;
                     try { code = child.ExitCode; } catch { }
-                    if (code == 0) { convFails = 0; }
+                    if (code == 0)
+                    {
+                        convFails = 0;
+                        awaitingManagedSequence = childSequence;
+                    }
                     else { convFails++; Log("conversion exited with code " + code); }
                 }
                 try { child.Dispose(); } catch { }
                 child = null;
+                childSequence = 0;
+                if (awaitingManagedSequence != 0 && sequence == awaitingManagedSequence)
+                {
+                    debounce.Interval = EventDelayMs;
+                    debounce.Start();
+                    return;
+                }
             }
 
             if (IsPaused()) { lastHandledSequence = sequence; lastManagedImagePath = null; lastManagedSequence = 0; return; }
+
+            // A stable sequence that was not published by Clipwarp is a new
+            // source notification. Reset failure accounting once, not per WM.
+            if (sequence != 0 && sequence != lastObservedSequence && sequence != lastManagedSequence)
+            {
+                convFails = 0;
+                lastObservedSequence = sequence;
+            }
 
             // If the current clipboard keeps failing to convert, stop relaunching
             // until a new copy arrives (WM_CLIPBOARDUPDATE resets convFails).
@@ -768,10 +834,15 @@ namespace ClipwarpWatch
                     lastManagedImagePath = mPath;
                     lastHandledSequence = sequence;
                     lastManagedSequence = sequence;
+                    if (awaitingManagedSequence != 0) awaitingManagedSequence = 0;
+                    lastObservedSequence = sequence;
+                    convFails = 0;
                     busyRetries = 0;
                     debounce.Interval = EventDelayMs;
                     currentPayloadMode = (dObj.GetDataPresent(DataFormats.UnicodeText) || dObj.GetDataPresent(DataFormats.Text)) ? "dual" : "image-only";
-                    OnForegroundWindowChanged(); // reconcile a target change during conversion
+                    // Reconcile target changes after Inspect returns, not from
+                    // inside the clipboard notification callback.
+                    foregroundDirty = true;
                     return;
                 }
             }
@@ -812,7 +883,6 @@ namespace ClipwarpWatch
             int payload = HasImagePayload();
             if (payload < 0) { Rearm(); return; }              // clipboard busy -> retry soon
             if (payload == 0) { busyRetries = 0; debounce.Interval = EventDelayMs; return; }
-            lastHandledSequence = sequence;
             lastManagedImagePath = null;
             lastManagedSequence = 0;
 
@@ -822,8 +892,20 @@ namespace ClipwarpWatch
             psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + scriptPath + "\" -Quiet -KeepImage" + TargetArguments() + PointerArguments();
             psi.CreateNoWindow = true;
             psi.UseShellExecute = false;
-            child = System.Diagnostics.Process.Start(psi);
-            childStarted = DateTime.Now;
+            try
+            {
+                child = System.Diagnostics.Process.Start(psi);
+                childSequence = sequence;
+                childStarted = DateTime.Now;
+                lastHandledSequence = sequence;
+            }
+            catch
+            {
+                child = null;
+                childSequence = 0;
+                lastHandledSequence = 0;
+                throw;
+            }
             // Arm the watchdog: re-enter Inspect on the timer so a hung child is
             // reaped after ChildTimeoutSec even if no further clipboard event ever
             // fires (a child that hangs before writing produces no WM_CLIPBOARDUPDATE).

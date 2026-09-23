@@ -235,6 +235,19 @@ if ($watchSource -notmatch 'EVENT_SYSTEM_FOREGROUND') {
 if ($watchSource -notmatch 'ClipwarpManaged') {
     throw 'Watcher script must track ClipwarpManaged payloads'
 }
+if ($watchSource -notmatch 'childSequence = sequence' -or $watchSource -notmatch 'IsStaleConversion\(sequence, childSequence\)') {
+    throw 'Watcher must retire a conversion child when a newer clipboard sequence arrives'
+}
+if ($watchSource -notmatch 'lastHandledSequence = sequence;\s*\}\s*catch') {
+    throw 'Watcher must mark a sequence handled only after conversion launch succeeds'
+}
+if ($watchSource -match 'CaptureForegroundFromHwnd\(hwnd\);\s*OnForegroundWindowChanged\(\);') {
+    throw 'Foreground callbacks must be coalesced through the debounce timer'
+}
+$converterSource = Get-Content (Join-Path $root 'clipwarp.ps1') -Raw
+if ($converterSource -notmatch 'generatedPaths' -or $converterSource -notmatch 'committedPaths' -or $converterSource -notmatch 'finally\s*\{\s*foreach \(\$path in \$generatedPaths') {
+    throw 'Converter must remove generated files whose publication was not committed'
+}
 Write-Host 'PASS: watcher includes foreground target arguments and event hook'
 
 Write-Host 'All target regression tests passed.'
