@@ -102,6 +102,11 @@ and ChatGPT actions remain available. This action is available only for text and
 runs when deliberately clicked.
 
 Sign in beforehand so the composer is immediately accessible when the browser opens.
+The handoff verifies the visible browser owner, Spark address, and composer focus
+before pasting. Browser accessibility must expose the address and a unique prompt
+editor; text is pasted through the clipboard, not written through accessibility.
+An unavailable or ambiguous target, changed clipboard, or lost focus produces an
+error. Input is never retried, including a failure after paste or Enter.
 
 ### ChatGPT Web & Target Awareness
 

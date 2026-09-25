@@ -551,44 +551,135 @@ if (-not ([System.Management.Automation.PSTypeName]'ClipwarpGeminiNative').Type)
     Add-Type -TypeDefinition @'
 using System;
 using System.Text;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 public static class ClipwarpGeminiNative {
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint first, uint second, bool attach);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out int value, int size);
+    [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
 
-    public const int DWMWA_CLOAKED = 14;
-
-    public static IntPtr FindGeminiWindow() {
-        IntPtr found = IntPtr.Zero;
-        EnumWindows((hWnd, lParam) => {
-            if (IsWindowVisible(hWnd)) {
-                int cloaked = 0;
-                try {
-                    DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, out cloaked, 4);
-                } catch { }
-                if (cloaked != 0) return true;
-
-                StringBuilder sb = new StringBuilder(512);
-                if (GetWindowText(hWnd, sb, 512) > 0) {
-                    string title = sb.ToString();
-                    if (title.IndexOf("Gemini", StringComparison.OrdinalIgnoreCase) >= 0) {
-                        found = hWnd;
-                        return false;
-                    }
-                }
-            }
+    // Enumerate every visible HWND, not just the first title match or Process.MainWindowHandle.
+    public static IntPtr[] VisibleWindows() {
+        var windows = new List<IntPtr>();
+        EnumWindows((hWnd, parameter) => {
+            int cloaked;
+            if (IsWindowVisible(hWnd) && DwmGetWindowAttribute(hWnd, 14, out cloaked, 4) == 0 && cloaked == 0)
+                windows.Add(hWnd);
             return true;
         }, IntPtr.Zero);
-        return found;
+        return windows.ToArray();
+    }
+    public static bool ActivateWindow(IntPtr hWnd, uint expectedPid) {
+        uint pid;
+        uint target = GetWindowThreadProcessId(hWnd, out pid);
+        if (pid != expectedPid || target == 0 || !IsWindowVisible(hWnd)) return false;
+        uint current = GetCurrentThreadId();
+        uint foreground = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+        bool attachFg = false, attachTarget = false;
+        try {
+            if (foreground != 0 && foreground != current) attachFg = AttachThreadInput(current, foreground, true);
+            if (target != current && target != foreground) attachTarget = AttachThreadInput(current, target, true);
+            ShowWindow(hWnd, 9);
+            SetForegroundWindow(hWnd);
+        } finally {
+            if (attachTarget) AttachThreadInput(current, target, false);
+            if (attachFg) AttachThreadInput(current, foreground, false);
+        }
+        return GetForegroundWindow() == hWnd;
+    }
+    public static void SendKey(IntPtr hWnd, uint expectedPid, string action) {
+        uint pid;
+        GetWindowThreadProcessId(hWnd, out pid);
+        if (GetForegroundWindow() != hWnd || pid != expectedPid || !IsWindowVisible(hWnd))
+            throw new InvalidOperationException("Gemini target lost focus. Send will not be retried.");
+        if (action == "Paste") {
+            keybd_event(0x11, 0x1D, 0, UIntPtr.Zero);
+            try {
+                keybd_event(0x56, 0x2F, 0, UIntPtr.Zero);
+                keybd_event(0x56, 0x2F, 2, UIntPtr.Zero);
+            } finally { keybd_event(0x11, 0x1D, 2, UIntPtr.Zero); }
+        } else if (action == "Enter") {
+            keybd_event(0x0D, 0x1C, 0, UIntPtr.Zero);
+            keybd_event(0x0D, 0x1C, 2, UIntPtr.Zero);
+        } else { throw new ArgumentException("Unknown Gemini key action."); }
     }
 }
 '@
 }
+
+function Get-ClipwarpGeminiWindows {
+    foreach ($handle in [ClipwarpGeminiNative]::VisibleWindows()) {
+        try {
+            [uint32]$ownerId = 0
+            [void][ClipwarpGeminiNative]::GetWindowThreadProcessId($handle, [ref]$ownerId)
+            $process = Get-Process -Id $ownerId -ErrorAction Stop
+            $title = New-Object Text.StringBuilder 1024
+            [void][ClipwarpGeminiNative]::GetWindowText($handle, $title, $title.Capacity)
+            [pscustomobject]@{
+                MainWindowHandle=$handle; MainWindowTitle=$title.ToString()
+                ProcessName=$process.ProcessName; ProcessId=$ownerId
+                ProcessStarted=$process.StartTime.ToUniversalTime().Ticks; Visible=$true
+            }
+        } catch { continue } # A disappearing window is not a usable target.
+    }
+}
+
+function Get-ClipwarpGeminiTarget {
+    param($Page, [scriptblock]$WindowReader = { param($p) [Windows.Automation.AutomationElement]::FromHandle([IntPtr]$p.MainWindowHandle) })
+    # UIA only identifies/focuses controls inside this HWND. Document.ValuePattern
+    # is not reliably exposed by Chromium; paste remains the native clipboard path.
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    $window = & $WindowReader $Page
+    $all = @($window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition))
+    $edits = @($all | Where-Object {
+        -not $_.Current.IsOffscreen -and $_.Current.IsEnabled -and
+        $_.Current.ControlType -eq [Windows.Automation.ControlType]::Edit
+    })
+    $documentControls = @($all | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Document } | ForEach-Object {
+        $_.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
+    })
+    $documentIds = @($documentControls | ForEach-Object { $_.GetRuntimeId() -join '.' })
+    $addresses = @($edits | Where-Object {
+        $value = $null
+        # Stable Chromium class / Edge ID avoid relying on localized labels.
+        # Known accessible names cover versions without those identities.
+        # Document exclusion remains mandatory even for matching identities.
+        ($_.GetRuntimeId() -join '.') -notin $documentIds -and
+        $_.Current.IsKeyboardFocusable -and
+        ($_.Current.AutomationId -cmatch '^(addressEditBox|omnibox)$' -or
+         $_.Current.ClassName -cmatch '^OmniboxViewViews$' -or
+         $_.Current.Name -cmatch '^(Address and search bar|Search or enter web address)$') -and
+        $_.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$value) -and
+        $value.Current.Value -cmatch '^(https://)?gemini\.google\.com/spark/?$'
+    })
+    if ($addresses.Count -ne 1) { return }
+    $documents = @($all | Where-Object {
+        -not $_.Current.IsOffscreen -and $_.Current.ControlType -eq [Windows.Automation.ControlType]::Document
+    })
+    if ($documents.Count -ne 1) { return }
+    $composers = @($documents[0].FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object {
+        -not $_.Current.IsOffscreen -and $_.Current.IsEnabled -and $_.Current.IsKeyboardFocusable -and
+        $_.Current.ControlType -eq [Windows.Automation.ControlType]::Edit -and
+        ($_.Current.ClassName -match '(^|\s)ql-editor(\s|$)' -or $_.Current.Name -match '^(Enter a prompt( here)?|Ask Gemini)$')
+    })
+    if ($composers.Count -ne 1) { return }
+    [pscustomobject]@{
+        Id=($composers[0].GetRuntimeId() -join '.'); Element=$composers[0]
+        Focused=$composers[0].Current.HasKeyboardFocus
+    }
+}
+
 
 function New-ClipwarpGeminiSparkUrl {
     [CmdletBinding()]
@@ -602,88 +693,119 @@ function New-ClipwarpGeminiSparkUrl {
 function Find-ClipwarpGeminiSparkPage {
     param(
         [string]$Url,
-        [scriptblock]$ProcessFinder = $null
+        [scriptblock]$ProcessFinder = { Get-ClipwarpGeminiWindows }
     )
-    if ($ProcessFinder) {
-        $processes = @(& $ProcessFinder)
-        foreach ($p in $processes) {
-            if ($null -ne $p -and
-                $p.ProcessName -match '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$' -and
-                $p.MainWindowTitle -match '(?i)Gemini' -and
-                $null -ne $p.MainWindowHandle -and
-                $p.MainWindowHandle -ne [IntPtr]::Zero -and
-                $p.MainWindowHandle -ne 0) {
-                return $p
-            }
-        }
-        return $null
-    }
-
-    $hWnd = [ClipwarpGeminiNative]::FindGeminiWindow()
-    if ($hWnd -ne [IntPtr]::Zero) {
-        $procName = 'browser'
-        try {
-            $pidVal = 0
-            [ClipwarpGeminiNative]::GetWindowThreadProcessId($hWnd, [ref]$pidVal)
-            if ($pidVal -gt 0) {
-                $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
-                if ($proc) {
-                    $procName = $proc.ProcessName.ToLowerInvariant()
-                    # Re-verify that the process is a recognized browser
-                    if ($procName -notmatch '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$') {
-                        return $null
-                    }
-                }
-            }
-        } catch { }
-
-        return [pscustomobject]@{
-            MainWindowHandle = $hWnd
-            ProcessName = $procName
-            MainWindowTitle = 'Gemini'
-        }
-    }
-    return $null
+    $ErrorActionPreference = 'Stop'
+    $matches = @(& $ProcessFinder | Where-Object {
+        $null -ne $_ -and $_.Visible -and $_.ProcessId -gt 0 -and $_.ProcessStarted -gt 0 -and
+        $_.ProcessName -match '^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen|chromium)$' -and
+        $_.MainWindowTitle -match '^(?:(?:Google )?Gemini(?: Spark)?|Spark)(?:\s*[-\u2013\u2014:|].*|\s*)$' -and
+        $null -ne $_.MainWindowHandle -and [IntPtr]$_.MainWindowHandle -ne [IntPtr]::Zero
+    })
+    if ($matches.Count -gt 1) { throw 'Multiple Gemini browser windows are visible. Nothing was sent.' }
+    if ($matches.Count -eq 1) { return $matches[0] }
 }
 
 function Wait-ClipwarpGeminiSparkPage {
     param(
         [string]$Url,
         [scriptblock]$PageFinder = { param($u) Find-ClipwarpGeminiSparkPage $u },
-        [scriptblock]$Delay = { Start-Sleep -Milliseconds 250 },
-        [int]$Attempts = 80
+        [scriptblock]$Delay = { param($ms) Start-Sleep -Milliseconds $ms },
+        [ValidateRange(1,80)][int]$Attempts = 80
     )
+    $ErrorActionPreference = 'Stop'
     for ($attempt = 0; $attempt -lt $Attempts; $attempt++) {
         $page = & $PageFinder $Url
         if ($null -ne $page) { return $page }
-        & $Delay
+        if ($attempt -lt $Attempts - 1) { & $Delay 250 }
     }
-    throw 'Gemini Spark is not ready or the browser window was not found.'
+    throw 'Gemini Spark is not ready or the browser window was not found. Nothing was sent.'
+}
+
+function Assert-ClipwarpGeminiWindow {
+    param($Page, [scriptblock]$WindowFinder)
+    $current = & $WindowFinder (New-ClipwarpGeminiSparkUrl)
+    if ($null -eq $Page -or $null -eq $current -or
+        $Page.MainWindowHandle -eq [IntPtr]::Zero -or
+        $current.MainWindowHandle -ne $Page.MainWindowHandle -or
+        $current.ProcessId -ne $Page.ProcessId -or $current.ProcessStarted -ne $Page.ProcessStarted) {
+        throw 'Gemini browser window changed or disappeared. Send will not be retried.'
+    }
+}
+
+function Get-ClipwarpGeminiClipboardText {
+    # Both popup engines run STA; use an STA runspace for standalone MTA callers too.
+    $runspace = [runspacefactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $powershell = [powershell]::Create()
+    try {
+        $runspace.Open()
+        $powershell.Runspace = $runspace
+        [void]$powershell.AddScript("Add-Type -AssemblyName System.Windows.Forms; [Windows.Forms.Clipboard]::GetText()")
+        $result = $powershell.Invoke()
+        if ($powershell.HadErrors) { throw 'Gemini clipboard read failed.' }
+        if ($result.Count -ne 1) { throw 'Gemini clipboard text is unavailable.' }
+        [string]$result[0]
+    } finally { $powershell.Dispose(); $runspace.Dispose() }
+}
+
+function Set-ClipwarpGeminiClipboardText {
+    param([string]$Value,
+        [scriptblock]$Reader = { Get-ClipwarpGeminiClipboardText },
+        [scriptblock]$Writer = { param($v) Invoke-ClipwarpStaClipboardWrite -Value $v })
+    $ErrorActionPreference = 'Stop'
+    # Skip only an exact match; the shared ChatGPT helper intentionally stays unchanged.
+    if (-not [string]::Equals((& $Reader), $Value, [StringComparison]::Ordinal)) { & $Writer $Value }
 }
 
 function Send-ClipwarpGeminiSparkMessage {
     param(
         $Page,
         [string]$Message,
-        [scriptblock]$WindowActivator = $null,
-        [scriptblock]$KeySender = $null,
-        [scriptblock]$Delay = { Start-Sleep -Milliseconds 300 }
+        [scriptblock]$WindowActivator = { param($p) [ClipwarpGeminiNative]::ActivateWindow([IntPtr]$p.MainWindowHandle, [uint32]$p.ProcessId) },
+        [scriptblock]$KeySender = { param($action,$p) [ClipwarpGeminiNative]::SendKey([IntPtr]$p.MainWindowHandle, [uint32]$p.ProcessId, $action) },
+        [scriptblock]$Delay = { param($ms) Start-Sleep -Milliseconds $ms },
+        [scriptblock]$WindowFinder = { param($u) Find-ClipwarpGeminiSparkPage $u },
+        [scriptblock]$TargetReader = { param($p) Get-ClipwarpGeminiTarget $p },
+        [scriptblock]$ComposerFocuser = { param($target) $target.Element.SetFocus() },
+        [scriptblock]$ForegroundReader = { [ClipwarpGeminiNative]::GetForegroundWindow() },
+        [scriptblock]$ClipboardReader = { Get-ClipwarpGeminiClipboardText },
+        [ValidateRange(1,80)][int]$Attempts = 80
     )
-    if ($WindowActivator) {
-        & $WindowActivator $Page
-    } else {
-        if ($null -ne $Page -and $null -ne $Page.MainWindowHandle -and $Page.MainWindowHandle -ne [IntPtr]::Zero -and $Page.MainWindowHandle -ne 0) {
-            [ClipwarpChatGptNative]::ActivateWindow([IntPtr]$Page.MainWindowHandle)
-        }
+    $ErrorActionPreference = 'Stop'
+    Assert-ClipwarpGeminiWindow $Page $WindowFinder
+    if ((& $WindowActivator $Page) -ne $true) { throw 'Unable to activate Gemini browser window. Nothing was sent.' }
+    & $Delay 300
+    $target = $null
+    for ($attempt=0; $attempt -lt $Attempts; $attempt++) {
+        Assert-ClipwarpGeminiWindow $Page $WindowFinder
+        if ((& $ForegroundReader) -ne $Page.MainWindowHandle) { throw 'Gemini lost foreground focus. Nothing was sent.' }
+        $target = & $TargetReader $Page
+        if ($null -ne $target) { break }
+        if ($attempt -lt $Attempts - 1) { & $Delay 250 }
     }
-    & $Delay
-
-    if ($KeySender) {
-        & $KeySender $Message
-    } else {
-        [ClipwarpChatGptNative]::SendPasteAndEnter()
+    if ($null -eq $target -or [string]::IsNullOrEmpty($target.Id)) {
+        throw 'Gemini Spark page/composer could not be identified. Nothing was sent.'
+    }
+    & $ComposerFocuser $target
+    & $Delay 300
+    # Clipboard reads can yield to another STA. Validate focus/window AFTER each
+    # read, including after paste hydration, immediately before input. Never retry.
+    foreach ($action in @('Paste','Enter')) {
+        if (-not [string]::Equals((& $ClipboardReader), $Message, [StringComparison]::Ordinal)) {
+            throw 'Clipboard changed before Gemini input. Send will not be retried.'
+        }
+        Assert-ClipwarpGeminiWindow $Page $WindowFinder
+        $current = & $TargetReader $Page
+        if ((& $ForegroundReader) -ne $Page.MainWindowHandle -or $null -eq $current -or
+            $current.Id -cne $target.Id -or -not $current.Focused) {
+            throw 'Gemini composer lost focus or changed. Send will not be retried.'
+        }
+        & $KeySender $action $Page
+        if ($action -eq 'Paste') { & $Delay 600 }
     }
 }
+
 
 function Open-ClipwarpExternalUrl {
     [CmdletBinding()]
@@ -720,14 +842,15 @@ function Start-ClipwarpGeminiSparkHandoff {
         [scriptblock]$ClipboardWriter = $null,
         [scriptblock]$BrowserStarter = $null,
         [scriptblock]$PageWaiter = { param($url) Wait-ClipwarpGeminiSparkPage $url },
-        [scriptblock]$Submitter = { param($page, $text) Send-ClipwarpGeminiSparkMessage $page $text }
+        [scriptblock]$Submitter = { param($page, $text) Send-ClipwarpGeminiSparkMessage $page $text },
+        [scriptblock]$Delay = { param($ms) Start-Sleep -Milliseconds $ms }
     )
 
     $ErrorActionPreference = 'Stop'
     if ($ClipboardWriter) {
         & $ClipboardWriter $Message
     } else {
-        Set-ClipwarpClipboardText -Value $Message
+        Set-ClipwarpGeminiClipboardText -Value $Message
     }
 
     $url = New-ClipwarpGeminiSparkUrl
@@ -740,9 +863,7 @@ function Start-ClipwarpGeminiSparkHandoff {
     $page = & $PageWaiter $url
     if ($null -eq $page) { throw 'Gemini Spark is not ready. Nothing was sent.' }
 
-    if (-not $BrowserStarter) {
-        Start-Sleep -Milliseconds 2500
-    }
+    & $Delay 2500
 
     & $Submitter $page $Message
 }

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'clipwarp-calendar.psm1') -Force
 if (-not (Get-Command -Name Start-ClipwarpGeminiSparkHandoff -Module clipwarp-calendar -CommandType Function -ErrorAction SilentlyContinue)) {
     throw 'ordinary Import-Module must export Start-ClipwarpGeminiSparkHandoff'
@@ -12,15 +12,15 @@ Write-Host 'PASS: ordinary Import-Module exports Start-ClipwarpGeminiSparkHandof
     Check ((New-ClipwarpGeminiSparkUrl) -ceq $url) 'exact Spark URL'
 
     # Test Find-ClipwarpGeminiSparkPage matching browser and title
-    $validProc = [pscustomobject]@{ ProcessName='msedge'; MainWindowTitle='Google Gemini - Microsoft Edge'; MainWindowHandle=[IntPtr]1234 }
+    $validProc = [pscustomobject]@{ ProcessName='msedge'; MainWindowTitle='Google Gemini - Microsoft Edge'; MainWindowHandle=[IntPtr]1234; Visible=$true; ProcessId=7; ProcessStarted=123 }
     $found = Find-ClipwarpGeminiSparkPage -Url 'any' -ProcessFinder { @($validProc) }
     Check ($found -eq $validProc) 'matching browser and title is discovered'
 
-    $nonBrowser = [pscustomobject]@{ ProcessName='notepad'; MainWindowTitle='Gemini notes'; MainWindowHandle=[IntPtr]1234 }
+    $nonBrowser = [pscustomobject]@{ ProcessName='notepad'; MainWindowTitle='Gemini notes'; MainWindowHandle=[IntPtr]1234; Visible=$true; ProcessId=7; ProcessStarted=123 }
     $foundNonBrowser = Find-ClipwarpGeminiSparkPage -Url 'any' -ProcessFinder { @($nonBrowser) }
     Check ($null -eq $foundNonBrowser) 'non-browser process is ignored'
 
-    $nonGemini = [pscustomobject]@{ ProcessName='chrome'; MainWindowTitle='Google Search'; MainWindowHandle=[IntPtr]1234 }
+    $nonGemini = [pscustomobject]@{ ProcessName='chrome'; MainWindowTitle='Google Search'; MainWindowHandle=[IntPtr]1234; Visible=$true; ProcessId=7; ProcessStarted=123 }
     $foundNonGemini = Find-ClipwarpGeminiSparkPage -Url 'any' -ProcessFinder { @($nonGemini) }
     Check ($null -eq $foundNonGemini) 'browser with different title is ignored'
 
@@ -45,22 +45,12 @@ Write-Host 'PASS: ordinary Import-Module exports Start-ClipwarpGeminiSparkHandof
     }
     Check $failed 'wait fails closed when window is not found'
 
-    # Test Send-ClipwarpGeminiSparkMessage invokes window activation and key sending
-    $sendState = @{ ActivatedPage=$null; SentMessage=$null }
+    # Native send/focus behavior is covered with all desktop seams faked in gemini-handoff.Tests.ps1.
     $fakePage = [pscustomobject]@{ MainWindowHandle=[IntPtr]5678 }
     $testMsg = " `tHello Gemini`r`n" + [char]0x4F60 + [char]0x0E01 + " line 2`n  "
-
-    Send-ClipwarpGeminiSparkMessage -Page $fakePage -Message $testMsg `
-        -WindowActivator { param($p) $sendState.ActivatedPage = $p } `
-        -KeySender { param($m) $sendState.SentMessage = $m } `
-        -Delay { }
-
-    Check ($sendState.ActivatedPage -eq $fakePage) 'window activator receives target page'
-    Check ($sendState.SentMessage -eq $testMsg) 'key sender receives exact original message'
-
     # Test Start-ClipwarpGeminiSparkHandoff full workflow
     $calls = New-Object Collections.Generic.List[object]
-    Start-ClipwarpGeminiSparkHandoff -Message $testMsg `
+    Start-ClipwarpGeminiSparkHandoff -Message $testMsg -Delay { } `
         -ClipboardWriter { param($v) $calls.Add([pscustomobject]@{ Kind='clip'; Value=$v }) } `
         -BrowserStarter { param($v) $calls.Add([pscustomobject]@{ Kind='browser'; Value=$v }) } `
         -PageWaiter { param($u) $calls.Add([pscustomobject]@{ Kind='wait'; Value=$u }); $fakePage } `
@@ -75,7 +65,7 @@ Write-Host 'PASS: ordinary Import-Module exports Start-ClipwarpGeminiSparkHandof
     # Test failure propagation
     $failed = $false
     try {
-        Start-ClipwarpGeminiSparkHandoff -Message $testMsg -ClipboardWriter { throw 'clip err' }
+        Start-ClipwarpGeminiSparkHandoff -Message $testMsg -Delay { } -ClipboardWriter { throw 'clip err' }
     } catch {
         if ($_.Exception.Message -like '*clip err*') { $failed = $true }
     }
@@ -83,7 +73,7 @@ Write-Host 'PASS: ordinary Import-Module exports Start-ClipwarpGeminiSparkHandof
 
     $failed = $false
     try {
-        Start-ClipwarpGeminiSparkHandoff -Message $testMsg `
+        Start-ClipwarpGeminiSparkHandoff -Message $testMsg -Delay { } `
             -ClipboardWriter { } `
             -BrowserStarter { } `
             -PageWaiter { throw 'wait err' }
@@ -94,7 +84,7 @@ Write-Host 'PASS: ordinary Import-Module exports Start-ClipwarpGeminiSparkHandof
 
     $failed = $false
     try {
-        Start-ClipwarpGeminiSparkHandoff -Message $testMsg `
+        Start-ClipwarpGeminiSparkHandoff -Message $testMsg -Delay { } `
             -ClipboardWriter { } `
             -BrowserStarter { } `
             -PageWaiter { $fakePage } `
