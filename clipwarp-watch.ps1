@@ -281,6 +281,7 @@ namespace ClipwarpWatch
     // Pure policy: tests use fake layout handles, monotonic times and coordinates.
     public class LanguageState
     {
+        public const int DisplayDurationMilliseconds = 1300;
         private long previous;
         public long HideAt { get; private set; }
         public bool Observe(long layout, long now)
@@ -289,7 +290,7 @@ namespace ClipwarpWatch
             if (previous == 0) { previous = layout; return false; }
             if (previous == layout) return false;
             previous = layout;
-            HideAt = now + 2000;
+            HideAt = now + DisplayDurationMilliseconds;
             return true;
         }
         public bool Visible(long now) { return HideAt > now; }
@@ -318,8 +319,9 @@ namespace ClipwarpWatch
             bool cursor, int mx, int my, int fx, int fy, int width, int height,
             System.Drawing.Rectangle work)
         {
-            int x = (caret ? cx : cursor ? mx : fx) + 6;
-            int y = (caret ? cy : cursor ? my : fy) + 6;
+            // The normalized caret point is the label center x and top y; fallback keeps its offset.
+            int x = caret ? cx - width / 2 : (cursor ? mx : fx) + 6;
+            int y = caret ? cy : (cursor ? my : fy) + 6;
             return new System.Drawing.Point(Math.Max(work.Left, Math.Min(x, work.Right - width)),
                 Math.Max(work.Top, Math.Min(y, work.Bottom - height)));
         }
@@ -538,7 +540,7 @@ namespace ClipwarpWatch
             overlay.Show();
             overlay.Invalidate();
             hide.Stop();
-            HideExpired(null, EventArgs.Empty); // arm for the remaining deadline, never a fresh two seconds
+            HideExpired(null, EventArgs.Empty); // arm for the remaining deadline, never a fresh display duration
         }
         public void Dispose()
         {

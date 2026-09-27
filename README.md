@@ -186,14 +186,16 @@ and image prompts from accumulating concurrently. Bounded cleanup removes only o
 future work.
 
 While the watcher is running (`clipwarp watch`), changing the active Windows input
-language shows a small, click-through, non-activating label beside the text caret, for example
+language shows a small, click-through, non-activating caret-anchored label, for example
 `TH — ไทย` or `EN — English`. It detects actual foreground-thread
 keyboard layout changes every 100 ms, including changes made with Grave Accent,
 Win+Space, Alt+Shift, or the Windows language picker; no language hotkeys are
 registered or intercepted. Switching to an app with a different layout also counts.
-There is no label on startup. Each detected change resets a 2,000 ms hide deadline
+There is no label on startup. Each detected change resets the hide deadline to 1.30 seconds/1,300 ms
 (on an independent UI timer; Windows scheduling can delay painting/hiding slightly).
-If an app does not expose a Windows caret, the label uses the cursor position,
+The label is centered horizontally on the caret x and starts at its bottom y, then
+clamps to the monitor work area. Only when caret data or its screen conversion is
+unavailable does the label use the cursor position,
 then the foreground window as fallback, and stays within the monitor work area.
 Unknown languages display `Language 0xXXXX`. Stop the watcher to stop these labels.
 This adds no setting or change to installation/autostart behavior.
