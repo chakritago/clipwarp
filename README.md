@@ -187,10 +187,12 @@ future work.
 
 While the watcher is running (`clipwarp watch`), changing the active Windows input
 language shows a small, click-through, non-activating label caret-anchored above the text, for example
-`TH — ไทย` or `EN — English`. It detects actual foreground-thread
-keyboard layout changes every 100 ms, including changes made with Grave Accent,
-Win+Space, Alt+Shift, or the Windows language picker; no language hotkeys are
-registered or intercepted. Switching to an app with a different layout also counts.
+`TH — ไทย` or `EN — English`. Shortcut keydown (grave/OEM_3 without Ctrl/Alt/Win, Win+Space, or Alt+Shift)
+triggers an immediate foreground-thread layout probe and a 10 ms probe timer for up to
+150 ms, without waiting for key release. No key is consumed or synthesized; held-key
+repeats do not trigger extra probes. The label reflects the actual Windows layout change.
+The independent 100 ms polling fallback detects language-picker changes and remains
+active if the keyboard hook is unavailable. Switching to an app with a different layout also counts.
 There is no label on startup. Each detected change resets the hide deadline to 1.00 seconds/1,000 ms
 (on an independent UI timer; Windows scheduling can delay painting/hiding slightly).
 The label is centered horizontally on the caret x with its bottom 6 pixels above the caret top, then

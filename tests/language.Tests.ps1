@@ -59,7 +59,7 @@ foreach ($changeAt in @(2000,2100,2200)) {
 foreach($contract in @('GetKeyboardLayout(thread)','GetGUIThreadInfo(thread','CaretToScreen(info.hwndCaret','info.rcCaret.Top','ShowWithoutActivation','0x08000000','0x00000080','WM_MOUSEACTIVATE','MA_NOACTIVATE','FormBorderStyle.None','TopMost = true','ShowInTaskbar = false','Stopwatch.StartNew()','Interval = 100','language.Dispose()','poll.Dispose()','hide.Dispose()','fg == overlay.Handle')) {
     Assert ($src.Contains($contract)) "source contract: $contract"
 }
-Assert ($src -notmatch 'RegisterHotKey|SetWindowsHookEx|SendInput|SendKeys|keybd_event') 'source contract: no hotkey interception or synthesis'
+Assert ($src -notmatch 'RegisterHotKey|SendInput|SendKeys|keybd_event') 'source contract: no hotkey registration or synthesis'
 $bytes=[IO.File]::ReadAllBytes((Join-Path $root 'clipwarp-watch.ps1'))
 Assert ($bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191) 'watcher UTF-8 BOM'
 Write-Host 'PASS: fake-only language tests; no watcher or form instantiated'
@@ -112,3 +112,64 @@ $mustNotRun=[Func[Drawing.Point,Nullable[Drawing.Point]]]{param($p) throw 'unexp
 Assert ($null -eq [ClipwarpWatch.LanguageState]::NormalizeCaret($client,$failedMap,$mustNotRun)) 'fake DPI policy: failed client mapping skips conversion'
 Assert ($null -eq [ClipwarpWatch.LanguageState]::NormalizeCaret($client,$toScreen,$failedMap)) 'fake DPI policy: failed physical conversion requests cursor fallback'
 Write-Host 'PASS: fake policy and structural contracts only; no GUI E2E or native DPI/input execution'
+
+# Pure shortcut state: synthetic message numbers only, no native hook or keyboard input.
+foreach ($downMessage in @(0x100,0x104)) {
+    $keys=New-Object ClipwarpWatch.LanguageShortcutState
+    Assert ($keys.Observe($downMessage,0xC0)) 'grave keydown triggers'
+    Assert (-not $keys.Observe($downMessage,0xC0)) 'held grave repeat suppressed'
+    Assert (-not $keys.Observe(0x101,0xC0)) 'keyup never triggers'
+    Assert ($keys.Observe($downMessage,0xC0)) 'new physical press triggers again'
+}
+foreach ($modifier in @(0x11,0xA2,0xA3,0x12,0xA4,0xA5,0x5B,0x5C)) {
+    $keys=New-Object ClipwarpWatch.LanguageShortcutState
+    $null=$keys.Observe(0x100,$modifier)
+    Assert (-not $keys.Observe(0x100,0xC0)) "modified grave excluded: $modifier"
+}
+foreach ($win in @(0x5B,0x5C)) {
+    $keys=New-Object ClipwarpWatch.LanguageShortcutState
+    Assert (-not $keys.Observe(0x100,$win)) 'Win alone does not trigger'
+    Assert ($keys.Observe(0x100,0x20)) 'Win+Space triggers'
+    Assert (-not $keys.Observe(0x100,0x20)) 'held Win+Space suppressed'
+    Assert (-not $keys.Observe(0x105,0x20)) 'system keyup does not trigger'
+    Assert ($keys.Observe(0x104,0x20)) 'new Space while Win held triggers'
+}
+foreach ($alt in @(0x12,0xA4,0xA5)) {
+    foreach ($shift in @(0x10,0xA0,0xA1)) {
+        foreach ($reverse in @($false,$true)) {
+            $keys=New-Object ClipwarpWatch.LanguageShortcutState
+            $first=$alt; $second=$shift
+            if ($reverse) { $first=$shift; $second=$alt }
+            Assert (-not $keys.Observe(0x104,$first)) 'first Alt/Shift alone ignored'
+            Assert ($keys.Observe(0x104,$second)) "Alt+Shift transition $first/$second"
+            Assert (-not $keys.Observe(0x104,$second)) 'Alt+Shift repeat suppressed'
+            Assert (-not $keys.Observe(0x105,$second)) 'Alt+Shift release ignored'
+        }
+    }
+}
+$keys=New-Object ClipwarpWatch.LanguageShortcutState
+foreach ($key in @(0x20,0x41,0x0D,0x09)) { Assert (-not $keys.Observe(0x100,$key)) 'ordinary key ignored' }
+Assert (-not $keys.Observe(0x999,0xC0)) 'non-key message ignored'
+$null=$keys.Observe(0x100,0xA0)
+Assert ($keys.Observe(0x100,0xC0)) 'Shift does not exclude configured grave shortcut'
+$keys=New-Object ClipwarpWatch.LanguageShortcutState
+$null=$keys.Observe(0x100,0xA2); $null=$keys.Observe(0x101,0xA2)
+Assert ($keys.Observe(0x100,0xC0)) 'released modifier no longer excludes grave'
+foreach ($contract in @('SetWindowsHookEx(13, keyboardProc, GetModuleHandle(null), 0)',
+    'keyboardProc = KeyboardSignal', 'UnhookWindowsHookEx(keyboardHook)', 'GC.KeepAlive(keyboardProc)',
+    'code >= 0 && !disposed', 'shortcuts.Observe(message.ToInt32(), Marshal.ReadInt32(data))',
+    'return CallNextHookEx(keyboardHook, code, message, data);',
+    'shortcutDispatcher.BeginInvoke((MethodInvoker)delegate', 'clock.ElapsedMilliseconds + 150',
+    'probe.Interval = 10', 'clock.ElapsedMilliseconds >= probeUntil', 'probe.Tick -= Probe; probe.Dispose()',
+    'shortcutDispatcher.Dispose()', 'poll.Interval = 100', 'InstallKeyboardSignal();')) {
+    Assert ($indicator.Contains($contract)) "keyboard/probe source contract: $contract"
+}
+$callback=$indicator.Substring($indicator.IndexOf('private IntPtr KeyboardSignal'),$indicator.IndexOf('private void Probe')-$indicator.IndexOf('private IntPtr KeyboardSignal'))
+Assert ($callback -match '(?s)catch \{ \}.*return CallNextHookEx' -and ([regex]::Matches($callback,'return CallNextHookEx').Count -eq 1)) 'all hook paths including errors and negative codes reach CallNextHookEx'
+Assert ($callback -notmatch 'Sleep|WaitOne|ToUnicode|GetKeyboardState|Log\(') 'hook does not block, translate text or log keys'
+Assert ($callback -match '(?s)BeginInvoke.*Poll\(null, EventArgs.Empty\);.*probeUntil = deadline;.*probe.Start\(\)') 'queued UI callback polls immediately before bounded retries'
+$install=$indicator.Substring($indicator.IndexOf('private void InstallKeyboardSignal'),$indicator.IndexOf('private IntPtr KeyboardSignal')-$indicator.IndexOf('private void InstallKeyboardSignal'))
+Assert ($install.Contains('catch (EntryPointNotFoundException)') -and $install.Contains('catch (DllNotFoundException)') -and $install -notmatch 'throw|poll.Stop') 'missing hook APIs preserve polling fallback'
+Assert ($indicator.IndexOf('poll.Start();') -lt $indicator.IndexOf('InstallKeyboardSignal();')) 'fallback polling starts before hook installation'
+Assert ($readme.Contains('keydown') -and $readme.Contains('No key is consumed')) 'README documents immediate non-consuming signal'
+Write-Host 'PASS: shortcut fake state and hook/probe source contracts; no real hooks, keys, watcher or overlay'

@@ -415,6 +415,31 @@ namespace ClipwarpWatch
         }
     }
 
+    // Only shortcut/modifier down bits are retained; no characters or text are captured.
+    public sealed class LanguageShortcutState
+    {
+        private readonly bool[] down = new bool[256];
+        private bool Shift { get { return down[0x10] || down[0xA0] || down[0xA1]; } }
+        private bool Alt { get { return down[0x12] || down[0xA4] || down[0xA5]; } }
+        private bool Ctrl { get { return down[0x11] || down[0xA2] || down[0xA3]; } }
+        private bool Win { get { return down[0x5B] || down[0x5C]; } }
+        public bool Observe(int message, int key)
+        {
+            bool press = message == 0x100 || message == 0x104;
+            bool release = message == 0x101 || message == 0x105;
+            if ((!press && !release) || key < 0 || key > 255) return false;
+            bool shift = key == 0x10 || key == 0xA0 || key == 0xA1;
+            bool alt = key == 0x12 || key == 0xA4 || key == 0xA5;
+            if (!(shift || alt || key == 0x11 || key == 0xA2 || key == 0xA3 ||
+                key == 0x5B || key == 0x5C || key == 0x20 || key == 0xC0)) return false;
+            bool repeated = down[key];
+            down[key] = press;
+            if (!press || repeated) return false;
+            return (key == 0xC0 && !Ctrl && !Alt && !Win) ||
+                (key == 0x20 && Win) || (shift && Alt) || (alt && Shift);
+        }
+    }
+
     internal sealed class LanguageIndicator : IDisposable
     {
         [StructLayout(LayoutKind.Sequential)]
@@ -480,6 +505,48 @@ namespace ClipwarpWatch
             catch (DllNotFoundException) { return false; }
             finally { RestoreDpi(previous); }
         }
+        private delegate IntPtr KeyboardProc(int code, IntPtr message, IntPtr data);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr SetWindowsHookEx(int id, KeyboardProc callback, IntPtr module, uint thread);
+        [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hook);
+        [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr message, IntPtr data);
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto)] private static extern IntPtr GetModuleHandle(string name);
+        private readonly LanguageShortcutState shortcuts = new LanguageShortcutState();
+        private readonly Control shortcutDispatcher = new Control();
+        private readonly Timer probe = new Timer();
+        private KeyboardProc keyboardProc;
+        private IntPtr keyboardHook;
+        private long probeUntil;
+        private void InstallKeyboardSignal()
+        {
+            try {
+                IntPtr handle = shortcutDispatcher.Handle; // created on the indicator UI thread
+                keyboardProc = KeyboardSignal; // root delegate until unhooked
+                keyboardHook = SetWindowsHookEx(13, keyboardProc, GetModuleHandle(null), 0); // WH_KEYBOARD_LL
+            } catch (EntryPointNotFoundException) { }
+            catch (DllNotFoundException) { }
+            // A zero hook handle also leaves the independent 100 ms poll running.
+        }
+        private IntPtr KeyboardSignal(int code, IntPtr message, IntPtr data)
+        {
+            try {
+                if (code >= 0 && !disposed && shortcuts.Observe(message.ToInt32(), Marshal.ReadInt32(data))) {
+                    long deadline = clock.ElapsedMilliseconds + 150;
+                    shortcutDispatcher.BeginInvoke((MethodInvoker)delegate {
+                        if (disposed) return;
+                        Poll(null, EventArgs.Empty);
+                        probeUntil = deadline;
+                        if (clock.ElapsedMilliseconds < probeUntil) probe.Start();
+                    });
+                }
+            } catch { } // Never let observation/dispatch failure affect the user's input.
+            return CallNextHookEx(keyboardHook, code, message, data);
+        }
+        private void Probe(object sender, EventArgs e)
+        {
+            if (disposed || clock.ElapsedMilliseconds >= probeUntil) { probe.Stop(); return; }
+            Poll(null, EventArgs.Empty);
+        }
         private readonly LanguageState state = new LanguageState();
         private readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
         private readonly Timer poll = new Timer();
@@ -496,6 +563,9 @@ namespace ClipwarpWatch
                 hide.Tick += HideExpired;
                 Poll(null, EventArgs.Empty); // baseline only; no form created until a change
                 poll.Start();
+                probe.Interval = 10;
+                probe.Tick += Probe;
+                InstallKeyboardSignal();
             } catch { Dispose(); throw; }
         }
         private void HideExpired(object sender, EventArgs e)
@@ -547,6 +617,13 @@ namespace ClipwarpWatch
         {
             if (disposed) return;
             disposed = true;
+            if (keyboardHook != IntPtr.Zero) {
+                UnhookWindowsHookEx(keyboardHook);
+                keyboardHook = IntPtr.Zero;
+            }
+            GC.KeepAlive(keyboardProc);
+            probe.Stop(); probe.Tick -= Probe; probe.Dispose();
+            shortcutDispatcher.Dispose();
             poll.Stop(); hide.Stop();
             poll.Tick -= Poll; hide.Tick -= HideExpired;
             poll.Dispose(); hide.Dispose();
