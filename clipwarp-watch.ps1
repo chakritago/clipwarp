@@ -278,6 +278,280 @@ namespace ClipwarpWatch
 
     }
 
+    // Pure policy: tests use fake layout handles, monotonic times and coordinates.
+    public class LanguageState
+    {
+        private long previous;
+        public long HideAt { get; private set; }
+        public bool Observe(long layout, long now)
+        {
+            if (layout == 0) return false;
+            if (previous == 0) { previous = layout; return false; }
+            if (previous == layout) return false;
+            previous = layout;
+            HideAt = now + 2000;
+            return true;
+        }
+        public bool Visible(long now) { return HideAt > now; }
+        public static string Label(long layout)
+        {
+            int lang = (int)(layout & 0xffff);
+            try {
+                if (lang == 0 || lang == 0xffff) throw new ArgumentException();
+                // Stable common labels across Windows NLS and .NET ICU versions.
+                if (lang == 0x041e) return "TH — ไทย";
+                if (lang == 0x0409) return "EN — English";
+                var culture = System.Globalization.CultureInfo.GetCultureInfo(lang);
+                return culture.TwoLetterISOLanguageName.ToUpperInvariant() + " — " + culture.NativeName;
+            } catch (ArgumentException) { return "Language 0x" + lang.ToString("X4"); }
+        }
+        // Conversion stages are injectable so fake tests can model differing DPI scales.
+        // Never scale an absolute desktop coordinate about (0,0): monitor origins differ.
+        public static System.Drawing.Point? NormalizeCaret(System.Drawing.Point client,
+            Func<System.Drawing.Point, System.Drawing.Point?> toScreen,
+            Func<System.Drawing.Point, System.Drawing.Point?> toPhysical)
+        {
+            var screen = toScreen(client);
+            return screen.HasValue ? toPhysical(screen.Value) : null;
+        }
+        public static System.Drawing.Point Position(bool caret, int cx, int cy,
+            bool cursor, int mx, int my, int fx, int fy, int width, int height,
+            System.Drawing.Rectangle work)
+        {
+            int x = (caret ? cx : cursor ? mx : fx) + 6;
+            int y = (caret ? cy : cursor ? my : fy) + 6;
+            return new System.Drawing.Point(Math.Max(work.Left, Math.Min(x, work.Right - width)),
+                Math.Max(work.Top, Math.Min(y, work.Bottom - height)));
+        }
+    }
+
+    internal sealed class LanguageOverlay : Form
+    {
+        public LanguageOverlay()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            TopMost = true;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            BackColor = System.Drawing.Color.FromArgb(35, 35, 35);
+            ForeColor = System.Drawing.Color.White;
+            ClientSize = new System.Drawing.Size(220, 32);
+            Opacity = 0.99; // WinForms initializes the layered surface, including recreated handles.
+        }
+        protected override bool ShowWithoutActivation { get { return true; } }
+        protected override CreateParams CreateParams {
+            get { CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x08000000 | 0x00000080 | 0x00080000 | 0x00000020;
+                // WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT
+                // Layered + transparent passes mouse input across thread/process boundaries.
+                return cp;
+            }
+        }
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_NCHITTEST = 0x0084, HTTRANSPARENT = -1;
+            if (m.Msg == WM_NCHITTEST) { m.Result = (IntPtr)HTTRANSPARENT; return; }
+            const int WM_MOUSEACTIVATE = 0x0021, MA_NOACTIVATE = 3;
+            if (m.Msg == WM_MOUSEACTIVATE) { m.Result = (IntPtr)MA_NOACTIVATE; return; }
+            base.WndProc(ref m);
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ForeColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        }
+    }
+
+    // Clipboard retries/process waits can block the watcher pump. Keep language
+    // deadlines on a dedicated, idle STA pump; it never reads the clipboard.
+    internal sealed class LanguageIndicatorHost : IDisposable
+    {
+        private readonly object gate = new object();
+        private readonly System.Threading.Thread thread;
+        private Control dispatcher;
+        private bool stopping;
+        public LanguageIndicatorHost(Action<string> report)
+        {
+            thread = new System.Threading.Thread(delegate() {
+                IntPtr previousDpi = IntPtr.Zero;
+                try {
+                    Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException, true);
+                    previousDpi = LanguageIndicator.EnterPerMonitorDpi();
+                    using (Control control = new Control()) {
+                        IntPtr handle = control.Handle;
+                        lock (gate) {
+                            if (stopping) return;
+                            dispatcher = control;
+                        }
+                        try {
+                            using (LanguageIndicator indicator = new LanguageIndicator(previousDpi != IntPtr.Zero)) Application.Run();
+                        } finally { lock (gate) { dispatcher = null; } }
+                    }
+                } catch (Exception ex) {
+                    // One report, no retry loop; even a failing logger must not escape this thread.
+                    try { report("language indicator stopped: " + ex.Message); } catch { }
+                } finally { LanguageIndicator.RestoreDpi(previousDpi); }
+            });
+            thread.IsBackground = true;
+            thread.Name = "clipwarp language indicator";
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.Start();
+        }
+        public void Dispose()
+        {
+            lock (gate) {
+                if (stopping) return;
+                stopping = true;
+                if (dispatcher != null) {
+                    try { dispatcher.BeginInvoke((MethodInvoker)delegate { Application.ExitThread(); }); }
+                    catch (InvalidOperationException) { } // pump may already be tearing down
+                }
+            }
+            thread.Join(1000);
+        }
+    }
+
+    internal sealed class LanguageIndicator : IDisposable
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT { public int X, Y; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct GUITHREADINFO {
+            public int cbSize; public uint flags;
+            public IntPtr hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret;
+            public RECT rcCaret;
+        }
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+        [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint thread);
+        [DllImport("user32.dll")] private static extern bool GetGUIThreadInfo(uint thread, ref GUITHREADINFO info);
+        [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr hwnd, ref POINT point);
+        [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT point);
+        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+        [DllImport("user32.dll")] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+        [DllImport("user32.dll")] private static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
+        [DllImport("user32.dll")] private static extern bool LogicalToPhysicalPointForPerMonitorDPI(IntPtr hwnd, ref POINT point);
+        internal static IntPtr EnterPerMonitorDpi()
+        {
+            try { return SetThreadDpiAwarenessContext(new IntPtr(-3)); } // PM v1: Windows 10 1607+
+            catch (EntryPointNotFoundException) { return IntPtr.Zero; }
+            catch (DllNotFoundException) { return IntPtr.Zero; }
+        }
+        internal static void RestoreDpi(IntPtr previous)
+        {
+            if (previous == IntPtr.Zero) return;
+            try { SetThreadDpiAwarenessContext(previous); }
+            catch (EntryPointNotFoundException) { }
+            catch (DllNotFoundException) { }
+        }
+        private readonly bool perMonitorDpi;
+        private bool CaretToScreen(IntPtr hwnd, ref POINT point)
+        {
+            // rcCaret is in the target's logical client space, regardless of our DPI context.
+            // Map in the target context, then convert its logical screen point to physical pixels.
+            // Restore our PM context before any WinForms/Screen calls. Missing APIs skip the
+            // caret and use GetCursorPos in the same context as Screen.WorkingArea instead.
+            if (!perMonitorDpi) return false;
+            IntPtr previous = IntPtr.Zero;
+            try {
+                IntPtr target = GetWindowDpiAwarenessContext(hwnd);
+                if (target == IntPtr.Zero) return false;
+                previous = SetThreadDpiAwarenessContext(target);
+                if (previous == IntPtr.Zero) return false;
+                var normalized = LanguageState.NormalizeCaret(new System.Drawing.Point(point.X, point.Y),
+                    delegate(System.Drawing.Point p) {
+                        POINT native = new POINT { X = p.X, Y = p.Y };
+                        return ClientToScreen(hwnd, ref native) ? (System.Drawing.Point?)new System.Drawing.Point(native.X, native.Y) : null;
+                    },
+                    delegate(System.Drawing.Point p) {
+                        POINT native = new POINT { X = p.X, Y = p.Y };
+                        return LogicalToPhysicalPointForPerMonitorDPI(hwnd, ref native) ? (System.Drawing.Point?)new System.Drawing.Point(native.X, native.Y) : null;
+                    });
+                if (!normalized.HasValue) return false;
+                point.X = normalized.Value.X; point.Y = normalized.Value.Y;
+                return true;
+            } catch (EntryPointNotFoundException) { return false; }
+            catch (DllNotFoundException) { return false; }
+            finally { RestoreDpi(previous); }
+        }
+        private readonly LanguageState state = new LanguageState();
+        private readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        private readonly Timer poll = new Timer();
+        private readonly Timer hide = new Timer();
+        private LanguageOverlay overlay;
+        private bool disposed;
+
+        public LanguageIndicator(bool perMonitorDpi)
+        {
+            this.perMonitorDpi = perMonitorDpi;
+            try {
+                poll.Interval = 100;
+                poll.Tick += Poll;
+                hide.Tick += HideExpired;
+                Poll(null, EventArgs.Empty); // baseline only; no form created until a change
+                poll.Start();
+            } catch { Dispose(); throw; }
+        }
+        private void HideExpired(object sender, EventArgs e)
+        {
+            hide.Stop();
+            long remaining = state.HideAt - clock.ElapsedMilliseconds;
+            if (remaining > 0) { hide.Interval = (int)remaining; hide.Start(); }
+            else if (overlay != null) overlay.Hide();
+        }
+        private void Poll(object sender, EventArgs e)
+        {
+            if (disposed) return;
+            // Expiry is independent of availability of the foreground/caret/layout.
+            if (overlay != null && !state.Visible(clock.ElapsedMilliseconds)) overlay.Hide();
+            IntPtr fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero || (overlay != null && fg == overlay.Handle)) return;
+            uint pid;
+            uint thread = GetWindowThreadProcessId(fg, out pid);
+            if (thread == 0) return;
+            long layout = GetKeyboardLayout(thread).ToInt64();
+            if (fg != GetForegroundWindow()) return; // discard a racing foreground sample
+            if (!state.Observe(layout, clock.ElapsedMilliseconds)) return;
+            if (overlay == null) overlay = new LanguageOverlay();
+            overlay.Text = LanguageState.Label(layout);
+            overlay.ClientSize = new System.Drawing.Size(
+                Math.Max(100, Math.Min(360, TextRenderer.MeasureText(overlay.Text, overlay.Font).Width + 24)), 32);
+            GUITHREADINFO info = new GUITHREADINFO();
+            info.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+            POINT point = new POINT();
+            bool caret = GetGUIThreadInfo(thread, ref info) && info.hwndCaret != IntPtr.Zero;
+            if (caret) {
+                point.X = info.rcCaret.Left; point.Y = info.rcCaret.Bottom;
+                caret = CaretToScreen(info.hwndCaret, ref point);
+            }
+            POINT mouse = new POINT();
+            bool cursor = !caret && GetCursorPos(out mouse);
+            RECT rect;
+            if (!GetWindowRect(fg, out rect)) rect = new RECT();
+            System.Drawing.Point anchor = new System.Drawing.Point(caret ? point.X : cursor ? mouse.X : rect.Left,
+                caret ? point.Y : cursor ? mouse.Y : rect.Top);
+            overlay.Location = LanguageState.Position(caret, point.X, point.Y, cursor, mouse.X, mouse.Y,
+                rect.Left, rect.Top, overlay.Width, overlay.Height, Screen.FromPoint(anchor).WorkingArea);
+            overlay.Show();
+            overlay.Invalidate();
+            hide.Stop();
+            HideExpired(null, EventArgs.Empty); // arm for the remaining deadline, never a fresh two seconds
+        }
+        public void Dispose()
+        {
+            if (disposed) return;
+            disposed = true;
+            poll.Stop(); hide.Stop();
+            poll.Tick -= Poll; hide.Tick -= HideExpired;
+            poll.Dispose(); hide.Dispose();
+            if (overlay != null) overlay.Dispose();
+            clock.Stop();
+        }
+    }
+
     public class Watcher : NativeWindow
     {
         [DllImport("kernel32.dll")]
@@ -334,6 +608,7 @@ namespace ClipwarpWatch
         private readonly string logPath;
         private readonly string popupPath;
         private readonly string configPath;
+        private readonly LanguageIndicatorHost language;
         private readonly Timer debounce;
         private readonly WinEventProc winEventProc;
         private IntPtr winEventHook = IntPtr.Zero;
@@ -386,6 +661,7 @@ namespace ClipwarpWatch
             debounce.Interval = EventDelayMs;      // coalesce format bursts without delaying the popup noticeably
             debounce.Tick += OnTick;
             CaptureForeground();
+            language = new LanguageIndicatorHost(Log);
             Log("watch started, pid " + System.Diagnostics.Process.GetCurrentProcess().Id);
         }
 
@@ -950,6 +1226,7 @@ namespace ClipwarpWatch
 
         public void Shutdown()
         {
+            language.Dispose();
             try { RemoveClipboardFormatListener(this.Handle); } catch { }
             if (winEventHook != IntPtr.Zero)
             {
