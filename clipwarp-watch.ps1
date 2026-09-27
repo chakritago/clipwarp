@@ -281,7 +281,8 @@ namespace ClipwarpWatch
     // Pure policy: tests use fake layout handles, monotonic times and coordinates.
     public class LanguageState
     {
-        public const int DisplayDurationMilliseconds = 1300;
+        public const int DisplayDurationMilliseconds = 1000;
+        public const int CaretGapPixels = 6;
         private long previous;
         public long HideAt { get; private set; }
         public bool Observe(long layout, long now)
@@ -319,9 +320,9 @@ namespace ClipwarpWatch
             bool cursor, int mx, int my, int fx, int fy, int width, int height,
             System.Drawing.Rectangle work)
         {
-            // The normalized caret point is the label center x and top y; fallback keeps its offset.
+            // Center above the normalized caret top with a gap; fallback keeps its offset.
             int x = caret ? cx - width / 2 : (cursor ? mx : fx) + 6;
-            int y = caret ? cy : (cursor ? my : fy) + 6;
+            int y = caret ? cy - height - CaretGapPixels : (cursor ? my : fy) + 6;
             return new System.Drawing.Point(Math.Max(work.Left, Math.Min(x, work.Right - width)),
                 Math.Max(work.Top, Math.Min(y, work.Bottom - height)));
         }
@@ -526,7 +527,7 @@ namespace ClipwarpWatch
             POINT point = new POINT();
             bool caret = GetGUIThreadInfo(thread, ref info) && info.hwndCaret != IntPtr.Zero;
             if (caret) {
-                point.X = info.rcCaret.Left; point.Y = info.rcCaret.Bottom;
+                point.X = info.rcCaret.Left; point.Y = info.rcCaret.Top;
                 caret = CaretToScreen(info.hwndCaret, ref point);
             }
             POINT mouse = new POINT();
