@@ -61,7 +61,7 @@ if (Test-Path -LiteralPath $installedWatch) {
 }
 
 # --- 1. Install the scripts: stage all to temp, then swap in with backup/rollback. ---
-$files    = @('clipwarp.ps1', 'clipwarp-watch.ps1', 'clipwarp-calendar.psm1', 'clipwarp-calendar-popup.ps1', 'clipwarp-support.psm1', 'clipwarp-clipboard.cs', 'uninstall.ps1')
+$files    = @('clipwarp.ps1', 'clipwarp-watch.ps1', 'clipwarp-calendar.psm1', 'clipwarp-calendar-popup.ps1', 'clipwarp-support.psm1', 'clipwarp-clipboard.cs', 'uninstall.ps1', 'favicon.png')
 $staged   = @{}
 $backups  = @{}   # name -> backup path (targets that existed before)
 $created  = @()   # target paths that did NOT exist before (delete these on rollback)
@@ -69,12 +69,20 @@ try {
     New-Item -ItemType Directory -Force -Path $scriptsDir -ErrorAction Stop | Out-Null
     foreach ($name in $files) {
         $tmp = Join-Path $scriptsDir ".$name.download"
-        $localSrc = if ($PSScriptRoot) { Join-Path $PSScriptRoot $name } else { $null }
+        $localSrc = if ($PSScriptRoot) {
+            $direct = Join-Path $PSScriptRoot $name
+            if (Test-Path -LiteralPath $direct) { $direct }
+            else {
+                $inAssets = Join-Path $PSScriptRoot (Join-Path 'assets' $name)
+                if (Test-Path -LiteralPath $inAssets) { $inAssets } else { $null }
+            }
+        } else { $null }
         if ($localSrc -and (Test-Path -LiteralPath $localSrc)) {
             Copy-Item -LiteralPath $localSrc -Destination $tmp -Force -ErrorAction Stop
         }
         else {
-            Invoke-WebRequest -Uri "$RawBaseUrl/$name" -OutFile $tmp -UseBasicParsing -ErrorAction Stop
+            $remoteUrl = if ($name -eq 'favicon.png') { "$RawBaseUrl/assets/favicon.png" } else { "$RawBaseUrl/$name" }
+            Invoke-WebRequest -Uri $remoteUrl -OutFile $tmp -UseBasicParsing -ErrorAction Stop
         }
         $staged[$name] = $tmp
     }

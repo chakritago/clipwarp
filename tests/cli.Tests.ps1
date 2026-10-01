@@ -63,6 +63,8 @@ try {
     Assert-Equal $true ((Invoke-ClipwarpExitCode ('calendar export -Path "' + (Join-Path $temp 'missing.ics') + '"')) -ne 0) 'calendar export rejects a missing title'
     Assert-Equal 1 (Invoke-ClipwarpExitCode 'calendar nonsense') 'calendar rejects an unknown action with usage status'
     Assert-Equal 0 (Invoke-ClipwarpExitCode 'help') 'help is a safe successful command'
+    $helpText = & $engine -NoProfile -File $clipwarp help 2>&1 | Out-String
+    Assert-Equal $true ($helpText.Contains('restart')) 'help lists restart command'
 } finally {
     $env:USERPROFILE = $originalUserProfile
     Remove-Item -LiteralPath $temp -Recurse -Force

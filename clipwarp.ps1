@@ -23,7 +23,7 @@
 
 .PARAMETER Command
     convert (default) - do one clipboard conversion now.
-    watch | stop | status - control the background watcher (clipwarp-watch.ps1)
+    watch | stop | restart | status - control the background watcher (clipwarp-watch.ps1)
     that converts automatically on every copy, so plain Ctrl+C -> Ctrl+V works.
     A successful install starts the watcher once; autostart remains explicit.
     calendar enable|disable|status - configure Calendar prompts independently.
@@ -62,6 +62,10 @@
     # -> from now on just Ctrl+C an image anywhere, then Ctrl+V in Claude Code
 
 .EXAMPLE
+    clipwarp restart
+    # -> restart the background clipboard watcher (system tray)
+
+.EXAMPLE
     clipwarp calendar disable
     # -> suppress Calendar prompts without stopping image conversion
 
@@ -74,7 +78,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('convert', 'watch', 'stop', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'help')]
+    [ValidateSet('convert', 'watch', 'stop', 'restart', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'help')]
     [string]$Command = 'convert',
     [Parameter(Position = 1)][string]$Action,
     [Parameter(Position = 2)][string]$Setting,
@@ -214,6 +218,7 @@ if ($Command -ne 'convert') {
     switch ($Command) {
         'watch'       { & $watcherScript }
         'stop'        { & $watcherScript -Stop }
+        'restart'     { & $watcherScript -Restart }
         'status'      { & $watcherScript -Status }
         'autostart'   { & $watcherScript -Autostart }
         'unautostart' { & $watcherScript -NoAutostart }

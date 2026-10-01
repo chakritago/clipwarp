@@ -20,7 +20,8 @@
     calendar event title instead.
 
 .USAGE
-    clipwarp watch      # start (detached, hidden)
+    clipwarp watch      # start (detached, hidden, system tray)
+    clipwarp restart    # restart (detached, hidden, system tray)
     clipwarp status     # is it running?
     clipwarp stop       # stop
 #>
@@ -28,6 +29,7 @@
 param(
     [switch]$Stop,
     [switch]$Status,
+    [switch]$Restart,
     [switch]$Autostart,    # register a login shortcut so the watcher starts at sign-in
     [switch]$NoAutostart,  # remove that login shortcut
     [switch]$Daemon        # internal: run the listener loop in THIS process
@@ -133,6 +135,35 @@ if ($Stop) {
     }
 }
 
+if ($Restart) {
+    $st = Get-WatchState
+    switch ($st.State) {
+        'watcher' {
+            try {
+                $proc = Get-Process -Id $st.Pid -ErrorAction SilentlyContinue
+                if ($proc) {
+                    Stop-Process -Id $st.Pid -Force -ErrorAction Stop
+                    [void]$proc.WaitForExit(3000)
+                }
+            }
+            catch {
+                Write-Host "clipwarp watch: failed to stop pid $($st.Pid) - $($_.Exception.Message)" -ForegroundColor Red
+                exit 1
+            }
+            Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 250
+        }
+        'unknown' {
+            Write-Host "clipwarp watch: could not verify the process at pid $($st.Pid) - refusing to restart automatically. Run 'clipwarp stop' or end it manually first." -ForegroundColor Yellow
+            exit 1
+        }
+        default {
+            Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+    # Proceed to start mode below to spawn the new daemon
+}
+
 if (-not $Daemon) {
     # Start mode: spawn a hidden daemon and return.
     $st = Get-WatchState
@@ -161,12 +192,14 @@ if (-not $Daemon) {
         if ($st.State -eq 'watcher') { $started = $true; break }
     }
     if ($started) {
-        Write-Host "clipwarp watch: started (pid $($st.Pid))" -ForegroundColor Green
+        $verb = if ($Restart) { 'restarted' } else { 'started' }
+        Write-Host "clipwarp watch: $verb (pid $($st.Pid))" -ForegroundColor Green
         Write-Host 'copy an image anywhere (Ctrl+C / snip), then Ctrl+V in Claude Code.' -ForegroundColor Cyan
         Write-Host "stop with: clipwarp stop" -ForegroundColor DarkGray
         exit 0
     }
-    Write-Host "clipwarp watch: failed to start (see $logFile)" -ForegroundColor Red
+    $verb = if ($Restart) { 'restart' } else { 'start' }
+    Write-Host "clipwarp watch: failed to $verb (see $logFile)" -ForegroundColor Red
     exit 1
 }
 
@@ -187,9 +220,11 @@ New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null
 Set-Content -LiteralPath $pidFile -Value $PID
 
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
 $src = @'
 using System;
+using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -198,6 +233,28 @@ using System.Windows.Forms;
 
 namespace ClipwarpWatch
 {
+    public static class IconHelper
+    {
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool DestroyIcon(IntPtr hIcon);
+
+        public static Icon FromBitmap(Bitmap bmp)
+        {
+            IntPtr hIcon = bmp.GetHicon();
+            try
+            {
+                using (Icon temp = Icon.FromHandle(hIcon))
+                {
+                    return (Icon)temp.Clone();
+                }
+            }
+            finally
+            {
+                DestroyIcon(hIcon);
+            }
+        }
+    }
+
     public class OverlayTargetTracker
     {
         public const int MaxRetentionSeconds = 12;
@@ -1342,8 +1399,124 @@ else {
 
 $watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $configPath, $logFile)
 
+function Get-ClipwarpTrayIcon {
+    param([string]$ScriptDir, [string]$ScriptsDir)
+    $candidatePaths = @(
+        (Join-Path $ScriptDir 'assets\favicon.png'),
+        (Join-Path $ScriptDir 'favicon.png'),
+        (Join-Path $ScriptsDir 'favicon.png')
+    )
+    foreach ($path in $candidatePaths) {
+        if (Test-Path -LiteralPath $path) {
+            try {
+                $bmp = [System.Drawing.Bitmap]::FromFile($path)
+                $icon = [ClipwarpWatch.IconHelper]::FromBitmap($bmp)
+                $bmp.Dispose()
+                return $icon
+            } catch { }
+        }
+    }
+    return [System.Drawing.SystemIcons]::Application
+}
+
+$trayIcon = $null
+try {
+    $trayIcon = New-Object System.Windows.Forms.NotifyIcon
+    $trayIcon.Icon = Get-ClipwarpTrayIcon -ScriptDir $PSScriptRoot -ScriptsDir $scriptsDir
+    $trayIcon.Text = "ClipWarp - Clipboard Bridge"
+
+    $contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
+
+    $headerItem = New-Object System.Windows.Forms.ToolStripMenuItem("ClipWarp (pid $PID)")
+    $headerItem.Enabled = $false
+    [void]$contextMenu.Items.Add($headerItem)
+
+    [void]$contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+
+    $watchScriptPath = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $scriptsDir 'clipwarp-watch.ps1' }
+
+    $restartItem = New-Object System.Windows.Forms.ToolStripMenuItem("Restart ClipWarp")
+    $boldFont = New-Object System.Drawing.Font($restartItem.Font, [System.Drawing.FontStyle]::Bold)
+    $restartItem.Font = $boldFont
+    $restartItem.add_Click({
+        try {
+            if ($trayIcon) { $trayIcon.Visible = $false }
+            $currPid = $PID
+            $restartScript = @"
+`$p = Get-Process -Id $currPid -ErrorAction SilentlyContinue
+if (`$p) { [void]`$p.WaitForExit(3000) }
+Start-Sleep -Milliseconds 250
+& '$watchScriptPath' -Restart
+"@
+            Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+                '-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass',
+                '-Command', $restartScript
+            ) | Out-Null
+        } catch { }
+        finally {
+            [System.Windows.Forms.Application]::Exit()
+        }
+    })
+    [void]$contextMenu.Items.Add($restartItem)
+
+    $statusItem = New-Object System.Windows.Forms.ToolStripMenuItem("Status")
+    $statusItem.add_Click({
+        try {
+            $autoState = if (Test-Path -LiteralPath $startupLnk) { 'Enabled' } else { 'Disabled' }
+            $msg = "ClipWarp is running (PID: $PID)`nAutostart: $autoState"
+            $trayIcon.ShowBalloonTip(3000, "ClipWarp Status", $msg, [System.Windows.Forms.ToolTipIcon]::Info)
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($statusItem)
+
+    $imagesDir = Join-Path $env:USERPROFILE '.claude\pasted-images'
+    $folderItem = New-Object System.Windows.Forms.ToolStripMenuItem("Open Images Folder")
+    $folderItem.add_Click({
+        try {
+            if (-not (Test-Path -LiteralPath $imagesDir)) {
+                New-Item -ItemType Directory -Force -Path $imagesDir | Out-Null
+            }
+            Start-Process explorer.exe -ArgumentList "`"$imagesDir`""
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($folderItem)
+
+    $logItem = New-Object System.Windows.Forms.ToolStripMenuItem("View Log")
+    $logItem.add_Click({
+        try {
+            if (Test-Path -LiteralPath $logFile) {
+                Start-Process notepad.exe -ArgumentList "`"$logFile`""
+            }
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($logItem)
+
+    [void]$contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+
+    $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Exit ClipWarp")
+    $exitItem.add_Click({
+        [System.Windows.Forms.Application]::Exit()
+    })
+    [void]$contextMenu.Items.Add($exitItem)
+
+    $trayIcon.ContextMenuStrip = $contextMenu
+
+    $trayIcon.add_DoubleClick({
+        try {
+            $autoState = if (Test-Path -LiteralPath $startupLnk) { 'Enabled' } else { 'Disabled' }
+            $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Running (PID: $PID) - Autostart: $autoState", [System.Windows.Forms.ToolTipIcon]::Info)
+        } catch { }
+    })
+
+    $trayIcon.Visible = $true
+} catch { }
+
 $cleanupScript = {
     try {
+        if ($trayIcon) {
+            $trayIcon.Visible = $false
+            $trayIcon.Dispose()
+        }
         if ($watcher) { $watcher.Shutdown() }
         Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
         if ($ownsMutex) {

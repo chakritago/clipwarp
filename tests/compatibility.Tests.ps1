@@ -96,6 +96,20 @@ Assert-True ($nativeSource.IndexOf('if (OpenClipboard(owner.Handle))') -lt $nati
 $installer=[IO.File]::ReadAllText((Join-Path $root 'install.ps1'))
 Assert-True ($installer -match '& \$installedWatch -Autostart') 'installer enables autostart on installation'
 Assert-True ($installer -match 'NoAutostart') 'installer provides NoAutostart opt-out parameter'
+Assert-True ($installer -match 'favicon\.png') 'installer includes favicon for system tray icon'
+
+$iconBmp = New-Object Drawing.Bitmap 16, 16
+try {
+    $testIcon = [ClipwarpWatch.IconHelper]::FromBitmap($iconBmp)
+    Assert-True ($testIcon -ne $null -and $testIcon.Width -eq 16) 'IconHelper creates valid icon from bitmap'
+    $testIcon.Dispose()
+} finally {
+    $iconBmp.Dispose()
+}
+
+$watchContent = [IO.File]::ReadAllText((Join-Path $root 'clipwarp-watch.ps1'))
+Assert-True ($watchContent -match 'Restart ClipWarp') 'watcher provides tray context menu with restart option'
+Assert-True ($watchContent -match 'NotifyIcon') 'watcher initializes system tray NotifyIcon'
 
 $t.OnForegroundChanged('pwsh','','',$now)
 $t.OnForegroundChanged('SnippingTool','','',$now.AddHours(1))
