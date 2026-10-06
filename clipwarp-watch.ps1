@@ -1808,6 +1808,31 @@ Start-Sleep -Milliseconds 250
     })
     [void]$contextMenu.Items.Add($versionItem)
 
+    # Check for updates - mirrors `clipwarp update`: checks main for a newer
+    # version and installs it (the installer restarts this watcher itself).
+    $updateItem = New-Object System.Windows.Forms.ToolStripMenuItem("Check for updates")
+    $updateItem.add_Click({
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+            $remote = Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/chakritago/clipwarp/main/version.json' -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+            $info = Get-ClipwarpVersionInfo -ScriptRoot $scriptsDir
+            $installed = if ($info) { $info.Version } else { 'unknown' }
+            if (-not $remote.version -or $remote.version -eq $installed) {
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Up to date ($installed)", [System.Windows.Forms.ToolTipIcon]::Info)
+            } else {
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Update available: $installed -> $($remote.version). Installing...", [System.Windows.Forms.ToolTipIcon]::Info)
+                Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+                    '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                    '-Command', "Invoke-Expression (Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/chakritago/clipwarp/main/install.ps1' -UseBasicParsing)"
+                ) | Out-Null
+            }
+        } catch {
+            $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Could not check for updates (offline?)", [System.Windows.Forms.ToolTipIcon]::Warning)
+        }
+    })
+    [void]$contextMenu.Items.Add($updateItem)
+
     # Target mode submenu - mirrors `clipwarp target <mode>|status`.
     $targetMenu = New-Object System.Windows.Forms.ToolStripMenuItem("Target mode")
     $targetItems = @{}
