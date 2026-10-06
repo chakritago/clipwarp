@@ -269,7 +269,7 @@ To disable the guard, set `"burstGuard": false` in
 | `clipwarp clean -Before <date>` | Delete only direct-child `clip-*` image files older than the cutoff (default 7 days). |
 | `clipwarp doctor` | Read-only diagnostics for scripts, profiles, watcher/autostart indicators, PowerShell policy, config, output path, and repository URL drift. |
 | `clipwarp version` | Show the installed version and its date, and check whether a newer version is published (re-run the install command to update). |
-| `clipwarp update` | Check for a newer version on `main` and install it (re-runs `install.ps1`, which restarts the watcher). |
+| `clipwarp update` | Check for a newer version on `main` and install it (re-runs `install.ps1`, which restarts the watcher). Auto-update is also on: the watcher checks 60 seconds after startup and every 24 hours, installing new versions itself — disable with `"autoUpdate": false` in `%USERPROFILE%\.claude\clipwarp.json`. |
 | `clipwarp pause` | Toggle pause: pauses all watcher handling; run again to resume. |
 | `cw` | Convert one clipboard image, show the Calendar prompt, then `Ctrl+V`. |
 

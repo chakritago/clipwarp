@@ -33,6 +33,12 @@ Assert ($mod.Contains('Show-ClipwarpVersion,Update-Clipwarp')) 'Update-Clipwarp 
 Assert ($mod.Contains('install.ps1') -and $mod.Contains('-CheckOnly')) 'Update-Clipwarp re-runs the installer with check-only mode'
 Assert ($watchPs.Contains('Check for updates')) 'tray menu has Check for updates'
 Assert ($readme.Contains('clipwarp update')) 'README documents clipwarp update'
+Assert ($mod.Contains('function Get-ClipwarpLatestVersionInfo')) 'support module has Get-ClipwarpLatestVersionInfo'
+Assert ($mod.Contains('function Get-ClipwarpAutoUpdateEnabled')) 'support module has Get-ClipwarpAutoUpdateEnabled'
+Assert ($mod.Contains('Update-Clipwarp,Get-ClipwarpLatestVersionInfo,Get-ClipwarpAutoUpdateEnabled')) 'auto-update functions are exported'
+Assert ($watchPs.Contains('86400000')) 'watcher re-checks for updates every 24 hours'
+Assert ($watchPs.Contains('autoUpdate')) 'watcher honors the autoUpdate kill switch'
+Assert ($readme.Contains('autoUpdate')) 'README documents the autoUpdate kill switch'
 $testBytes=[IO.File]::ReadAllBytes($PSCommandPath)
 Assert ($testBytes[0] -eq 239 -and $testBytes[1] -eq 187 -and $testBytes[2] -eq 191) 'version tests UTF-8 BOM'
 Write-Host 'PASS: version wiring tests; no watcher instantiated'
