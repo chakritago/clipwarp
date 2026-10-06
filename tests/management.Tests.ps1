@@ -65,7 +65,7 @@ try {
     Set-ClipwarpTargetMode -Mode auto -ConfigPath $config | Out-Null
     Assert-Equal 'auto' (Get-ClipwarpTargetMode -ConfigPath $config) 'targetMode persists auto setting'
 
-    Assert-Equal 0 (Get-ClipwarpRetentionDays -ConfigPath $config) 'retention defaults off'
+    Assert-Equal 7 (Get-ClipwarpRetentionDays -ConfigPath $config) 'retention defaults to 7 days'
     Set-ClipwarpRetentionDays -Days 14 -ConfigPath $config
     Assert-Equal 14 (Get-ClipwarpRetentionDays -ConfigPath $config) 'retention persists'
     Set-ClipwarpPaused -Paused $true -ConfigPath $config

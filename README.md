@@ -296,11 +296,12 @@ the clipboard sequence number, so a slow conversion never overwrites a newer cop
 - **Local by default.** Image conversion and storage stay local. Accepting a Calendar prompt
   opens Google's Calendar website; clipwarp itself uploads no images. Deliberately
   launched PowerShell commands can access the network or modify your machine.
-- **Opt-in retention.** `clipwarp privacy retention 7` deletes managed images older
+- **Retention.** `clipwarp privacy retention 7` deletes managed images older
   than seven days after successful conversions, excluding the active image.
-  `clipwarp privacy retention 0` disables automatic deletion (the default).
-  Valid values are 0-3650 days. There is no background cleanup timer or size cap;
-  files remain until another successful conversion or explicit `clipwarp clean`.
+  The default is 7 days; `clipwarp privacy retention 0` disables automatic
+  deletion (keep forever). Valid values are 0-3650 days. There is no background
+  cleanup timer or size cap; files remain until another successful conversion
+  or explicit `clipwarp clean`.
   Cleanup skips reparse points and refuses directories reached through them.
 - **Safe history tools.** `history` is bounded and read-only. `clean` refuses a drive
   root and only deletes matching managed files directly inside `-OutDir`; `recopy` is
