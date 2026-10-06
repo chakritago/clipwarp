@@ -412,7 +412,7 @@ function Get-ClipwarpRetentionDays {
     param([string]$ConfigPath=(Get-ClipwarpDefaultConfigPath))
     $v=(Get-ClipwarpConfig $ConfigPath).retentionDays
     if (($v -is [int] -or $v -is [long]) -and $v -ge 0 -and $v -le 3650) { return [int]$v }
-    0
+    7
 }
 function Set-ClipwarpRetentionDays {
     param([ValidateRange(0,3650)][int]$Days,[string]$ConfigPath=(Get-ClipwarpDefaultConfigPath))
