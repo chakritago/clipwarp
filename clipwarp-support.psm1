@@ -431,4 +431,38 @@ function Set-ClipwarpPaused {
     $config | Add-Member NoteProperty paused $Paused -Force
     Save-ClipwarpConfig $config $ConfigPath
 }
-Export-ModuleMember -Function Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused
+# Installed version info, from version.json next to the scripts (installed by
+# install.ps1 from the repo root). Returns $null when it cannot be read.
+function Get-ClipwarpVersionInfo {
+    param([string]$ScriptRoot)
+    $root = if ($ScriptRoot) { $ScriptRoot } else { $PSScriptRoot }
+    $p = Join-Path $root 'version.json'
+    try {
+        if (Test-Path -LiteralPath $p) {
+            $v = Get-Content -LiteralPath $p -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            if ($v.version) { return [pscustomobject]@{ Version = [string]$v.version; Date = [string]$v.date; Path = $p } }
+        }
+    } catch {}
+    return $null
+}
+# Prints the installed version/date and, when online, whether a newer version
+# is published on main (re-run the install command to update).
+function Show-ClipwarpVersion {
+    param([string]$ScriptRoot, [switch]$NoCheck)
+    $info = Get-ClipwarpVersionInfo -ScriptRoot $ScriptRoot
+    if (-not $info) { Write-Host 'clipwarp: version unknown (version.json not found - re-run install.ps1)' -ForegroundColor Yellow; return }
+    Write-Host "clipwarp $($info.Version) ($($info.Date))"
+    if ($NoCheck) { return }
+    try {
+        try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+        $remote = Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/chakritago/clipwarp/main/version.json' -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+        if ($remote.version -and $remote.version -ne $info.Version) {
+            Write-Host "update available: $($remote.version) ($($remote.date)) - re-run the install command to update" -ForegroundColor Yellow
+        } else {
+            Write-Host 'up to date' -ForegroundColor Green
+        }
+    } catch {
+        Write-Host 'could not check for updates (offline?)' -ForegroundColor DarkGray
+    }
+}
+Export-ModuleMember -Function Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused,Get-ClipwarpVersionInfo,Show-ClipwarpVersion

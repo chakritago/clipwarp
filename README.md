@@ -258,6 +258,7 @@ To disable the guard, set `"burstGuard": false` in
 | `clipwarp recopy [index\|path]` | Explicitly copy the newest saved image path, a 1-based history index, or a named managed image path to the clipboard. |
 | `clipwarp clean -Before <date>` | Delete only direct-child `clip-*` image files older than the cutoff (default 7 days). |
 | `clipwarp doctor` | Read-only diagnostics for scripts, profiles, watcher/autostart indicators, PowerShell policy, config, output path, and repository URL drift. |
+| `clipwarp version` | Show the installed version and its date, and check whether a newer version is published (re-run the install command to update). |
 | `cw` | Convert one clipboard image, show the Calendar prompt, then `Ctrl+V`. |
 
 ## Supported clipboard formats
