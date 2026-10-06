@@ -221,6 +221,26 @@ clipwarp unautostart  # remove the login autostart
 2. Run **`cw`** (short for `clipwarp`).
 3. Switch to Claude Code and press `Ctrl+V`. Done.
 
+### Loop / burst protection
+
+The watcher listens to *every* clipboard write, including rewrites of identical
+content (clipboard managers, cloud clipboard sync, copy-back buttons) — and a
+sequence number alone can't tell a genuine new copy from a repeated one. A
+built-in circuit-breaker fingerprints clipboard content and trips in two cases:
+
+| Condition | Action |
+|---|---|
+| Same content copied **5+ times within 60 s** | That content is ignored for **2 minutes** |
+| **30+ clipboard events within 10 s** (any content) | All handling pauses for **30 s** |
+
+Both are logged to `clipwarp-watch.log` ("repeated identical clipboard
+detected" / "clipboard storm detected"). The conversion failure budget is also
+per-content now: it resets only when the clipboard content actually changes,
+so an event flood can't wash it away.
+
+To disable the guard, set `"burstGuard": false` in
+`%USERPROFILE%\.claude\clipwarp.json` and restart the watcher.
+
 ## Commands
 
 | Command | What it does |
