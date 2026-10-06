@@ -643,6 +643,13 @@ namespace ClipwarpWatch
         private readonly Timer hide = new Timer();
         private LanguageOverlay overlay;
         private bool disposed;
+        // Last known caret screen position, refreshed on every poll tick: a
+        // language change that coincides with a focus flitter (e.g. the
+        // Win+Space flyout briefly taking foreground) can still anchor to
+        // where the user was typing instead of vanishing.
+        private System.Drawing.Point lastCaret = System.Drawing.Point.Empty;
+        private long lastCaretAt = 0;
+        private const long CaretMemoryMs = 3000;
 
         public LanguageIndicator(bool perMonitorDpi)
         {
@@ -665,6 +672,20 @@ namespace ClipwarpWatch
             if (remaining > 0) { hide.Interval = (int)remaining; hide.Start(); }
             else if (overlay != null) overlay.Hide();
         }
+        // Resolves the foreground thread's system caret to screen coordinates:
+        // DPI-aware mapping first, plain ClientToScreen as a second chance.
+        private bool TryResolveCaret(uint thread, out POINT point)
+        {
+            point = new POINT();
+            GUITHREADINFO info = new GUITHREADINFO();
+            info.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+            if (!GetGUIThreadInfo(thread, ref info) || info.hwndCaret == IntPtr.Zero) return false;
+            point.X = info.rcCaret.Left; point.Y = info.rcCaret.Top;
+            if (CaretToScreen(info.hwndCaret, ref point)) return true;
+            POINT plain = new POINT { X = info.rcCaret.Left, Y = info.rcCaret.Top };
+            if (ClientToScreen(info.hwndCaret, ref plain)) { point = plain; return true; }
+            return false;
+        }
         private void Poll(object sender, EventArgs e)
         {
             if (disposed) return;
@@ -677,29 +698,24 @@ namespace ClipwarpWatch
             if (thread == 0) return;
             long layout = GetKeyboardLayout(thread).ToInt64();
             if (fg != GetForegroundWindow()) return; // discard a racing foreground sample
+            POINT point;
+            bool caret = TryResolveCaret(thread, out point);
+            if (caret) {
+                lastCaret = new System.Drawing.Point(point.X, point.Y);
+                lastCaretAt = clock.ElapsedMilliseconds;
+            }
             if (!state.Observe(layout, clock.ElapsedMilliseconds)) return;
             if (overlay == null) overlay = new LanguageOverlay();
             overlay.Text = LanguageState.Label(layout);
             overlay.ClientSize = new System.Drawing.Size(
                 Math.Max(100, Math.Min(360, TextRenderer.MeasureText(overlay.Text, overlay.Font).Width + 24)), 32);
-            GUITHREADINFO info = new GUITHREADINFO();
-            info.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
-            POINT point = new POINT();
-            bool caret = GetGUIThreadInfo(thread, ref info) && info.hwndCaret != IntPtr.Zero;
-            if (caret) {
-                point.X = info.rcCaret.Left; point.Y = info.rcCaret.Top;
-                caret = CaretToScreen(info.hwndCaret, ref point);
-                if (!caret) {
-                    // Second chance without the per-monitor DPI mapping: plain
-                    // ClientToScreen still lands on the caret in the common case.
-                    POINT plain = new POINT { X = info.rcCaret.Left, Y = info.rcCaret.Top };
-                    if (ClientToScreen(info.hwndCaret, ref plain)) {
-                        point = plain;
-                        caret = true;
-                    }
-                }
+            if (!caret && !lastCaret.IsEmpty && clock.ElapsedMilliseconds - lastCaretAt <= CaretMemoryMs) {
+                // Live query missed (focus flitter): fall back to where the user
+                // was just typing. Still never the mouse cursor.
+                point = new POINT { X = lastCaret.X, Y = lastCaret.Y };
+                caret = true;
             }
-            if (!caret) return; // no system caret: show nothing, never the mouse cursor
+            if (!caret) return; // no system caret anywhere recent: show nothing, never the mouse cursor
             System.Drawing.Point anchor = new System.Drawing.Point(point.X, point.Y);
             overlay.Location = LanguageState.Position(true, point.X, point.Y, false, 0, 0,
                 0, 0, overlay.Width, overlay.Height, Screen.FromPoint(anchor).WorkingArea);
