@@ -1751,6 +1751,46 @@ Start-Sleep -Milliseconds 250
     })
     [void]$contextMenu.Items.Add($statusItem)
 
+    # Every user-facing command gets a tray UI entry too (repo convention):
+    # pause toggle and version, mirroring the `clipwarp` CLI.
+    $pauseItem = New-Object System.Windows.Forms.ToolStripMenuItem("Pause ClipWarp")
+    $updatePauseText = {
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            if (Get-ClipwarpPaused) { $pauseItem.Text = "Resume ClipWarp" } else { $pauseItem.Text = "Pause ClipWarp" }
+        } catch { }
+    }
+    & $updatePauseText
+    $pauseItem.add_Click({
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            if (Get-ClipwarpPaused) {
+                Set-ClipwarpPaused -Paused $false
+                $pauseItem.Text = "Pause ClipWarp"
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Resumed", [System.Windows.Forms.ToolTipIcon]::Info)
+            } else {
+                Set-ClipwarpPaused -Paused $true
+                $pauseItem.Text = "Resume ClipWarp"
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Paused - click Resume to continue", [System.Windows.Forms.ToolTipIcon]::Info)
+            }
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($pauseItem)
+
+    $versionItem = New-Object System.Windows.Forms.ToolStripMenuItem("Version")
+    $versionItem.add_Click({
+        try {
+            $verTxt = 'unknown (re-run install.ps1)'
+            $verFile = Join-Path $scriptsDir 'version.json'
+            if (Test-Path -LiteralPath $verFile) {
+                $v = Get-Content -LiteralPath $verFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($v.version) { $verTxt = "v$($v.version) ($($v.date))" }
+            }
+            $trayIcon.ShowBalloonTip(3000, "ClipWarp Version", $verTxt, [System.Windows.Forms.ToolTipIcon]::Info)
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($versionItem)
+
     $imagesDir = Join-Path $env:USERPROFILE '.claude\pasted-images'
     $folderItem = New-Object System.Windows.Forms.ToolStripMenuItem("Open Images Folder")
     $folderItem.add_Click({

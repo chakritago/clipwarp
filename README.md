@@ -221,6 +221,13 @@ clipwarp unautostart  # remove the login autostart
 2. Run **`cw`** (short for `clipwarp`).
 3. Switch to Claude Code and press `Ctrl+V`. Done.
 
+### Tray icon menu
+
+While the watcher runs, its system-tray icon menu mirrors the main commands:
+**Restart ClipWarp**, **Status**, **Pause / Resume ClipWarp** (same toggle as
+`clipwarp pause`), **Version** (same info as `clipwarp version`),
+**Open Images Folder**, **View Log**, and **Exit ClipWarp**.
+
 ### Loop / burst protection
 
 The watcher listens to *every* clipboard write, including rewrites of identical
