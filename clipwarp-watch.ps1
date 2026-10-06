@@ -1791,6 +1791,145 @@ Start-Sleep -Milliseconds 250
     })
     [void]$contextMenu.Items.Add($versionItem)
 
+    # Target mode submenu - mirrors `clipwarp target <mode>|status`.
+    $targetMenu = New-Object System.Windows.Forms.ToolStripMenuItem("Target mode")
+    $targetItems = @{}
+    foreach ($tm in @(('auto','Auto'),('web','Web (image only)'),('chatgpt','ChatGPT'),('image-only','Image only'),('claude','Claude (dual)'),('dual','Dual'),('text','Text only'))) {
+        $tItem = New-Object System.Windows.Forms.ToolStripMenuItem($tm[1])
+        $tItem.Tag = $tm[0]
+        $tItem.add_Click({
+            try {
+                Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+                $m = [string]$this.Tag
+                [void](Set-ClipwarpTargetMode -Mode $m)
+                foreach ($k in $targetItems.Keys) { $targetItems[$k].Checked = ($k -eq $m) }
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Target mode: $m", [System.Windows.Forms.ToolTipIcon]::Info)
+            } catch { }
+        })
+        $targetItems[$tm[0]] = $tItem
+        [void]$targetMenu.DropDownItems.Add($tItem)
+    }
+    $targetMenu.add_DropDownOpened({
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            $cur = Get-ClipwarpTargetMode
+            foreach ($k in $targetItems.Keys) { $targetItems[$k].Checked = ($k -eq $cur) }
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($targetMenu)
+
+    # Calendar prompts toggle - mirrors `clipwarp calendar enable|disable`.
+    $calItem = New-Object System.Windows.Forms.ToolStripMenuItem("Calendar prompts")
+    $updateCalText = {
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            $calItem.Text = if (Get-ClipwarpCalendarEnabled) { "Calendar prompts: On" } else { "Calendar prompts: Off" }
+        } catch { }
+    }
+    & $updateCalText
+    $calItem.add_Click({
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            if (Get-ClipwarpCalendarEnabled) {
+                [void](Set-ClipwarpCalendarEnabled -Enabled $false)
+                $calItem.Text = "Calendar prompts: Off"
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Calendar prompts off (image conversion still active)", [System.Windows.Forms.ToolTipIcon]::Info)
+            } else {
+                [void](Set-ClipwarpCalendarEnabled -Enabled $true)
+                $calItem.Text = "Calendar prompts: On"
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Calendar prompts on", [System.Windows.Forms.ToolTipIcon]::Info)
+            }
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($calItem)
+
+    # Privacy submenu (retention) - mirrors `clipwarp privacy retention <days>`.
+    $privacyMenu = New-Object System.Windows.Forms.ToolStripMenuItem("Privacy")
+    $retentionItems = @{}
+    foreach ($rd in @((7,'7 days'),(30,'30 days'),(90,'90 days'),(0,'Keep forever'))) {
+        $rItem = New-Object System.Windows.Forms.ToolStripMenuItem(('Retention: ' + $rd[1]))
+        $rItem.Tag = $rd[0]
+        $rItem.add_Click({
+            try {
+                Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+                $d = [int]$this.Tag
+                [void](Set-ClipwarpRetentionDays -Days $d)
+                foreach ($k in $retentionItems.Keys) { $retentionItems[$k].Checked = ([int]$k -eq $d) }
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Image retention: $d day(s) (0 = keep forever)", [System.Windows.Forms.ToolTipIcon]::Info)
+            } catch { }
+        })
+        $retentionItems[[string]$rd[0]] = $rItem
+        [void]$privacyMenu.DropDownItems.Add($rItem)
+    }
+    $privacyMenu.add_DropDownOpened({
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            $curDays = Get-ClipwarpRetentionDays
+            foreach ($k in $retentionItems.Keys) { $retentionItems[$k].Checked = ([int]$k -eq $curDays) }
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($privacyMenu)
+
+    # Autostart toggle - mirrors `clipwarp autostart|unautostart`. The shortcut
+    # is managed inline (never by re-invoking this script: its `exit` would
+    # kill the daemon host).
+    $autoItem = New-Object System.Windows.Forms.ToolStripMenuItem("Autostart")
+    $updateAutoText = {
+        if (Test-Path -LiteralPath $startupLnk) { $autoItem.Text = "Autostart: On" } else { $autoItem.Text = "Autostart: Off" }
+    }
+    & $updateAutoText
+    $autoItem.add_Click({
+        try {
+            if (Test-Path -LiteralPath $startupLnk) {
+                Remove-Item -LiteralPath $startupLnk -Force -ErrorAction Stop
+                $autoItem.Text = "Autostart: Off"
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Autostart off", [System.Windows.Forms.ToolTipIcon]::Info)
+            } else {
+                $sh = New-Object -ComObject WScript.Shell
+                $s = $sh.CreateShortcut($startupLnk)
+                $s.TargetPath = 'powershell.exe'
+                $daemonPath = Join-Path $scriptsDir 'clipwarp-watch.ps1'
+                $s.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$daemonPath`" -Daemon"
+                $s.WindowStyle = 7
+                $s.Description = 'clipwarp clipboard-image watcher for Claude Code'
+                $s.Save()
+                $autoItem.Text = "Autostart: On"
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Autostart on - watcher starts with Windows", [System.Windows.Forms.ToolTipIcon]::Info)
+            }
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($autoItem)
+
+    # Clean old images - mirrors `clipwarp clean` (default 7 days).
+    $cleanItem = New-Object System.Windows.Forms.ToolStripMenuItem("Clean old images")
+    $cleanItem.add_Click({
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            $outDir = Join-Path $env:USERPROFILE '.claude\pasted-images'
+            $removed = @(Clear-ClipwarpHistory -OutDir $outDir -Before (Get-Date).AddDays(-7) -Confirm:$false)
+            $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Removed $($removed.Count) image(s) older than 7 days", [System.Windows.Forms.ToolTipIcon]::Info)
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($cleanItem)
+
+    # Diagnostics - mirrors `clipwarp doctor`, summarized in a balloon tip.
+    $doctorItem = New-Object System.Windows.Forms.ToolStripMenuItem("Run diagnostics")
+    $doctorItem.add_Click({
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            $outDir = Join-Path $env:USERPROFILE '.claude\pasted-images'
+            $results = @(Test-ClipwarpEnvironment -ScriptRoot $scriptsDir -OutDir $outDir)
+            $bad = @($results | Where-Object { $_.Status -ne 'OK' })
+            if ($bad.Count -eq 0) {
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp diagnostics", "All checks passed", [System.Windows.Forms.ToolTipIcon]::Info)
+            } else {
+                $names = ($bad | ForEach-Object { $_.Name }) -join ', '
+                $trayIcon.ShowBalloonTip(5000, "ClipWarp diagnostics", "$($bad.Count) check(s) need attention: $names", [System.Windows.Forms.ToolTipIcon]::Warning)
+            }
+        } catch { }
+    })
+    [void]$contextMenu.Items.Add($doctorItem)
+
     $imagesDir = Join-Path $env:USERPROFILE '.claude\pasted-images'
     $folderItem = New-Object System.Windows.Forms.ToolStripMenuItem("Open Images Folder")
     $folderItem.add_Click({
