@@ -584,6 +584,22 @@ namespace ClipwarpWatch
         private static extern IntPtr SetWindowsHookEx(int id, KeyboardProc callback, IntPtr module, uint thread);
         [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hook);
         [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr message, IntPtr data);
+        [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+        private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_SHOWWINDOW = 0x0040;
+
+        // Re-assert topmost z-order on every display: Show() on an already-visible
+        // form does not bring it forward, so a newer topmost window (language
+        // flyout, IME candidate, always-on-top app) would otherwise cover the label.
+        // SWP_NOACTIVATE keeps it from stealing focus, like ShowWithoutActivation.
+        private static void AssertTopmost(Form form)
+        {
+            try { SetWindowPos(form.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW); }
+            catch { }
+        }
         [DllImport("kernel32.dll", CharSet = CharSet.Auto)] private static extern IntPtr GetModuleHandle(string name);
         private readonly LanguageShortcutState shortcuts = new LanguageShortcutState();
         private readonly Control shortcutDispatcher = new Control();
@@ -683,6 +699,7 @@ namespace ClipwarpWatch
             overlay.Location = LanguageState.Position(caret, point.X, point.Y, cursor, mouse.X, mouse.Y,
                 rect.Left, rect.Top, overlay.Width, overlay.Height, Screen.FromPoint(anchor).WorkingArea);
             overlay.Show();
+            AssertTopmost(overlay);
             overlay.Invalidate();
             hide.Stop();
             HideExpired(null, EventArgs.Empty); // arm for the remaining deadline, never a fresh display duration
