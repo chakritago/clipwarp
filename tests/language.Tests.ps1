@@ -71,8 +71,10 @@ $indicator=$src.Substring($src.IndexOf('internal sealed class LanguageIndicator 
 Assert ($indicator -notmatch 'Clipboard|CaptureForeground|OnForegroundWindowChanged|SetForegroundWindow|SetFocus|AttachThreadInput') 'source contract: no clipboard, target tracking or focus calls in indicator'
 Assert ($indicator.Contains('hide.Tick -= HideExpired') -and $indicator.Contains('poll.Tick -= Poll') -and $indicator.Contains('overlay.Dispose()')) 'source contract: timer handlers and overlay disposal'
 Assert ($indicator -notmatch 'GetCursorPos') 'source contract: label never anchors to the mouse cursor'
-Assert ($indicator.Contains('caret = CaretToScreen(info.hwndCaret, ref point);') -and $indicator.Contains('ClientToScreen(info.hwndCaret, ref plain)') -and $indicator.Contains('Screen.FromPoint(anchor).WorkingArea')) 'source contract: DPI-aware caret mapping with plain ClientToScreen second chance'
-Assert ($indicator.Contains('if (!caret) return;')) 'source contract: no system caret means no label'
+Assert ($indicator.Contains('TryResolveCaret(uint thread, out POINT point)')) 'source contract: caret resolution is a shared helper'
+Assert ($indicator.Contains('ClientToScreen(info.hwndCaret, ref plain)')) 'source contract: plain ClientToScreen second chance'
+Assert ($indicator.Contains('lastCaretAt') -and $indicator.Contains('CaretMemoryMs')) 'source contract: last-known caret is remembered briefly'
+Assert ($indicator.Contains('if (!caret) return;')) 'source contract: no caret anywhere recent means no label'
 Assert ($indicator.Contains('LanguageState.Position(true, point.X, point.Y, false, 0, 0,')) 'source contract: placement is always caret-anchored'
 Assert ($src.Contains('HideAt = now + DisplayDurationMilliseconds;') -and $indicator.Contains('state.HideAt - clock.ElapsedMilliseconds')) 'source contract: state and hide timer share the named deadline'
 $runner=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'run-all.ps1'))

@@ -199,8 +199,11 @@ There is no label on startup. Each detected change resets the hide deadline to 1
 The label is centered horizontally on the caret x with its bottom 6 pixels above the caret top, then
 clamps to the monitor work area. The label anchors to the text caret only — never to the
 mouse cursor. If the per-monitor DPI mapping of the caret fails, a plain client-to-screen
-mapping is tried as a second chance; when no system caret exists at all (apps that draw
-their own caret), no label is shown. Unknown languages display `Language 0xXXXX`.
+mapping is tried as a second chance. The last seen caret position is remembered for
+3 seconds, so a language change during a brief focus flitter (e.g. the Win+Space
+flyout) still anchors where you were typing; when no caret was seen at all recently
+(apps that draw their own caret), no label is shown. Unknown languages display
+`Language 0xXXXX`.
 Stop the watcher to stop these labels. This adds no setting or change to
 installation/autostart behavior.
 
