@@ -111,7 +111,17 @@ if ($Status) {
     $st = Get-WatchState
     $auto = if (Test-Path -LiteralPath $startupLnk) { 'on' } else { 'off' }
     switch ($st.State) {
-        'watcher' { Write-Host "clipwarp watch: running (pid $($st.Pid)) - autostart $auto" -ForegroundColor Green; exit 0 }
+        'watcher' {
+            $verTxt = ''
+            try {
+                $verFile = Join-Path $scriptsDir 'version.json'
+                if (Test-Path -LiteralPath $verFile) {
+                    $ver = Get-Content -LiteralPath $verFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    if ($ver.version) { $verTxt = " - v$($ver.version) ($($ver.date))" }
+                }
+            } catch {}
+            Write-Host "clipwarp watch: running (pid $($st.Pid)) - autostart $auto$verTxt" -ForegroundColor Green; exit 0
+        }
         'unknown' { Write-Host "clipwarp watch: unknown - a shell at pid $($st.Pid) could not be verified (autostart $auto)" -ForegroundColor Yellow; exit 2 }
         default   { Write-Host "clipwarp watch: not running - autostart $auto" -ForegroundColor Yellow; exit 1 }
     }
@@ -927,7 +937,7 @@ namespace ClipwarpWatch
             debounce.Tick += OnTick;
             CaptureForeground();
             language = new LanguageIndicatorHost(Log);
-            Log("watch started, pid " + System.Diagnostics.Process.GetCurrentProcess().Id);
+            Log("watch started, pid " + System.Diagnostics.Process.GetCurrentProcess().Id + ReadVersionSuffix());
         }
 
         protected override void WndProc(ref Message m)
@@ -1624,6 +1634,26 @@ namespace ClipwarpWatch
             }
             CloseOwnedPopup();
             Log("watch stopped");
+        }
+
+        // Installed version stamp (version.json next to the scripts, written by
+        // install.ps1). Empty when unavailable; keeps the startup log line
+        // honest about which code the watcher is actually running.
+        private string ReadVersionSuffix()
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(scriptPath);
+                if (string.IsNullOrEmpty(dir)) return "";
+                string v = Path.Combine(dir, "version.json");
+                if (!File.Exists(v)) return "";
+                string json = File.ReadAllText(v, Encoding.UTF8);
+                Match m = Regex.Match(json, "\\\"version\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"", RegexOptions.IgnoreCase);
+                if (!m.Success) return "";
+                Match d = Regex.Match(json, "\\\"date\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"", RegexOptions.IgnoreCase);
+                return ", version " + m.Groups[1].Value + (d.Success ? " (" + d.Groups[1].Value + ")" : "");
+            }
+            catch { return ""; }
         }
 
         private void Log(string msg)
