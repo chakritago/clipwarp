@@ -78,7 +78,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('convert', 'watch', 'stop', 'restart', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'help')]
+    [ValidateSet('convert', 'watch', 'stop', 'restart', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'version', 'help')]
     [string]$Command = 'convert',
     [Parameter(Position = 1)][string]$Action,
     [Parameter(Position = 2)][string]$Setting,
@@ -103,9 +103,12 @@ param(
     [Nullable[int]]$PointerY
 )
 
-if ($Command -in @('privacy','calendar','target','history','recopy','clean','doctor','help')) {
+if ($Command -in @('privacy','calendar','target','history','recopy','clean','doctor','version','help')) {
     Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
     switch ($Command) {
+        'version' {
+            Show-ClipwarpVersion -ScriptRoot $PSScriptRoot
+        }
         'privacy' {
             switch ($Action) {
                 'pause' { Set-ClipwarpPaused -Paused $true; Write-Host 'clipwarp: paused' }
