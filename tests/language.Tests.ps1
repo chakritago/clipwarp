@@ -172,4 +172,6 @@ $install=$indicator.Substring($indicator.IndexOf('private void InstallKeyboardSi
 Assert ($install.Contains('catch (EntryPointNotFoundException)') -and $install.Contains('catch (DllNotFoundException)') -and $install -notmatch 'throw|poll.Stop') 'missing hook APIs preserve polling fallback'
 Assert ($indicator.IndexOf('poll.Start();') -lt $indicator.IndexOf('InstallKeyboardSignal();')) 'fallback polling starts before hook installation'
 Assert ($readme.Contains('keydown') -and $readme.Contains('No key is consumed')) 'README documents immediate non-consuming signal'
+Assert ($indicator.Contains('SetWindowPos') -and $indicator.Contains('HWND_TOPMOST') -and $indicator.Contains('SWP_NOACTIVATE')) 'label re-asserts topmost z-order without activating'
+Assert ($indicator.Contains('AssertTopmost(overlay)')) 'every label display re-asserts z-order'
 Write-Host 'PASS: shortcut fake state and hook/probe source contracts; no real hooks, keys, watcher or overlay'
