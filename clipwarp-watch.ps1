@@ -47,7 +47,6 @@ $logFile    = Join-Path $scriptsDir 'clipwarp-watch.log'
 $clipwarpPath  = Join-Path $PSScriptRoot 'clipwarp.ps1'
 $calendarPopupPath = Join-Path $PSScriptRoot 'clipwarp-calendar-popup.ps1'
 $configPath = Join-Path $env:USERPROFILE '.claude\clipwarp.json'
-$startupLnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\clipwarp-watch.lnk'
 
 # Tri-state identity for the pid in the pid file, so a reused/stale PID can never
 # be mistaken for the watcher AND a verifiably-live-but-unreadable process is not
@@ -83,14 +82,9 @@ function Get-WatchState {
 
 if ($Autostart) {
     try {
-        $sh = New-Object -ComObject WScript.Shell
-        $s  = $sh.CreateShortcut($startupLnk)
-        $s.TargetPath  = 'powershell.exe'
-        $s.Arguments   = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`" -Daemon"
-        $s.WindowStyle = 7                                   # minimized/hidden
-        $s.Description  = 'clipwarp clipboard-image watcher for Claude Code'
-        $s.Save()
-        Write-Host "clipwarp watch: autostart enabled -> $startupLnk" -ForegroundColor Green
+        Import-Module (Join-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) 'clipwarp-support.psm1') -Force -ErrorAction Stop
+        Set-ClipwarpAutostart -Enabled $true -WatchScriptPath $MyInvocation.MyCommand.Path -ErrorAction Stop
+        Write-Host 'clipwarp watch: autostart enabled (hidden scheduled task at logon)' -ForegroundColor Green
         exit 0
     } catch {
         Write-Host "clipwarp watch: failed to enable autostart - $($_.Exception.Message)" -ForegroundColor Red
@@ -99,9 +93,12 @@ if ($Autostart) {
 }
 
 if ($NoAutostart) {
-    if (Test-Path -LiteralPath $startupLnk) {
-        try { Remove-Item -LiteralPath $startupLnk -Force -ErrorAction Stop }
-        catch { Write-Host "clipwarp watch: failed to remove autostart shortcut - $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
+    try {
+        Import-Module (Join-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) 'clipwarp-support.psm1') -Force -ErrorAction Stop
+        Set-ClipwarpAutostart -Enabled $false -ErrorAction Stop
+    } catch {
+        Write-Host "clipwarp watch: failed to disable autostart - $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
     }
     Write-Host 'clipwarp watch: autostart disabled' -ForegroundColor Green
     exit 0
@@ -109,7 +106,11 @@ if ($NoAutostart) {
 
 if ($Status) {
     $st = Get-WatchState
-    $auto = if (Test-Path -LiteralPath $startupLnk) { 'on' } else { 'off' }
+    $auto = 'off'
+    try {
+        Import-Module (Join-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) 'clipwarp-support.psm1') -Force -ErrorAction Stop
+        if (Get-ClipwarpAutostartEnabled) { $auto = 'on' }
+    } catch { }
     switch ($st.State) {
         'watcher' {
             $verTxt = ''
@@ -1761,7 +1762,8 @@ Start-Sleep -Milliseconds 250
     $statusItem = New-Object System.Windows.Forms.ToolStripMenuItem("Status")
     $statusItem.add_Click({
         try {
-            $autoState = if (Test-Path -LiteralPath $startupLnk) { 'Enabled' } else { 'Disabled' }
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            $autoState = if (Get-ClipwarpAutostartEnabled) { 'Enabled' } else { 'Disabled' }
             $msg = "ClipWarp is running (PID: $PID)`nAutostart: $autoState"
             $trayIcon.ShowBalloonTip(3000, "ClipWarp Status", $msg, [System.Windows.Forms.ToolTipIcon]::Info)
         } catch { }
@@ -1912,33 +1914,32 @@ Start-Sleep -Milliseconds 250
     })
     [void]$contextMenu.Items.Add($privacyMenu)
 
-    # Autostart toggle - mirrors `clipwarp autostart|unautostart`. The shortcut
-    # is managed inline (never by re-invoking this script: its `exit` would
-    # kill the daemon host).
+    # Autostart toggle - mirrors `clipwarp autostart|unautostart`, via the
+    # module's scheduled-task helpers (never by re-invoking this script: its
+    # `exit` would kill the daemon host).
     $autoItem = New-Object System.Windows.Forms.ToolStripMenuItem("Autostart")
     $updateAutoText = {
-        if (Test-Path -LiteralPath $startupLnk) { $autoItem.Text = "Autostart: On" } else { $autoItem.Text = "Autostart: Off" }
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            if (Get-ClipwarpAutostartEnabled) { $autoItem.Text = "Autostart: On" } else { $autoItem.Text = "Autostart: Off" }
+        } catch { }
     }
     & $updateAutoText
     $autoItem.add_Click({
         try {
-            if (Test-Path -LiteralPath $startupLnk) {
-                Remove-Item -LiteralPath $startupLnk -Force -ErrorAction Stop
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            if (Get-ClipwarpAutostartEnabled) {
+                Set-ClipwarpAutostart -Enabled $false -ErrorAction Stop
                 $autoItem.Text = "Autostart: Off"
                 $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Autostart off", [System.Windows.Forms.ToolTipIcon]::Info)
             } else {
-                $sh = New-Object -ComObject WScript.Shell
-                $s = $sh.CreateShortcut($startupLnk)
-                $s.TargetPath = 'powershell.exe'
-                $daemonPath = Join-Path $scriptsDir 'clipwarp-watch.ps1'
-                $s.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$daemonPath`" -Daemon"
-                $s.WindowStyle = 7
-                $s.Description = 'clipwarp clipboard-image watcher for Claude Code'
-                $s.Save()
+                Set-ClipwarpAutostart -Enabled $true -WatchScriptPath (Join-Path $scriptsDir 'clipwarp-watch.ps1') -ErrorAction Stop
                 $autoItem.Text = "Autostart: On"
-                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Autostart on - watcher starts with Windows", [System.Windows.Forms.ToolTipIcon]::Info)
+                $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Autostart on - watcher starts hidden with Windows", [System.Windows.Forms.ToolTipIcon]::Info)
             }
-        } catch { }
+        } catch {
+            $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Could not change autostart: $($_.Exception.Message)", [System.Windows.Forms.ToolTipIcon]::Warning)
+        }
     })
     [void]$contextMenu.Items.Add($autoItem)
 
@@ -2006,7 +2007,8 @@ Start-Sleep -Milliseconds 250
 
     $trayIcon.add_DoubleClick({
         try {
-            $autoState = if (Test-Path -LiteralPath $startupLnk) { 'Enabled' } else { 'Disabled' }
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            $autoState = if (Get-ClipwarpAutostartEnabled) { 'Enabled' } else { 'Disabled' }
             $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Running (PID: $PID) - Autostart: $autoState", [System.Windows.Forms.ToolTipIcon]::Info)
         } catch { }
     })
