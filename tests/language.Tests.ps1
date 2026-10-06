@@ -70,9 +70,10 @@ Assert ($src.Contains('Application.ExitThread()') -and $src.Contains('thread.Joi
 $indicator=$src.Substring($src.IndexOf('internal sealed class LanguageIndicator :'),$src.IndexOf('public class Watcher :')-$src.IndexOf('internal sealed class LanguageIndicator :'))
 Assert ($indicator -notmatch 'Clipboard|CaptureForeground|OnForegroundWindowChanged|SetForegroundWindow|SetFocus|AttachThreadInput') 'source contract: no clipboard, target tracking or focus calls in indicator'
 Assert ($indicator.Contains('hide.Tick -= HideExpired') -and $indicator.Contains('poll.Tick -= Poll') -and $indicator.Contains('overlay.Dispose()')) 'source contract: timer handlers and overlay disposal'
-Assert ($indicator.Contains('bool cursor = !caret && GetCursorPos(out mouse);') -and ([regex]::Matches($indicator,'GetCursorPos\(out mouse\)').Count -eq 1)) 'source contract: cursor sampled only when caret is unavailable or conversion fails'
-Assert ($indicator.Contains('caret = CaretToScreen(info.hwndCaret, ref point);') -and $indicator.Contains('caret ? point.X : cursor ? mouse.X : rect.Left') -and $indicator.Contains('caret ? point.Y : cursor ? mouse.Y : rect.Top') -and $indicator.Contains('Screen.FromPoint(anchor).WorkingArea')) 'source contract: converted caret selects monitor before cursor/window fallback'
-Assert ($indicator.Contains('LanguageState.Position(caret, point.X, point.Y, cursor, mouse.X, mouse.Y,')) 'source contract: placement receives converted caret with priority over mouse'
+Assert ($indicator -notmatch 'GetCursorPos') 'source contract: label never anchors to the mouse cursor'
+Assert ($indicator.Contains('caret = CaretToScreen(info.hwndCaret, ref point);') -and $indicator.Contains('ClientToScreen(info.hwndCaret, ref plain)') -and $indicator.Contains('Screen.FromPoint(anchor).WorkingArea')) 'source contract: DPI-aware caret mapping with plain ClientToScreen second chance'
+Assert ($indicator.Contains('if (!caret) return;')) 'source contract: no system caret means no label'
+Assert ($indicator.Contains('LanguageState.Position(true, point.X, point.Y, false, 0, 0,')) 'source contract: placement is always caret-anchored'
 Assert ($src.Contains('HideAt = now + DisplayDurationMilliseconds;') -and $indicator.Contains('state.HideAt - clock.ElapsedMilliseconds')) 'source contract: state and hide timer share the named deadline'
 $runner=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'run-all.ps1'))
 Assert ($runner.Contains("-Filter '*.Tests.ps1'")) 'suite automatically discovers language tests'

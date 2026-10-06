@@ -197,11 +197,12 @@ active if the keyboard hook is unavailable. Switching to an app with a different
 There is no label on startup. Each detected change resets the hide deadline to 1.00 seconds/1,000 ms
 (on an independent UI timer; Windows scheduling can delay painting/hiding slightly).
 The label is centered horizontally on the caret x with its bottom 6 pixels above the caret top, then
-clamps to the monitor work area. Only when caret data or its screen conversion is
-unavailable does the label use the cursor position,
-then the foreground window as fallback, and stays within the monitor work area.
-Unknown languages display `Language 0xXXXX`. Stop the watcher to stop these labels.
-This adds no setting or change to installation/autostart behavior.
+clamps to the monitor work area. The label anchors to the text caret only — never to the
+mouse cursor. If the per-monitor DPI mapping of the caret fails, a plain client-to-screen
+mapping is tried as a second chance; when no system caret exists at all (apps that draw
+their own caret), no label is shown. Unknown languages display `Language 0xXXXX`.
+Stop the watcher to stop these labels. This adds no setting or change to
+installation/autostart behavior.
 
 ```powershell
 clipwarp status       # is the watcher running? is autostart on?
