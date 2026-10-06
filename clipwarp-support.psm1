@@ -510,4 +510,48 @@ function Update-Clipwarp {
         Write-Host "clipwarp: update failed - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
-Export-ModuleMember -Function Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused,Get-ClipwarpVersionInfo,Show-ClipwarpVersion,Update-Clipwarp,Get-ClipwarpLatestVersionInfo,Get-ClipwarpAutoUpdateEnabled
+# Autostart via a hidden Task Scheduler logon task. The legacy Startup-folder
+# shortcut showed a console window at boot when Windows Terminal is the
+# default terminal host; a scheduled task never creates a visible window.
+$ClipwarpTaskName = 'clipwarp-watch'
+function Get-ClipwarpAutostartEnabled {
+    [CmdletBinding()]
+    param()
+    try {
+        $t = Get-ScheduledTask -TaskName $ClipwarpTaskName -ErrorAction Stop
+        if ($t.State -ne 'Disabled') { return $true }
+    } catch {}
+    # Legacy mechanism still counts as enabled until it is migrated away.
+    if ($env:APPDATA) {
+        $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\clipwarp-watch.lnk'
+        if (Test-Path -LiteralPath $lnk) { return $true }
+    }
+    return $false
+}
+function Set-ClipwarpAutostart {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][bool]$Enabled, [string]$WatchScriptPath)
+    if (-not $WatchScriptPath) { $WatchScriptPath = Join-Path $PSScriptRoot 'clipwarp-watch.ps1' }
+    Remove-ClipwarpLegacyAutostartShortcut
+    if (-not $Enabled) {
+        Unregister-ScheduledTask -TaskName $ClipwarpTaskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+        return
+    }
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+        -Argument "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$WatchScriptPath`" -Daemon" `
+        -WorkingDirectory (Split-Path $WatchScriptPath -Parent)
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Days 3650)
+    Register-ScheduledTask -TaskName $ClipwarpTaskName -Action $action -Trigger $trigger -Settings $settings `
+        -Description 'clipwarp clipboard-image watcher for Claude Code' -Force -ErrorAction Stop | Out-Null
+}
+function Remove-ClipwarpLegacyAutostartShortcut {
+    [CmdletBinding()]
+    param()
+    if (-not $env:APPDATA) { return }
+    $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\clipwarp-watch.lnk'
+    if (Test-Path -LiteralPath $lnk) {
+        Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue
+    }
+}
+Export-ModuleMember -Function Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused,Get-ClipwarpVersionInfo,Show-ClipwarpVersion,Update-Clipwarp,Get-ClipwarpLatestVersionInfo,Get-ClipwarpAutoUpdateEnabled,Get-ClipwarpAutostartEnabled,Set-ClipwarpAutostart,Remove-ClipwarpLegacyAutostartShortcut
