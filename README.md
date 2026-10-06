@@ -223,10 +223,13 @@ clipwarp unautostart  # remove the login autostart
 
 ### Tray icon menu
 
-While the watcher runs, its system-tray icon menu mirrors the main commands:
-**Restart ClipWarp**, **Status**, **Pause / Resume ClipWarp** (same toggle as
-`clipwarp pause`), **Version** (same info as `clipwarp version`),
-**Open Images Folder**, **View Log**, and **Exit ClipWarp**.
+While the watcher runs, its system-tray icon menu exposes every command:
+**Restart ClipWarp**, **Status**, **Pause / Resume ClipWarp**, **Target mode**
+submenu (Auto / Web / ChatGPT / Image only / Claude / Dual / Text, mirroring
+`clipwarp target`), **Calendar prompts** on/off toggle, **Privacy** submenu
+(image retention days), **Autostart** on/off toggle, **Version**,
+**Clean old images**, **Run diagnostics**, **Open Images Folder**,
+**View Log**, and **Exit ClipWarp**.
 
 ### Loop / burst protection
 
