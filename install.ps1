@@ -61,7 +61,7 @@ if (Test-Path -LiteralPath $installedWatch) {
 }
 
 # --- 1. Install the scripts: stage all to temp, then swap in with backup/rollback. ---
-$files    = @('clipwarp.ps1', 'clipwarp-watch.ps1', 'clipwarp-calendar.psm1', 'clipwarp-calendar-popup.ps1', 'clipwarp-support.psm1', 'clipwarp-clipboard.cs', 'uninstall.ps1', 'favicon.png')
+$files    = @('clipwarp.ps1', 'clipwarp-watch.ps1', 'clipwarp-calendar.psm1', 'clipwarp-calendar-popup.ps1', 'clipwarp-support.psm1', 'clipwarp-clipboard.cs', 'uninstall.ps1', 'favicon.png', 'version.json')
 $staged   = @{}
 $backups  = @{}   # name -> backup path (targets that existed before)
 $created  = @()   # target paths that did NOT exist before (delete these on rollback)
