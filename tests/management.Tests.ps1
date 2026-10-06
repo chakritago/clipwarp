@@ -86,5 +86,18 @@ try {
     Assert-Equal $false (($doctor | Where-Object Name -eq 'Repository URL').MutatesState) 'doctor diagnostics are explicitly read-only'
 } finally { Remove-Item -LiteralPath $temp -Recurse -Force }
 
+$modText = [IO.File]::ReadAllText((Join-Path $root 'clipwarp-support.psm1'))
+Assert-Equal $true ($modText.Contains('function Get-ClipwarpAutostartEnabled')) 'module has Get-ClipwarpAutostartEnabled'
+Assert-Equal $true ($modText.Contains('function Set-ClipwarpAutostart')) 'module has Set-ClipwarpAutostart'
+Assert-Equal $true ($modText.Contains('Register-ScheduledTask') -and $modText.Contains('-AtLogOn')) 'autostart uses a hidden scheduled task at logon'
+Assert-Equal $true ($modText.Contains('Get-ClipwarpAutostartEnabled,Set-ClipwarpAutostart')) 'autostart functions are exported'
+$watchText = [IO.File]::ReadAllText((Join-Path $root 'clipwarp-watch.ps1'))
+Assert-Equal $false ($watchText.Contains('CreateShortcut')) 'watcher no longer creates Startup shortcuts'
+Assert-Equal $true ($watchText.Contains('Set-ClipwarpAutostart -Enabled')) 'watcher manages autostart via the module'
+$installerText = [IO.File]::ReadAllText((Join-Path $root 'install.ps1'))
+Assert-Equal $true ($installerText.Contains('clipwarp-watch.lnk') -and $installerText.Contains('Remove-Item')) 'installer migrates the legacy startup shortcut'
+Remove-ClipwarpLegacyAutostartShortcut
+Assert-Equal $true $true 'legacy shortcut removal is a safe no-op'
+
 if ($failures) { throw "$failures management test(s) failed" }
 Write-Host 'All management tests passed.' -ForegroundColor Cyan

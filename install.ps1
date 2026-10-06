@@ -184,13 +184,21 @@ if ($problems.Count -eq 0) {
         }
         else { $problems += "the watcher did not start - run 'clipwarp watch' to start it manually." }
 
+        # Migrate away from the legacy Startup-folder shortcut: it showed a
+        # console window at boot when Windows Terminal is the default host.
+        # Autostart now uses a hidden scheduled task (see Set-ClipwarpAutostart).
+        $legacyLnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\clipwarp-watch.lnk'
+        if (Test-Path -LiteralPath $legacyLnk) {
+            Remove-Item -LiteralPath $legacyLnk -Force -ErrorAction SilentlyContinue
+            Write-Host "removed legacy startup shortcut (autostart now uses a hidden scheduled task)" -ForegroundColor DarkGray
+        }
         # Enable autostart on Windows startup / PC power-on by default unless -NoAutostart is passed
         if (-not $NoAutostart) {
             & $installedWatch -Autostart *> $null
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "enabled autostart on Windows startup" -ForegroundColor Green
+                Write-Host "enabled autostart on Windows startup (hidden scheduled task)" -ForegroundColor Green
             } else {
-                Write-Host "could not register startup shortcut automatically - run 'clipwarp autostart' manually." -ForegroundColor Yellow
+                Write-Host "could not register autostart task automatically - run 'clipwarp autostart' manually." -ForegroundColor Yellow
             }
         }
     }

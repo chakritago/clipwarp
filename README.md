@@ -58,9 +58,10 @@ The installer copies the scripts to `%USERPROFILE%\.claude\scripts` and register
 PowerShell editions — Windows PowerShell 5.1 and PowerShell 7 — so it works whichever
 one you open. Idempotent; re-run any time to update. After a successful install,
 the clipboard watcher starts immediately and autostart on Windows startup is enabled
-automatically (so it runs whenever you turn on your PC). To disable autostart anytime,
-run `clipwarp unautostart`. Open a **new** terminal afterwards (or run `. $PROFILE`) so
-the command is found.
+automatically via a hidden scheduled task (no console window at boot — the old
+Startup-folder shortcut showed one when Windows Terminal is the default terminal).
+To disable autostart anytime, run `clipwarp unautostart`. Open a **new** terminal
+afterwards (or run `. $PROFILE`) so the command is found.
 
 > No admin rights, no services, no dependencies — plain PowerShell and .NET classes
 > that ship with Windows. Everything runs **locally**; images never leave your machine.
@@ -256,7 +257,7 @@ To disable the guard, set `"burstGuard": false` in
 | Command | What it does |
 |---|---|
 | `clipwarp watch` | Start image auto-conversion and text/image Calendar prompts again after stopping it. |
-| `clipwarp autostart` | Start the watcher automatically at every login. |
+| `clipwarp autostart` | Start the watcher automatically at every login via a hidden scheduled task (no console window). |
 | `clipwarp status` | Is the watcher running? Is autostart on? |
 | `clipwarp stop` | Stop the watcher. |
 | `clipwarp unautostart` | Remove the login autostart. |
