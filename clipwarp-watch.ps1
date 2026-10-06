@@ -19,6 +19,12 @@
     paragraph in Word) are not image-converted; their text is offered as the
     calendar event title instead.
 
+    A burst/storm circuit-breaker (ClipboardBurstGuard) suppresses repeated
+    identical copies (5x in 60s -> 2-minute suppression) and pauses handling
+    during clipboard event floods (30 events in 10s -> 30s pause), so a
+    misbehaving app can never spin the watcher forever. Disable with
+    "burstGuard": false in %USERPROFILE%\.claude\clipwarp.json.
+
 .USAGE
     clipwarp watch      # start (detached, hidden, system tray)
     clipwarp restart    # restart (detached, hidden, system tray)
@@ -230,6 +236,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using System.Collections.Generic;
 
 namespace ClipwarpWatch
 {
@@ -689,6 +696,122 @@ namespace ClipwarpWatch
         }
     }
 
+    // Pure policy: circuit-breaker for repeated clipboard copies.
+    // A clipboard listener fires on EVERY write, including rewrites of
+    // identical content (clipboard managers, cloud sync, copy-back buttons),
+    // and sequence numbers alone cannot tell a genuine new copy from a
+    // repeated one. This guard fingerprints content and trips in two cases:
+    //   burst - the same content hash appears BurstThreshold times inside
+    //           BurstWindowMs: that fingerprint is suppressed for BurstCooldownMs.
+    //   storm - StormThreshold clipboard events inside StormWindowMs, regardless
+    //           of content: all handling pauses for StormCooldownMs.
+    // Tests use fake fingerprints and a manual millisecond clock.
+    public sealed class ClipboardBurstGuard
+    {
+        public const int BurstWindowMs = 60000;
+        public const int BurstThreshold = 5;
+        public const int BurstCooldownMs = 120000;
+        public const int StormWindowMs = 10000;
+        public const int StormThreshold = 30;
+        public const int StormCooldownMs = 30000;
+        private const int MaxTrackedFingerprints = 200;
+
+        public enum Verdict { Allow, SuppressBurst, PauseStorm }
+
+        private readonly Dictionary<string, Queue<long>> hits = new Dictionary<string, Queue<long>>();
+        private readonly Dictionary<string, long> suppressedUntil = new Dictionary<string, long>();
+        private readonly Queue<long> events = new Queue<long>();
+        private long stormPausedUntil = 0;
+
+        private static void Trim(Queue<long> q, long nowMs, long windowMs)
+        {
+            while (q.Count > 0 && nowMs - q.Peek() > windowMs) q.Dequeue();
+        }
+
+        // fingerprint may be null when the content could not be read (clipboard
+        // busy): a null fingerprint only feeds the storm counter, never the
+        // burst table.
+        public Verdict Observe(string fingerprint, long nowMs)
+        {
+            Trim(events, nowMs, StormWindowMs);
+            events.Enqueue(nowMs);
+            if (nowMs < stormPausedUntil) return Verdict.PauseStorm;
+            if (events.Count >= StormThreshold)
+            {
+                stormPausedUntil = nowMs + StormCooldownMs;
+                return Verdict.PauseStorm;
+            }
+            if (string.IsNullOrEmpty(fingerprint)) return Verdict.Allow;
+            long until;
+            if (suppressedUntil.TryGetValue(fingerprint, out until))
+            {
+                if (nowMs < until) return Verdict.SuppressBurst;
+                suppressedUntil.Remove(fingerprint);
+            }
+            Queue<long> q;
+            if (!hits.TryGetValue(fingerprint, out q))
+            {
+                q = new Queue<long>();
+                hits[fingerprint] = q;
+            }
+            Trim(q, nowMs, BurstWindowMs);
+            q.Enqueue(nowMs);
+            if (q.Count >= BurstThreshold)
+            {
+                suppressedUntil[fingerprint] = nowMs + BurstCooldownMs;
+                hits.Remove(fingerprint);
+                return Verdict.SuppressBurst;
+            }
+            if (hits.Count > MaxTrackedFingerprints)
+            {
+                List<string> stale = new List<string>();
+                foreach (KeyValuePair<string, Queue<long>> kv in hits)
+                {
+                    Trim(kv.Value, nowMs, BurstWindowMs);
+                    if (kv.Value.Count == 0) stale.Add(kv.Key);
+                }
+                foreach (string k in stale) hits.Remove(k);
+            }
+            return Verdict.Allow;
+        }
+
+        public void Reset()
+        {
+            hits.Clear();
+            suppressedUntil.Clear();
+            events.Clear();
+            stormPausedUntil = 0;
+        }
+
+        // Stable, cheap content fingerprints. Text is hashed whole; images are
+        // hashed from a bounded sample (head + tail + length) so giant
+        // screenshots stay cheap while still distinguishing content.
+        public static string FingerprintText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return null;
+            using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+            {
+                byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
+                byte[] hash = sha.ComputeHash(bytes);
+                return "T:" + BitConverter.ToString(hash).Replace("-", string.Empty);
+            }
+        }
+
+        public static string FingerprintBytes(byte[] data)
+        {
+            if (data == null || data.Length == 0) return null;
+            using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+            {
+                int head = Math.Min(data.Length, 65536);
+                sha.TransformBlock(data, 0, head, null, 0);
+                int tail = Math.Min(data.Length, 4096);
+                if (tail > 0 && tail < data.Length) sha.TransformBlock(data, data.Length - tail, tail, null, 0);
+                sha.TransformFinalBlock(BitConverter.GetBytes(data.Length), 0, 8);
+                return "I:" + BitConverter.ToString(sha.Hash).Replace("-", string.Empty);
+            }
+        }
+    }
+
     public class Watcher : NativeWindow
     {
         [DllImport("kernel32.dll")]
@@ -770,6 +893,11 @@ namespace ClipwarpWatch
         private uint lastManagedSequence;
         private const int EventDelayMs = 75;
         private const int WatchdogDelayMs = 200;
+        // Burst/storm circuit-breaker state (see ClipboardBurstGuard).
+        private readonly ClipboardBurstGuard burstGuard = new ClipboardBurstGuard();
+        private string lastContentFingerprint = null;
+        private string burstLoggedFingerprint = null;
+        private bool stormLogged = false;
 
         // Re-check soon instead of dropping the event (clipboard was busy, or a
         // conversion is still running). Bounded so a permanently-locked clipboard
@@ -806,17 +934,36 @@ namespace ClipwarpWatch
         {
             if (m.Msg == WM_CLIPBOARDUPDATE)
             {
-                // A genuinely new clipboard change: give it a full, fresh retry
-                // budget (don't inherit a previous burst's exhausted counter).
-                busyRetries = 0;
-                convFails = 0;
-                POINT captured;
-                hasEventPointer = GetCursorPos(out captured);
-                if (hasEventPointer) eventPointer = captured;
-                CaptureForeground();
-                debounce.Interval = EventDelayMs;
-                debounce.Stop();
-                debounce.Start();
+                // Storm circuit-breaker: a flood of clipboard events pauses the
+                // watcher briefly instead of arming work for every single one.
+                // (A null fingerprint only feeds the storm counter, never the
+                // burst table.)
+                long nowMs = DateTime.UtcNow.Ticks / 10000;
+                if (BurstGuardEnabled() &&
+                    burstGuard.Observe(null, nowMs) == ClipboardBurstGuard.Verdict.PauseStorm)
+                {
+                    if (!stormLogged)
+                    {
+                        stormLogged = true;
+                        Log("clipboard storm detected - pausing clipboard handling for 30s");
+                    }
+                }
+                else
+                {
+                    stormLogged = false;
+                    // A clipboard change: give it a full, fresh retry budget
+                    // (don't inherit a previous burst's exhausted counter).
+                    // convFails is reset only when the content actually changes
+                    // (see Inspect) so an event flood can't wash the budget away.
+                    busyRetries = 0;
+                    POINT captured;
+                    hasEventPointer = GetCursorPos(out captured);
+                    if (hasEventPointer) eventPointer = captured;
+                    CaptureForeground();
+                    debounce.Interval = EventDelayMs;
+                    debounce.Stop();
+                    debounce.Start();
+                }
             }
             base.WndProc(ref m);
         }
@@ -1189,6 +1336,42 @@ namespace ClipwarpWatch
                 }
             }
 
+            // Burst circuit-breaker: identical clipboard content re-appearing
+            // many times in a short window (clipboard managers, cloud sync,
+            // copy-back buttons) is suppressed instead of processed forever.
+            // Our own ClipwarpManaged writes returned above and never reach
+            // this table. convFails is a per-content budget: it resets only
+            // when the content actually changes, so an event flood of the same
+            // content can't wash the failure budget away.
+            if (BurstGuardEnabled())
+            {
+                string contentFp = FingerprintClipboard(dObj);
+                if (contentFp != lastContentFingerprint) { convFails = 0; lastContentFingerprint = contentFp; }
+                long nowMs = DateTime.UtcNow.Ticks / 10000;
+                ClipboardBurstGuard.Verdict burstVerdict = burstGuard.Observe(contentFp, nowMs);
+                if (burstVerdict == ClipboardBurstGuard.Verdict.SuppressBurst)
+                {
+                    if (burstLoggedFingerprint != contentFp)
+                    {
+                        burstLoggedFingerprint = contentFp;
+                        string shortFp = contentFp != null && contentFp.Length > 14 ? contentFp.Substring(0, 14) : contentFp;
+                        Log("repeated identical clipboard detected (" + shortFp + ") - suppressing for 2 minutes");
+                    }
+                    lastHandledSequence = sequence;
+                    lastManagedImagePath = null;
+                    lastManagedSequence = 0;
+                    busyRetries = 0;
+                    debounce.Interval = EventDelayMs;
+                    return;
+                }
+                if (burstVerdict == ClipboardBurstGuard.Verdict.Allow) burstLoggedFingerprint = null;
+                else // PauseStorm: re-armed while a storm pause is active
+                {
+                    lastHandledSequence = sequence;
+                    return;
+                }
+            }
+
             string txt = null;
             try { if (Clipboard.ContainsText()) txt = Clipboard.GetText(); }
             catch { Rearm(); return; }                         // clipboard busy -> retry soon, don't drop it
@@ -1330,6 +1513,75 @@ namespace ClipwarpWatch
                 return !m.Success || !string.Equals(m.Groups[1].Value, "false", StringComparison.OrdinalIgnoreCase);
             }
             catch { return true; }
+        }
+
+        // Kill-switch for the burst/storm guard, read from the same config
+        // file as the other watcher settings. Defaults to enabled; set
+        // "burstGuard": false in %USERPROFILE%\.claude\clipwarp.json to disable.
+        private bool BurstGuardEnabled()
+        {
+            try
+            {
+                if (!File.Exists(configPath)) return true;
+                string json = File.ReadAllText(configPath, Encoding.UTF8);
+                Match m = Regex.Match(json, "\\\"burstGuard\\\"\\s*:\\s*(true|false)", RegexOptions.IgnoreCase);
+                return !m.Success || !string.Equals(m.Groups[1].Value, "false", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return true; }
+        }
+
+        // Cheap content fingerprint for the burst guard: text is hashed whole,
+        // images from their PNG bytes (falling back to a BMP encode of the
+        // bitmap). Returns null when the content could not be read.
+        private string FingerprintClipboard(IDataObject d)
+        {
+            if (d == null) return null;
+            try
+            {
+                if (d.GetDataPresent(DataFormats.UnicodeText))
+                {
+                    string t = null;
+                    try { t = d.GetData(DataFormats.UnicodeText) as string; } catch { }
+                    string tfp = ClipboardBurstGuard.FingerprintText(t);
+                    if (tfp != null) return tfp;
+                }
+                byte[] pngBytes = null;
+                try
+                {
+                    if (d.GetDataPresent("PNG"))
+                    {
+                        object o = d.GetData("PNG");
+                        MemoryStream ms = o as MemoryStream;
+                        if (ms != null) pngBytes = ms.ToArray();
+                        else if (o is byte[]) pngBytes = (byte[])o;
+                    }
+                }
+                catch { }
+                if (pngBytes == null)
+                {
+                    try
+                    {
+                        if (d.GetDataPresent(DataFormats.Bitmap))
+                        {
+                            Image img = d.GetData(DataFormats.Bitmap) as Image;
+                            if (img != null)
+                            {
+                                using (MemoryStream ms = new MemoryStream())
+                                {
+                                    img.Save(ms, System.Drawing.Imaging.ImageFormat.Bmp);
+                                    pngBytes = ms.ToArray();
+                                }
+                                img.Dispose();
+                            }
+                        }
+                    }
+                    catch { }
+                }
+                string ifp = ClipboardBurstGuard.FingerprintBytes(pngBytes);
+                if (ifp != null) return ifp;
+            }
+            catch { }
+            return null;
         }
 
         // Tri-state: 1 = an image payload is present, 0 = none, -1 = clipboard
