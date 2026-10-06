@@ -36,6 +36,12 @@ try {
     foreach ($argsText in @('privacy status','privacy pause','privacy resume','privacy retention 14','privacy retention 0')) {
         Assert-Equal 0 (Invoke-ClipwarpExitCode $argsText) "safe privacy command: $argsText"
     }
+    Assert-Equal 0 (Invoke-ClipwarpExitCode 'pause') 'pause toggles on'
+    $pausedOn = & $engine -NoProfile -File $clipwarp privacy status 2>&1 | Out-String
+    Assert-Equal $true ($pausedOn.Contains('paused=True')) 'first pause actually pauses'
+    Assert-Equal 0 (Invoke-ClipwarpExitCode 'pause') 'pause toggles off'
+    $pausedOff = & $engine -NoProfile -File $clipwarp privacy status 2>&1 | Out-String
+    Assert-Equal $true ($pausedOff.Contains('paused=False')) 'second pause resumes'
     Assert-Equal $true ((Invoke-ClipwarpExitCode 'privacy retention -1') -ne 0) 'negative retention rejected'
     $images = Join-Path $temp 'images'
     New-Item -ItemType Directory -Path $images | Out-Null

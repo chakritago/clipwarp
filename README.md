@@ -259,6 +259,7 @@ To disable the guard, set `"burstGuard": false` in
 | `clipwarp clean -Before <date>` | Delete only direct-child `clip-*` image files older than the cutoff (default 7 days). |
 | `clipwarp doctor` | Read-only diagnostics for scripts, profiles, watcher/autostart indicators, PowerShell policy, config, output path, and repository URL drift. |
 | `clipwarp version` | Show the installed version and its date, and check whether a newer version is published (re-run the install command to update). |
+| `clipwarp pause` | Toggle pause: pauses all watcher handling; run again to resume. |
 | `cw` | Convert one clipboard image, show the Calendar prompt, then `Ctrl+V`. |
 
 ## Supported clipboard formats

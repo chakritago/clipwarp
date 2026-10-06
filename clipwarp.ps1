@@ -78,7 +78,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('convert', 'watch', 'stop', 'restart', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'version', 'help')]
+    [ValidateSet('convert', 'watch', 'stop', 'restart', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'version', 'pause', 'help')]
     [string]$Command = 'convert',
     [Parameter(Position = 1)][string]$Action,
     [Parameter(Position = 2)][string]$Setting,
@@ -103,11 +103,21 @@ param(
     [Nullable[int]]$PointerY
 )
 
-if ($Command -in @('privacy','calendar','target','history','recopy','clean','doctor','version','help')) {
+if ($Command -in @('privacy','calendar','target','history','recopy','clean','doctor','version','pause','help')) {
     Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
     switch ($Command) {
         'version' {
             Show-ClipwarpVersion -ScriptRoot $PSScriptRoot
+        }
+        'pause' {
+            # Toggle: pause the watcher, or resume if already paused.
+            if (Get-ClipwarpPaused) {
+                Set-ClipwarpPaused -Paused $false
+                Write-Host 'clipwarp: resumed' -ForegroundColor Green
+            } else {
+                Set-ClipwarpPaused -Paused $true
+                Write-Host 'clipwarp: paused - run `clipwarp pause` again to resume' -ForegroundColor Yellow
+            }
         }
         'privacy' {
             switch ($Action) {
