@@ -532,8 +532,6 @@ namespace ClipwarpWatch
         [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint thread);
         [DllImport("user32.dll")] private static extern bool GetGUIThreadInfo(uint thread, ref GUITHREADINFO info);
         [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr hwnd, ref POINT point);
-        [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT point);
-        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
         [DllImport("user32.dll")] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
         [DllImport("user32.dll")] private static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
         [DllImport("user32.dll")] private static extern bool LogicalToPhysicalPointForPerMonitorDPI(IntPtr hwnd, ref POINT point);
@@ -555,8 +553,9 @@ namespace ClipwarpWatch
         {
             // rcCaret is in the target's logical client space, regardless of our DPI context.
             // Map in the target context, then convert its logical screen point to physical pixels.
-            // Restore our PM context before any WinForms/Screen calls. Missing APIs skip the
-            // caret and use GetCursorPos in the same context as Screen.WorkingArea instead.
+            // Restore our PM context before any WinForms/Screen calls. When this mapping
+            // is unavailable, Poll retries with plain ClientToScreen; the label never
+            // anchors to the mouse cursor.
             if (!perMonitorDpi) return false;
             IntPtr previous = IntPtr.Zero;
             try {
@@ -690,15 +689,20 @@ namespace ClipwarpWatch
             if (caret) {
                 point.X = info.rcCaret.Left; point.Y = info.rcCaret.Top;
                 caret = CaretToScreen(info.hwndCaret, ref point);
+                if (!caret) {
+                    // Second chance without the per-monitor DPI mapping: plain
+                    // ClientToScreen still lands on the caret in the common case.
+                    POINT plain = new POINT { X = info.rcCaret.Left, Y = info.rcCaret.Top };
+                    if (ClientToScreen(info.hwndCaret, ref plain)) {
+                        point = plain;
+                        caret = true;
+                    }
+                }
             }
-            POINT mouse = new POINT();
-            bool cursor = !caret && GetCursorPos(out mouse);
-            RECT rect;
-            if (!GetWindowRect(fg, out rect)) rect = new RECT();
-            System.Drawing.Point anchor = new System.Drawing.Point(caret ? point.X : cursor ? mouse.X : rect.Left,
-                caret ? point.Y : cursor ? mouse.Y : rect.Top);
-            overlay.Location = LanguageState.Position(caret, point.X, point.Y, cursor, mouse.X, mouse.Y,
-                rect.Left, rect.Top, overlay.Width, overlay.Height, Screen.FromPoint(anchor).WorkingArea);
+            if (!caret) return; // no system caret: show nothing, never the mouse cursor
+            System.Drawing.Point anchor = new System.Drawing.Point(point.X, point.Y);
+            overlay.Location = LanguageState.Position(true, point.X, point.Y, false, 0, 0,
+                0, 0, overlay.Width, overlay.Height, Screen.FromPoint(anchor).WorkingArea);
             overlay.Show();
             AssertTopmost(overlay);
             overlay.Invalidate();
