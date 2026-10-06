@@ -227,8 +227,8 @@ While the watcher runs, its system-tray icon menu exposes every command:
 **Restart ClipWarp**, **Status**, **Pause / Resume ClipWarp**, **Target mode**
 submenu (Auto / Web / ChatGPT / Image only / Claude / Dual / Text, mirroring
 `clipwarp target`), **Calendar prompts** on/off toggle, **Privacy** submenu
-(image retention days), **Autostart** on/off toggle, **Version**,
-**Clean old images**, **Run diagnostics**, **Open Images Folder**,
+(image retention days), **Autostart** on/off toggle, **Version**, **Check for updates** (mirrors
+`clipwarp update`), **Clean old images**, **Run diagnostics**, **Open Images Folder**,
 **View Log**, and **Exit ClipWarp**.
 
 ### Loop / burst protection
@@ -269,6 +269,7 @@ To disable the guard, set `"burstGuard": false` in
 | `clipwarp clean -Before <date>` | Delete only direct-child `clip-*` image files older than the cutoff (default 7 days). |
 | `clipwarp doctor` | Read-only diagnostics for scripts, profiles, watcher/autostart indicators, PowerShell policy, config, output path, and repository URL drift. |
 | `clipwarp version` | Show the installed version and its date, and check whether a newer version is published (re-run the install command to update). |
+| `clipwarp update` | Check for a newer version on `main` and install it (re-runs `install.ps1`, which restarts the watcher). |
 | `clipwarp pause` | Toggle pause: pauses all watcher handling; run again to resume. |
 | `cw` | Convert one clipboard image, show the Calendar prompt, then `Ctrl+V`. |
 

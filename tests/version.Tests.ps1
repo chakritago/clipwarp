@@ -25,6 +25,14 @@ $watchPs=[IO.File]::ReadAllText((Join-Path $root 'clipwarp-watch.ps1'))
 Assert ($watchPs.Contains('version.json')) 'clipwarp status shows the installed version'
 $readme=[IO.File]::ReadAllText((Join-Path $root 'README.md'))
 Assert ($readme.Contains('clipwarp version')) 'README documents clipwarp version'
+Assert ($cli.Contains("'update'")) 'clipwarp.ps1 ValidateSet includes update'
+Assert ($cli.Contains("'update','pause'")) 'clipwarp.ps1 dispatches the update command'
+Assert ($cli.Contains('Update-Clipwarp -ScriptRoot')) 'clipwarp.ps1 calls Update-Clipwarp'
+Assert ($mod.Contains('function Update-Clipwarp')) 'support module has Update-Clipwarp'
+Assert ($mod.Contains('Show-ClipwarpVersion,Update-Clipwarp')) 'Update-Clipwarp is exported'
+Assert ($mod.Contains('install.ps1') -and $mod.Contains('-CheckOnly')) 'Update-Clipwarp re-runs the installer with check-only mode'
+Assert ($watchPs.Contains('Check for updates')) 'tray menu has Check for updates'
+Assert ($readme.Contains('clipwarp update')) 'README documents clipwarp update'
 $testBytes=[IO.File]::ReadAllBytes($PSCommandPath)
 Assert ($testBytes[0] -eq 239 -and $testBytes[1] -eq 187 -and $testBytes[2] -eq 191) 'version tests UTF-8 BOM'
 Write-Host 'PASS: version wiring tests; no watcher instantiated'
