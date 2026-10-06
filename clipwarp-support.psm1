@@ -465,6 +465,25 @@ function Show-ClipwarpVersion {
         Write-Host 'could not check for updates (offline?)' -ForegroundColor DarkGray
     }
 }
+# Returns the published version info from main, or $null when offline/unreachable.
+function Get-ClipwarpLatestVersionInfo {
+    [CmdletBinding()]
+    param()
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+    try {
+        $remote = Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/chakritago/clipwarp/main/version.json' -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+        if ($remote.version) { return [pscustomobject]@{ Version = [string]$remote.version; Date = [string]$remote.date } }
+    } catch {}
+    return $null
+}
+# Auto-update kill switch: "autoUpdate": false in %USERPROFILE%\.claude\clipwarp.json
+# disables the watcher's automatic update checks (default: enabled).
+function Get-ClipwarpAutoUpdateEnabled {
+    param([string]$ConfigPath = (Get-ClipwarpDefaultConfigPath))
+    $v = (Get-ClipwarpConfig $ConfigPath).autoUpdate
+    if ($null -eq $v) { return $true }
+    [bool]$v
+}
 # Checks main for a newer version and, when found, re-runs the installer to
 # update (the installer stops the running watcher before replacing files and
 # restarts it afterwards). With -CheckOnly it only reports, like Show-ClipwarpVersion.
@@ -473,18 +492,16 @@ function Update-Clipwarp {
     param([string]$ScriptRoot, [switch]$CheckOnly)
     $info = Get-ClipwarpVersionInfo -ScriptRoot $ScriptRoot
     $installed = if ($info) { $info.Version } else { 'unknown' }
-    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
-    try {
-        $remote = Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/chakritago/clipwarp/main/version.json' -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
-    } catch {
+    $remote = Get-ClipwarpLatestVersionInfo
+    if (-not $remote) {
         Write-Host 'clipwarp: could not check for updates (offline?)' -ForegroundColor DarkGray
         return
     }
-    if (-not $remote.version -or $remote.version -eq $installed) {
+    if ($remote.Version -eq $installed) {
         Write-Host "clipwarp: up to date ($installed)" -ForegroundColor Green
         return
     }
-    Write-Host "clipwarp: update available: $installed -> $($remote.version) ($($remote.date))" -ForegroundColor Yellow
+    Write-Host "clipwarp: update available: $installed -> $($remote.Version) ($($remote.Date))" -ForegroundColor Yellow
     if ($CheckOnly) { return }
     Write-Host 'clipwarp: downloading and running the installer...' -ForegroundColor Cyan
     try {
@@ -493,4 +510,4 @@ function Update-Clipwarp {
         Write-Host "clipwarp: update failed - $($_.Exception.Message)" -ForegroundColor Red
     }
 }
-Export-ModuleMember -Function Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused,Get-ClipwarpVersionInfo,Show-ClipwarpVersion,Update-Clipwarp
+Export-ModuleMember -Function Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused,Get-ClipwarpVersionInfo,Show-ClipwarpVersion,Update-Clipwarp,Get-ClipwarpLatestVersionInfo,Get-ClipwarpAutoUpdateEnabled
