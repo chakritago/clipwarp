@@ -34,6 +34,7 @@
     target auto|web|chatgpt|image-only|claude|dual|text|status - publication mode.
     history | recopy | clean - inspect, explicitly recopy, or prune saved images.
     doctor - run read-only installation and environment diagnostics.
+    update - check for a newer version and install it (tray: Check for updates).
 
 .PARAMETER OutDir
     Folder for saved PNGs. Default: %USERPROFILE%\.claude\pasted-images
@@ -78,7 +79,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('convert', 'watch', 'stop', 'restart', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'version', 'pause', 'help')]
+    [ValidateSet('convert', 'watch', 'stop', 'restart', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'version', 'update', 'pause', 'help')]
     [string]$Command = 'convert',
     [Parameter(Position = 1)][string]$Action,
     [Parameter(Position = 2)][string]$Setting,
@@ -103,11 +104,14 @@ param(
     [Nullable[int]]$PointerY
 )
 
-if ($Command -in @('privacy','calendar','target','history','recopy','clean','doctor','version','pause','help')) {
+if ($Command -in @('privacy','calendar','target','history','recopy','clean','doctor','version','update','pause','help')) {
     Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
     switch ($Command) {
         'version' {
             Show-ClipwarpVersion -ScriptRoot $PSScriptRoot
+        }
+        'update' {
+            Update-Clipwarp -ScriptRoot $PSScriptRoot
         }
         'pause' {
             # Toggle: pause the watcher, or resume if already paused.

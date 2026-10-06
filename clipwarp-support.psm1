@@ -465,4 +465,32 @@ function Show-ClipwarpVersion {
         Write-Host 'could not check for updates (offline?)' -ForegroundColor DarkGray
     }
 }
-Export-ModuleMember -Function Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused,Get-ClipwarpVersionInfo,Show-ClipwarpVersion
+# Checks main for a newer version and, when found, re-runs the installer to
+# update (the installer stops the running watcher before replacing files and
+# restarts it afterwards). With -CheckOnly it only reports, like Show-ClipwarpVersion.
+function Update-Clipwarp {
+    [CmdletBinding()]
+    param([string]$ScriptRoot, [switch]$CheckOnly)
+    $info = Get-ClipwarpVersionInfo -ScriptRoot $ScriptRoot
+    $installed = if ($info) { $info.Version } else { 'unknown' }
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+    try {
+        $remote = Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/chakritago/clipwarp/main/version.json' -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+    } catch {
+        Write-Host 'clipwarp: could not check for updates (offline?)' -ForegroundColor DarkGray
+        return
+    }
+    if (-not $remote.version -or $remote.version -eq $installed) {
+        Write-Host "clipwarp: up to date ($installed)" -ForegroundColor Green
+        return
+    }
+    Write-Host "clipwarp: update available: $installed -> $($remote.version) ($($remote.date))" -ForegroundColor Yellow
+    if ($CheckOnly) { return }
+    Write-Host 'clipwarp: downloading and running the installer...' -ForegroundColor Cyan
+    try {
+        Invoke-Expression (Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/chakritago/clipwarp/main/install.ps1' -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop)
+    } catch {
+        Write-Host "clipwarp: update failed - $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+Export-ModuleMember -Function Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused,Get-ClipwarpVersionInfo,Show-ClipwarpVersion,Update-Clipwarp
