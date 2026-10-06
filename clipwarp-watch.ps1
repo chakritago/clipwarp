@@ -2011,11 +2011,42 @@ Start-Sleep -Milliseconds 250
         } catch { }
     })
 
+    # Auto-update: check once 60s after startup, then every 24 hours. When a
+    # newer version is published, the installer is launched hidden; it stops
+    # this watcher, replaces the files, and restarts the watcher itself.
+    # Kill switch: "autoUpdate": false in %USERPROFILE%\.claude\clipwarp.json.
+    $updateTimer = New-Object System.Windows.Forms.Timer
+    $updateTimer.Interval = 60000
+    $updateTimer.add_Tick({
+        $updateTimer.Stop()
+        $updateTimer.Interval = 86400000
+        try {
+            Import-Module (Join-Path $scriptsDir 'clipwarp-support.psm1') -Force -ErrorAction Stop
+            if (Get-ClipwarpAutoUpdateEnabled) {
+                $latest = Get-ClipwarpLatestVersionInfo
+                if ($latest) {
+                    $info = Get-ClipwarpVersionInfo -ScriptRoot $scriptsDir
+                    $installed = if ($info) { $info.Version } else { 'unknown' }
+                    if ($latest.Version -ne $installed) {
+                        $trayIcon.ShowBalloonTip(3000, "ClipWarp", "Updating to v$($latest.Version)...", [System.Windows.Forms.ToolTipIcon]::Info)
+                        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+                            '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                            '-Command', "Invoke-Expression (Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/chakritago/clipwarp/main/install.ps1' -UseBasicParsing)"
+                        ) | Out-Null
+                    }
+                }
+            }
+        } catch { }
+        $updateTimer.Start()
+    })
+    $updateTimer.Start()
+
     $trayIcon.Visible = $true
 } catch { }
 
 $cleanupScript = {
     try {
+        if ($updateTimer) { $updateTimer.Stop(); $updateTimer.Dispose() }
         if ($trayIcon) {
             $trayIcon.Visible = $false
             $trayIcon.Dispose()
