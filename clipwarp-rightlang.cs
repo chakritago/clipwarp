@@ -1,14 +1,13 @@
 // ClipWarp RightLang-inspired Thai/English keyboard-layout repair.
 // This is original code: no RightLang binary, libraries or proprietary resources are used.
 // It processes only a bounded in-memory token in explicitly allowed desktop apps.
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Text;
-
 namespace ClipwarpRightLang
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Diagnostics;
+    using System.Runtime.InteropServices;
+    using System.Text;
     public sealed class Engine : IDisposable
     {
         private const int WH_KEYBOARD_LL = 13, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
