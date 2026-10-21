@@ -344,40 +344,51 @@ $languageTimer.Add_Tick({
 })
 $languageTimer.Start()
 
-function Set-Colors([Windows.Forms.Control]$node,[bool]$dark) {
-    $background=if($dark){[Drawing.Color]::FromArgb(28,32,40)}else{[Drawing.Color]::FromArgb(249,250,253)}
-    $foreground=if($dark){[Drawing.Color]::FromArgb(238,242,247)}else{[Drawing.Color]::FromArgb(30,41,57)}
-    $inputBg=if($dark){[Drawing.Color]::FromArgb(41,48,59)}else{[Drawing.Color]::White}
+function Set-Colors([Windows.Forms.Control]$node,[bool]$dark,[bool]$contrast) {
+    $background=if($contrast){[Drawing.SystemColors]::Window}elseif($dark){[Drawing.Color]::FromArgb(28,32,40)}else{[Drawing.Color]::FromArgb(249,250,253)}
+    $foreground=if($contrast){[Drawing.SystemColors]::WindowText}elseif($dark){[Drawing.Color]::FromArgb(238,242,247)}else{[Drawing.Color]::FromArgb(30,41,57)}
+    $inputBg=if($contrast){[Drawing.SystemColors]::Window}elseif($dark){[Drawing.Color]::FromArgb(41,48,59)}else{[Drawing.Color]::White}
     $node.BackColor=$background;$node.ForeColor=$foreground
-    if($node -is [Windows.Forms.TextBox] -or $node -is [Windows.Forms.ComboBox]){
+    if($node -is [Windows.Forms.TextBox] -or $node -is [Windows.Forms.ComboBox] -or
+       $node -is [Windows.Forms.NumericUpDown] -or $node -is [Windows.Forms.ListBox]){
         $node.BackColor=$inputBg;$node.ForeColor=$foreground
     }
-    if($node -is [Windows.Forms.TabPage]){$node.BackColor=$background}
-    foreach($child in $node.Controls){Set-Colors $child $dark}
+    foreach($child in $node.Controls){Set-Colors $child $dark $contrast}
 }
 $applyTheme = {
-    Set-Colors $form ([bool]$darkToggle.Checked)
-    $header.BackColor=if($darkToggle.Checked){[Drawing.Color]::FromArgb(22,42,70)}else{[Drawing.Color]::FromArgb(226,239,255)}
-    $save.BackColor=if($darkToggle.Checked){[Drawing.Color]::FromArgb(52,117,213)}else{[Drawing.Color]::FromArgb(25,92,189)}
-    $save.ForeColor=[Drawing.Color]::White
+    $hc=[bool]$contrastToggle.Checked
+    $dark=[bool]$darkToggle.Checked
+    Set-Colors $form $dark $hc
+    $header.BackColor=if($hc){[Drawing.SystemColors]::Window}elseif($dark){[Drawing.Color]::FromArgb(22,42,70)}else{[Drawing.Color]::FromArgb(226,239,255)}
+    $save.BackColor=if($hc){[Drawing.SystemColors]::Highlight}elseif($dark){[Drawing.Color]::FromArgb(52,117,213)}else{[Drawing.Color]::FromArgb(25,92,189)}
+    $save.ForeColor=if($hc){[Drawing.SystemColors]::HighlightText}else{[Drawing.Color]::White}
     $heading.BackColor=$header.BackColor
     $tagline.BackColor=$header.BackColor
     $icon.BackColor=$header.BackColor
-    $langBadge.BackColor=if($darkToggle.Checked){[Drawing.Color]::FromArgb(52,62,81)}else{[Drawing.Color]::White}
-    $after.BackColor=if($darkToggle.Checked){[Drawing.Color]::FromArgb(42,60,75)}else{[Drawing.Color]::FromArgb(238,246,255)}
+    $langBadge.BackColor=if($hc){[Drawing.SystemColors]::Window}elseif($dark){[Drawing.Color]::FromArgb(52,62,81)}else{[Drawing.Color]::White}
+    $after.BackColor=if($hc){[Drawing.SystemColors]::Window}elseif($dark){[Drawing.Color]::FromArgb(42,60,75)}else{[Drawing.Color]::FromArgb(238,246,255)}
+}
+$applyFont = {
+    $size=[float]$fontSizePicker.Value
+    $form.Font=New-Object Drawing.Font('Leelawadee UI',$size)
+    $tabs.Font=New-Object Drawing.Font('Leelawadee UI',$size)
+    $hc=($form.ClientSize.Width -lt 820)
+    $heading.Font=New-Object Drawing.Font('Leelawadee UI',($size + $(if($hc){2}else{5})),[Drawing.FontStyle]::Bold)
+    $langBadge.Font=New-Object Drawing.Font('Leelawadee UI',$size,[Drawing.FontStyle]::Bold)
+    $shortcuts.Font=New-Object Drawing.Font('Leelawadee UI',[Math]::Max(9,$size - 1))
 }
 $darkToggle.Add_CheckedChanged($applyTheme)
+$contrastToggle.Add_CheckedChanged($applyTheme)
+$fontSizePicker.Add_ValueChanged($applyFont)
 $form.Add_SizeChanged({
-    $compact = $form.ClientSize.Width -lt 820
-    $headerSize = if($compact){14}else{17}
-    $heading.Font = New-Object Drawing.Font('Leelawadee UI',$headerSize,[Drawing.FontStyle]::Bold)
-    $heading.Width = [Math]::Max(360,$form.ClientSize.Width - 120)
-    $tagline.Width = [Math]::Max(360,$form.ClientSize.Width - 120)
-    $shortcutSize = if($compact){9}else{10}
-    $shortcuts.Font = New-Object Drawing.Font('Leelawadee UI',$shortcutSize)
-    $save.Width = if($compact){155}else{175}
+    $compact=$form.ClientSize.Width -lt 820
+    $heading.Width=[Math]::Max(345,$form.ClientSize.Width - 120)
+    $tagline.Width=[Math]::Max(345,$form.ClientSize.Width - 120)
+    $save.Width=if($compact){155}else{175}
+    & $applyFont
 })
 & $applyTheme
+& $applyFont
 
 $save.Add_Click({
     try {
