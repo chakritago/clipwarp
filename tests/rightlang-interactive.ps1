@@ -8,7 +8,7 @@ if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Windows desktop re
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $root = Split-Path $PSScriptRoot -Parent
-$source = [IO.File]::ReadAllText((Join-Path $root 'clipwarp-rightlang.cs'))
+$source = [IO.File]::ReadAllText((Join-Path $root 'clipwarp-rightlang.cs')) + [IO.File]::ReadAllText((Join-Path $root 'clipwarp-editor-bridge.cs'))
 Add-Type -TypeDefinition $source -ReferencedAssemblies @('System','System.Windows.Forms','System.Drawing') -ErrorAction Stop
 
 $form = New-Object Windows.Forms.Form
