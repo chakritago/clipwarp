@@ -37,7 +37,7 @@ namespace ClipwarpRightLang
         private PreviewRequest pending;
         private UndoRequest lastUndo;
         private PreviewBubble bubble;
-        private Timer bubbleTimer;
+        private System.Windows.Forms.Timer bubbleTimer;
         private const int MaxText = 4096;
         private const int MaxToken = 64;
         private sealed class PreviewRequest {
@@ -110,7 +110,7 @@ namespace ClipwarpRightLang
             bubble.ApplyClicked += delegate { ApplyPreview(); };
             bubble.CancelClicked += delegate { CancelPreview(); token = ""; };
             bubble.UndoClicked += delegate { if (lastUndo != null) UndoLast(lastUndo.Window); };
-            bubbleTimer = new Timer();
+            bubbleTimer = new System.Windows.Forms.Timer();
             bubbleTimer.Interval = 250;
             bubbleTimer.Tick += delegate {
                 if (pending != null && DateTime.UtcNow > pending.Until) CancelPreview();
