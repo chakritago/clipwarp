@@ -13,6 +13,7 @@ namespace ClipwarpRightLang
         public string Identity;
         public string SelectedText;
         public int ProcessId;
+        public string StyleFingerprint;
     }
 
     public static class EditorBridge {
@@ -97,21 +98,42 @@ namespace ClipwarpRightLang
                 && value.IndexOf('\0') < 0;
         }
 
-        // Preserve surrounding formatting by replacing only the selection.
-        // A mixed-style Word selection is deliberately rejected; replacement
-        // text may still adopt the editor's insertion style, so UI verification
-        // is required before use with production documents.
-        private static bool HasUniformWordFormatting(object textRange, string processName) {
-            if (!string.Equals(processName, "winword", StringComparison.OrdinalIgnoreCase)) return true;
+        // Inspect formatting BEFORE editing Word; refuse selections whose style
+        // could not be established reliably. This does not promise identical
+        // formatting of inserted text: only the selected range is replaced.
+        // Re-read the fingerprint before insertion to detect style changes.
+        private static readonly string[] WordStyleAttributes = new string[] {
+            "FontNameAttribute", "FontSizeAttribute", "FontWeightAttribute",
+            "IsItalicAttribute", "UnderlineStyleAttribute", "StrikethroughStyleAttribute",
+            "ForegroundColorAttribute", "BackgroundColorAttribute",
+            "IsSuperscriptAttribute", "IsSubscriptAttribute"
+        };
+        public static bool IsWordStyleSafe(bool isWord, bool allAttributesKnown,
+                                           bool mixedFormatting, bool richObject) {
+            return !isWord || (allAttributesKnown && !mixedFormatting && !richObject);
+        }
+        private static bool TryWordStyleFingerprint(object textRange, string processName, out string fingerprint) {
+            fingerprint = null;
+            if (!string.Equals(processName, "winword", StringComparison.OrdinalIgnoreCase))
+                return true;
             try {
                 object mixed = TextType.GetField("MixedAttributeValue").GetValue(null);
-                foreach (string field in new[] { "FontNameAttribute", "FontSizeAttribute",
-                                                   "FontWeightAttribute", "IsItalicAttribute" }) {
-                    object attr = TextType.GetField(field).GetValue(null);
-                    object observed = Call(textRange, "GetAttributeValue", attr);
-                    if (observed == null || Object.ReferenceEquals(observed,mixed)) return false;
+                object notSupported = TextType.GetField("NotSupported").GetValue(null);
+                System.Text.StringBuilder result = new System.Text.StringBuilder();
+                foreach (string field in WordStyleAttributes) {
+                    FieldInfo info = TextType.GetField(field);
+                    if (info == null) return false;
+                    object attr = info.GetValue(null);
+                    object value = Call(textRange, "GetAttributeValue", attr);
+                    if (value == null || Object.ReferenceEquals(value, mixed) ||
+                        Object.ReferenceEquals(value, notSupported)) return false;
+                    result.Append(field).Append('=').Append(value.ToString()).Append(';');
                 }
-                return true;
+                string selectedText = (string)Call(textRange, "GetText", Limit + 1);
+                // Embedded object replacement (U+FFFC) must never be edited.
+                if (string.IsNullOrEmpty(selectedText) || selectedText.IndexOf('\\uFFFC') >= 0) return false;
+                fingerprint = result.ToString();
+                return fingerprint.Length > 0;
             } catch { return false; }
         }
 
@@ -157,11 +179,12 @@ namespace ClipwarpRightLang
                 Array ranges = (Array)Call(pattern, "GetSelection");
                 if (ranges == null || ranges.Length != 1) return false;
                 string value = (string)Call(ranges.GetValue(0), "GetText", Limit + 1);
-                if (!IsSingleLineSelection(value) ||
-                    !HasUniformWordFormatting(ranges.GetValue(0), processName)) return false;
+                if (!IsSingleLineSelection(value)) return false;
+                string styleFingerprint;
+                if (!TryWordStyleFingerprint(ranges.GetValue(0), processName, out styleFingerprint)) return false;
                 uint pid; GetWindowThreadProcessId(window, out pid);
                 snapshot = new EditorSnapshot { ProcessName = processName, ProcessId = (int)pid,
-                    Identity = id, SelectedText = value };
+                    Identity = id, SelectedText = value, StyleFingerprint = styleFingerprint };
                 return true;
             } catch { return false; }
         }
@@ -171,7 +194,8 @@ namespace ClipwarpRightLang
             EditorSnapshot current;
             return TrySelected(window, prior.ProcessName, out current)
                 && prior.ProcessId == current.ProcessId && prior.Identity == current.Identity
-                && string.Equals(prior.SelectedText, current.SelectedText, StringComparison.Ordinal);
+                && string.Equals(prior.SelectedText, current.SelectedText, StringComparison.Ordinal)
+                && string.Equals(prior.StyleFingerprint, current.StyleFingerprint, StringComparison.Ordinal);
         }
 
         // GetSelection returns a degenerate caret range after insertion in compliant
