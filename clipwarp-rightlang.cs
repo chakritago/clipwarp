@@ -10,6 +10,7 @@ namespace ClipwarpRightLang
     using System.Text;
     public sealed class Engine : IDisposable
     {
+        private const int WH_MOUSE_LL = 14, WM_LBUTTONDOWN = 0x0201, WM_RBUTTONDOWN = 0x0204, WM_MBUTTONDOWN = 0x0207;
         private const int WH_KEYBOARD_LL = 13, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
         private const int VK_BACK = 0x08, VK_TAB = 0x09, VK_RETURN = 0x0D, VK_SPACE = 0x20;
         private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12;
@@ -18,7 +19,9 @@ namespace ClipwarpRightLang
         private const uint LLKHF_INJECTED = 0x10;
         private delegate IntPtr KeyboardProc(int code, IntPtr message, IntPtr data);
         private readonly KeyboardProc proc;
+        private readonly KeyboardProc mouseProc;
         private IntPtr hook;
+        private IntPtr mouseHook;
         private IntPtr previousWindow;
         private string token = "";
         private string mode = "manual";
@@ -28,7 +31,7 @@ namespace ClipwarpRightLang
         private HashSet<string> excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public bool Installed { get { return hook != IntPtr.Zero; } }
 
-        public Engine() { proc = OnKeyboard; }
+        public Engine() { proc = OnKeyboard; mouseProc = OnMouse; }
 
         public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
                               IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
@@ -61,14 +64,21 @@ namespace ClipwarpRightLang
         // ordinary words must retain their spelling (including trailing letters).
         public void Start()
         {
-            if (hook == IntPtr.Zero) hook = SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(null), 0);
+            if (hook != IntPtr.Zero) return;
+            // Fail closed if we cannot reset the word buffer after pointer edits.
+            mouseHook = SetWindowsHookEx(WH_MOUSE_LL, mouseProc, GetModuleHandle(null), 0);
+            if (mouseHook == IntPtr.Zero) return;
+            hook = SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(null), 0);
+            if (hook == IntPtr.Zero) { UnhookWindowsHookEx(mouseHook); mouseHook = IntPtr.Zero; }
         }
 
         public void Dispose()
         {
             if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
+            if (mouseHook != IntPtr.Zero) { UnhookWindowsHookEx(mouseHook); mouseHook = IntPtr.Zero; }
             token = "";
             GC.KeepAlive(proc);
+            GC.KeepAlive(mouseProc);
         }
 
         public static string ConvertLayout(string input)
@@ -101,6 +111,17 @@ namespace ClipwarpRightLang
                 result.Append(output[0]);
             }
             return result.ToString();
+        }
+
+        private IntPtr OnMouse(int code, IntPtr message, IntPtr data)
+        {
+            if (code >= 0)
+            {
+                int msg = message.ToInt32();
+                if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN)
+                    token = "";
+            }
+            return CallNextHookEx(mouseHook, code, message, data);
         }
 
         private IntPtr OnKeyboard(int code, IntPtr message, IntPtr data)
