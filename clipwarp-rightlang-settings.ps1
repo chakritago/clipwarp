@@ -92,7 +92,7 @@ $langBadge.TextAlign = 'MiddleCenter'; $langBadge.BorderStyle = 'FixedSingle'
 $themePanel.Controls.Add($langBadge)
 
 $optionsPanel = New-Object Windows.Forms.Panel
-$optionsPanel.Dock = 'Top'; $optionsPanel.Height = 150
+$optionsPanel.Dock = 'Top'; $optionsPanel.Height = 182
 $form.Controls.Add($optionsPanel)
 $modeLabel = New-Label 'รูปแบบการแก้ไข'
 $modeLabel.SetBounds(22,3,170,34)
@@ -113,12 +113,14 @@ $optionsPanel.Controls.Add($shortcuts)
 $bridgeCheck = New-Object Windows.Forms.CheckBox
 $bridgeCheck.Text = 'ทดลองรองรับ Notepad ใหม่ / Word / VS Code (เฉพาะแอปที่อนุญาต)'
 $bridgeCheck.Checked = [bool]$config.editorBridgeEnabled
-$bridgeCheck.SetBounds(22,113,565,32);$optionsPanel.Controls.Add($bridgeCheck)
+$bridgeCheck.SetBounds(22,113,815,32)
+$bridgeCheck.Anchor = 'Top,Left,Right'
+$optionsPanel.Controls.Add($bridgeCheck)
 $learnCheck = New-Object Windows.Forms.CheckBox
 $learnCheck.Text = 'เรียนรู้เมื่อผู้ใช้ยืนยัน'
 $learnCheck.Checked = [bool]$config.learnAccepted
-$learnCheck.SetBounds(605,113,280,32)
-$learnCheck.Anchor = 'Top,Right';$optionsPanel.Controls.Add($learnCheck)
+$learnCheck.SetBounds(22,146,410,32)
+$learnCheck.Anchor = 'Top,Left';$optionsPanel.Controls.Add($learnCheck)
 
 $footer = New-Object Windows.Forms.Panel
 $footer.Dock = 'Bottom'; $footer.Height = 85
@@ -240,6 +242,9 @@ $applyTheme = {
     $header.BackColor=if($darkToggle.Checked){[Drawing.Color]::FromArgb(22,42,70)}else{[Drawing.Color]::FromArgb(226,239,255)}
     $save.BackColor=if($darkToggle.Checked){[Drawing.Color]::FromArgb(52,117,213)}else{[Drawing.Color]::FromArgb(25,92,189)}
     $save.ForeColor=[Drawing.Color]::White
+    $heading.BackColor=$header.BackColor
+    $tagline.BackColor=$header.BackColor
+    $icon.BackColor=$header.BackColor
     $langBadge.BackColor=if($darkToggle.Checked){[Drawing.Color]::FromArgb(52,62,81)}else{[Drawing.Color]::White}
     $after.BackColor=if($darkToggle.Checked){[Drawing.Color]::FromArgb(42,60,75)}else{[Drawing.Color]::FromArgb(238,246,255)}
 }
