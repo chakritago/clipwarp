@@ -40,7 +40,7 @@ Assert-Release ($settings.Contains('คำที่เรียนรู้') -a
     $settings.Contains('Dark Mode') -and
     $settings.Contains('Set-Colors') -and
     $settings.Contains('$form.Add_SizeChanged') -and
-    $settings.Contains('Before')) 'premium UI exposes theme, responsive layout and dictionary controls'
+    $settings.Contains('ก่อนแก้ไข')) 'premium UI exposes theme, responsive layout and dictionary controls'
 Assert-Release ($installer.Contains('clipwarp-editor-bridge.cs') -and
     $uninstall.Contains('clipwarp-editor-bridge.cs')) 'installation and removal remain symmetrical'
 Assert-Release ($interactive.Contains('[switch]$EditorBridge') -and
