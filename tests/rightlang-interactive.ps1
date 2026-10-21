@@ -1,4 +1,4 @@
-# Real, opt-in Windows desktop integration check.
+﻿# Real, opt-in Windows desktop integration check.
 # Run interactively in a non-elevated PowerShell 5.1 window:
 #   powershell.exe -NoProfile -Sta -ExecutionPolicy Bypass -File .\tests\rightlang-interactive.ps1
 # Requires a visible desktop; never runs in unattended CI or changes user clipboard.
