@@ -1,6 +1,6 @@
 ﻿# ClipWarp Settings 2.0: localized, responsive Windows Forms, no clipboard access.
 [CmdletBinding()]
-param()
+param([switch]$SelfTest)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -285,4 +285,24 @@ $form.Add_FormClosed({
     $languageTimer.Stop();$languageTimer.Dispose()
     if($icon.Image){$icon.Image.Dispose()}
 })
+if($SelfTest){
+    try {
+        if($tabs.TabPages.Count -ne 5){throw "Expected five settings tabs"}
+        if($mode.Items.Count -ne 3){throw "Expected three correction modes"}
+        $darkToggle.Checked = $true
+        if($form.BackColor.R -ne 28){throw "Dark theme did not apply"}
+        $darkToggle.Checked = $false
+        if($form.BackColor.R -ne 249){throw "Light theme did not apply"}
+        $before.Text = 'l;ylfu'
+        if($after.Text -ne 'สวัสดี'){throw "Before/after preview was not rendered"}
+        if(-not $bridgeCheck -or -not $learnCheck){throw "Missing opt-in controls"}
+        Write-Host 'PASS: Thai Settings 2.0 structure, theme switching, local before/after and opt-ins'
+    } finally {
+        $languageTimer.Stop()
+        $languageTimer.Dispose()
+        if($icon.Image){$icon.Image.Dispose()}
+        $form.Dispose()
+    }
+    return
+}
 try{[void]$form.ShowDialog()}finally{$form.Dispose()}
