@@ -41,19 +41,7 @@ if ([ClipwarpRightLang.Engine]::IsUndoCandidate('beforeสวัสดี',11,11
 if ([ClipwarpRightLang.Engine]::IsUndoCandidate('beforeสวัสดี',6,12,'สวัสดี')) { throw 'active selection must block undo' }
 if ([ClipwarpRightLang.Engine]::IsUndoCandidate('beforeสวัสดี',12,12,'ขอบคุณ')) { throw 'changed text must block undo' }
 Write-Host 'PASS: RightLang correction and undo safety policy'
-$allowedApps = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-[void]$allowedApps.Add('notepad')
-[void]$allowedApps.Add('powershell')
-$blockedApps = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-[void]$blockedApps.Add('powershell')
-Assert-True ([ClipwarpRightLang.Engine]::IsApplicationEligible('NOTEPAD',$allowedApps,$blockedApps)) 'notepad is explicitly allowed'
-Assert-True (-not [ClipwarpRightLang.Engine]::IsApplicationEligible('chrome',$allowedApps,$blockedApps)) 'browser is denied by default'
-Assert-True (-not [ClipwarpRightLang.Engine]::IsApplicationEligible('powershell',$allowedApps,$blockedApps)) 'blocklist overrides allowlist'
-Assert-True ([ClipwarpRightLang.Engine]::IsSupportedEditorClass('Edit')) 'native Edit control allowed'
-Assert-True ([ClipwarpRightLang.Engine]::IsSupportedEditorClass('WindowsForms10.EDIT.app.0.1')) 'WinForms Edit control allowed'
-Assert-True (-not [ClipwarpRightLang.Engine]::IsSupportedEditorClass('Chrome_RenderWidgetHostHWND')) 'browser editor rejected'
-Assert-True (-not [ClipwarpRightLang.Engine]::IsSupportedEditorClass('RichEditD2DPT')) 'unverified modern editors rejected'
-Write-Host 'PASS: RightLang compatibility allowlist policy'
+
 
 
 
@@ -71,6 +59,19 @@ function Assert-True([bool]$Value, [string]$Name) {
     if (-not $Value) { throw $Name }
     Write-Host "PASS: $Name"
 }
+$allowedApps = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+[void]$allowedApps.Add('notepad')
+[void]$allowedApps.Add('powershell')
+$blockedApps = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+[void]$blockedApps.Add('powershell')
+Assert-True ([ClipwarpRightLang.Engine]::IsApplicationEligible('NOTEPAD',$allowedApps,$blockedApps)) 'notepad is explicitly allowed'
+Assert-True (-not [ClipwarpRightLang.Engine]::IsApplicationEligible('chrome',$allowedApps,$blockedApps)) 'browser is denied by default'
+Assert-True (-not [ClipwarpRightLang.Engine]::IsApplicationEligible('powershell',$allowedApps,$blockedApps)) 'blocklist overrides allowlist'
+Assert-True ([ClipwarpRightLang.Engine]::IsSupportedEditorClass('Edit')) 'native Edit control allowed'
+Assert-True ([ClipwarpRightLang.Engine]::IsSupportedEditorClass('WindowsForms10.EDIT.app.0.1')) 'WinForms Edit control allowed'
+Assert-True (-not [ClipwarpRightLang.Engine]::IsSupportedEditorClass('Chrome_RenderWidgetHostHWND')) 'browser editor rejected'
+Assert-True (-not [ClipwarpRightLang.Engine]::IsSupportedEditorClass('RichEditD2DPT')) 'unverified modern editors rejected'
+Write-Host 'PASS: RightLang compatibility allowlist policy'
 $t = New-Object ClipwarpWatch.OverlayTargetTracker
 $now = [datetime]'2026-09-08T12:00:00Z'
 $t.OnForegroundChanged('pwsh','Terminal','ConsoleWindowClass',$now)
