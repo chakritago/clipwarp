@@ -20,7 +20,7 @@ try {
 
 $form = New-Object Windows.Forms.Form
 $form.Text = 'ClipWarp — ตั้งค่าแก้ข้อความผิดภาษา'
-$form.MinimumSize = New-Object Drawing.Size(720,600)
+$form.MinimumSize = New-Object Drawing.Size(700,620)
 $form.Size = New-Object Drawing.Size(930,730)
 $form.StartPosition = 'CenterScreen'
 $form.AutoScaleMode = 'Dpi'
@@ -68,6 +68,7 @@ $header.Controls.Add($icon)
 $heading = New-Label 'ClipWarp · แก้ข้อความผิดภาษา'
 $heading.SetBounds(77,13,610,42)
 $heading.Font = New-Object Drawing.Font('Leelawadee UI',17,[Drawing.FontStyle]::Bold)
+$header.Tag = 'premium-header'
 $heading.Anchor = 'Top,Left,Right'
 $header.Controls.Add($heading)
 $tagline = New-Label 'ไทยเกษมณี ↔ อังกฤษ · ประมวลผลในเครื่อง · ยกเลิกได้'
@@ -77,6 +78,7 @@ $header.Controls.Add($tagline)
 
 $themePanel = New-Object Windows.Forms.Panel
 $themePanel.Dock = 'Top'; $themePanel.Height = 65
+$themePanel.BorderStyle = 'FixedSingle'
 $form.Controls.Add($themePanel)
 $themeLabel = New-Label 'โหมดสี'
 $themeLabel.SetBounds(22,6,75,46);$themePanel.Controls.Add($themeLabel)
@@ -89,10 +91,12 @@ $langBadge = New-Label 'กำลังตรวจสอบภาษา…'
 $langBadge.SetBounds(625,12,270,38)
 $langBadge.Anchor = 'Top,Right'
 $langBadge.TextAlign = 'MiddleCenter'; $langBadge.BorderStyle = 'FixedSingle'
+$langBadge.Font = New-Object Drawing.Font('Leelawadee UI',10,[Drawing.FontStyle]::Bold)
 $themePanel.Controls.Add($langBadge)
 
 $optionsPanel = New-Object Windows.Forms.Panel
-$optionsPanel.Dock = 'Top'; $optionsPanel.Height = 182
+$optionsPanel.Dock = 'Top'; $optionsPanel.Height = 246
+$optionsPanel.BorderStyle = 'FixedSingle'
 $form.Controls.Add($optionsPanel)
 $modeLabel = New-Label 'รูปแบบการแก้ไข'
 $modeLabel.SetBounds(22,3,170,34)
@@ -121,6 +125,18 @@ $learnCheck.Text = 'เรียนรู้เมื่อผู้ใช้ย
 $learnCheck.Checked = [bool]$config.learnAccepted
 $learnCheck.SetBounds(22,146,410,32)
 $learnCheck.Anchor = 'Top,Left';$optionsPanel.Controls.Add($learnCheck)
+$hintCheck = New-Object Windows.Forms.CheckBox
+$hintCheck.Text = 'แนะนำคำเมื่อหยุดพิมพ์ (ไม่แทรกคำอัตโนมัติ)'
+$hintCheck.Checked = [bool]$config.smartSuggestions
+$hintCheck.SetBounds(22,178,585,30)
+$hintCheck.Anchor = 'Top,Left,Right'
+$optionsPanel.Controls.Add($hintCheck)
+$historyCheck = New-Object Windows.Forms.CheckBox
+$historyCheck.Text = 'เก็บประวัติ Undo ในหน่วยความจำเท่านั้น (ไม่บันทึกลงดิสก์)'
+$historyCheck.Checked = [bool]$config.undoHistory
+$historyCheck.SetBounds(22,208,825,30)
+$historyCheck.Anchor = 'Top,Left,Right'
+$optionsPanel.Controls.Add($historyCheck)
 
 $footer = New-Object Windows.Forms.Panel
 $footer.Dock = 'Bottom'; $footer.Height = 85
@@ -144,6 +160,7 @@ $footer.Controls.Add($note)
 
 $tabs = New-Object Windows.Forms.TabControl
 $tabs.Dock = 'Fill'
+$tabs.Font = New-Object Drawing.Font('Leelawadee UI',10)
 $form.Controls.Add($tabs)
 $tabs.BringToFront()
 
@@ -179,6 +196,51 @@ $help=New-Label 'ระบบจะไม่คัดลอกหรือส่
 $help.Dock='Fill';$previewLayout.Controls.Add($help,0,2)
 $previewPage.Controls.Add($previewLayout)
 [void]$tabs.TabPages.Add($previewPage)
+
+# Learned words can be removed without deleting user-authored instant rules.
+$learnedPage = New-Object Windows.Forms.TabPage
+$learnedPage.Text = 'คำที่เรียนรู้'
+$learnedPage.Padding = New-Object Windows.Forms.Padding(14)
+$learnedLayout = New-Object Windows.Forms.TableLayoutPanel
+$learnedLayout.Dock = 'Fill'; $learnedLayout.RowCount = 3; $learnedLayout.ColumnCount = 1
+[void]$learnedLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',48)))
+[void]$learnedLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
+[void]$learnedLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',54)))
+$learnedInfo = New-Label 'รายการที่จดจำหลังคุณยืนยัน · เลือกลบได้โดยไม่กระทบคำที่เพิ่มเอง'
+$learnedInfo.Dock = 'Fill'
+$learnedLayout.Controls.Add($learnedInfo,0,0)
+$learnedList = New-Object Windows.Forms.ListBox
+$learnedList.Dock = 'Fill'
+$learnedLayout.Controls.Add($learnedList,0,1)
+$learnedActions = New-Object Windows.Forms.FlowLayoutPanel
+$learnedActions.Dock = 'Fill'
+$removeLearned = New-Object Windows.Forms.Button
+$removeLearned.Text = 'ลบคำที่เลือก';$removeLearned.Width=155;$removeLearned.Height=36
+$clearLearned = New-Object Windows.Forms.Button
+$clearLearned.Text = 'ลบทั้งหมด';$clearLearned.Width=155;$clearLearned.Height=36
+[void]$learnedActions.Controls.Add($removeLearned)
+[void]$learnedActions.Controls.Add($clearLearned)
+$learnedLayout.Controls.Add($learnedActions,0,2)
+$learnedPage.Controls.Add($learnedLayout)
+[void]$tabs.TabPages.Add($learnedPage)
+$removedLearned = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+$learnedOriginal = @($config.learnedKeys)
+foreach($key in $learnedOriginal){
+    if($config.instant.Contains($key)){
+        [void]$learnedList.Items.Add([string]$key)
+    }
+}
+$removeLearned.Add_Click({
+    if($learnedList.SelectedItem){
+        $key=[string]$learnedList.SelectedItem
+        [void]$removedLearned.Add($key)
+        $learnedList.Items.Remove($key)
+    }
+})
+$clearLearned.Add_Click({
+    foreach($key in @($learnedList.Items)) { [void]$removedLearned.Add([string]$key) }
+    $learnedList.Items.Clear()
+})
 
 $refresh = {
     $inputText=$before.Text
@@ -249,6 +311,14 @@ $applyTheme = {
     $after.BackColor=if($darkToggle.Checked){[Drawing.Color]::FromArgb(42,60,75)}else{[Drawing.Color]::FromArgb(238,246,255)}
 }
 $darkToggle.Add_CheckedChanged($applyTheme)
+$form.Add_SizeChanged({
+    $compact = $form.ClientSize.Width -lt 820
+    $heading.Font = New-Object Drawing.Font('Leelawadee UI',(if($compact){14}else{17}),[Drawing.FontStyle]::Bold)
+    $heading.Width = [Math]::Max(360,$form.ClientSize.Width - 120)
+    $tagline.Width = [Math]::Max(360,$form.ClientSize.Width - 120)
+    $shortcuts.Font = New-Object Drawing.Font('Leelawadee UI',(if($compact){9}else{10}))
+    $save.Width = if($compact){155}else{175}
+})
 & $applyTheme
 
 $save.Add_Click({
@@ -262,7 +332,11 @@ $save.Add_Click({
             if($parts.Count -ne 2 -or -not $parts[0].Trim() -or -not $parts[1].Trim()){throw "กฎคำผิดรูปแบบ: $line"}
             $rules[$parts[0].Trim()]=$parts[1].Trim()
         }
+        foreach($key in $removedLearned){[void]$rules.Remove([string]$key)}
         $settings.instant=$rules
+        $settings.learnedKeys=@($learnedOriginal | Where-Object { -not $removedLearned.Contains([string]$_) })
+        $settings.smartSuggestions=[bool]$hintCheck.Checked
+        $settings.undoHistory=[bool]$historyCheck.Checked
         $settings.words=@($wordPage.Editor.Text -split '\r?\n' | ForEach-Object {$_.Trim()} | Where-Object {$_} | Select-Object -Unique)
         $settings.allowedApps=@($allowPage.Editor.Text -split '\r?\n' | ForEach-Object {$_.Trim()} | Where-Object {$_} | Select-Object -Unique)
         $settings.blockedApps=@($blockPage.Editor.Text -split '\r?\n' | ForEach-Object {$_.Trim()} | Where-Object {$_} | Select-Object -Unique)
@@ -292,7 +366,7 @@ $form.Add_FormClosed({
 })
 if($SelfTest){
     try {
-        if($tabs.TabPages.Count -ne 5){throw "Expected five settings tabs"}
+        if($tabs.TabPages.Count -ne 6){throw "Expected six settings tabs"}
         if($mode.Items.Count -ne 3){throw "Expected three correction modes"}
         $darkToggle.Checked = $true
         if($form.BackColor.R -ne 28){throw "Dark theme did not apply"}
@@ -300,7 +374,9 @@ if($SelfTest){
         if($form.BackColor.R -ne 249){throw "Light theme did not apply"}
         $before.Text = 'l;ylfu'
         if($after.Text -ne 'สวัสดี'){throw "Before/after preview was not rendered"}
-        if(-not $bridgeCheck -or -not $learnCheck){throw "Missing opt-in controls"}
+        if(-not $bridgeCheck -or -not $learnCheck -or -not $hintCheck -or -not $historyCheck){throw "Missing opt-in controls"}
+        if($optionsPanel.Height -lt 230){throw "Missing responsive options area"}
+        if($learnedPage.Text -ne 'คำที่เรียนรู้'){throw "Missing learned-word management"}
         Write-Host 'PASS: Thai Settings 2.0 structure, theme switching, local before/after and opt-ins'
     } finally {
         $languageTimer.Stop()
