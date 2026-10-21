@@ -35,8 +35,52 @@ function New-TextEditor($parent, $text, $left, $top, $width, $height) {
     $parent.Controls.Add($editor)
     $editor
 }
-$form.Controls.Add((New-Label 'Language correction' 22 18 700 37 19 $true))
-$form.Controls.Add((New-Label 'Fix text typed using the wrong Thai / English keyboard layout.' 23 57 720 25 10 $false))
+
+$headerPanel = New-Object Windows.Forms.Panel
+$headerPanel.Location = New-Object Drawing.Point(0,0)
+$headerPanel.Size = New-Object Drawing.Size(765,87)
+$headerPanel.Anchor = 'Top,Left,Right'
+$headerPanel.BackColor = [Drawing.Color]::FromArgb(228,239,254)
+$form.Controls.Add($headerPanel)
+$headerIcon = New-Object Windows.Forms.PictureBox
+$headerIcon.Location = New-Object Drawing.Point(22,19)
+$headerIcon.Size = New-Object Drawing.Size(42,42)
+$headerIcon.SizeMode = 'Zoom'
+$headerIcon.Image = [Drawing.SystemIcons]::Information.ToBitmap()
+$headerPanel.Controls.Add($headerIcon)
+$headerPanel.Controls.Add((New-Label 'Language correction' 81 16 470 38 19 $true))
+$headerPanel.Controls.Add((New-Label 'English ↔ Thai Kedmanee · Offline keyboard helper' 82 53 475 22 10 $false))
+$languageBadge = New-Label 'Keyboard: detecting…' 558 29 190 34 10 $true
+$languageBadge.TextAlign = 'MiddleCenter'
+$languageBadge.BackColor = [Drawing.Color]::White
+$languageBadge.ForeColor = [Drawing.Color]::FromArgb(25,91,186)
+$languageBadge.BorderStyle = 'FixedSingle'
+$languageBadge.Anchor = 'Top,Right'
+$headerPanel.Controls.Add($languageBadge)
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ClipwarpRightLangKeyboardProbe {
+    [DllImport("user32.dll")] public static extern IntPtr GetKeyboardLayout(uint threadId);
+}
+'@ -ErrorAction Stop
+} catch { }
+$languageTimer = New-Object Windows.Forms.Timer
+$languageTimer.Interval = 400
+$languageTimer.Add_Tick({
+    try {
+        $current = [ClipwarpRightLangKeyboardProbe]::GetKeyboardLayout(0).ToInt64() -band 0xFFFF
+        $languageBadge.Text = switch ($current) {
+            0x41e { 'TH · ภาษาไทย'; break }
+            0x409 { 'EN · English'; break }
+            default { 'Keyboard: 0x{0:X4}' -f $current }
+        }
+    } catch { $languageBadge.Text = 'Language unavailable' }
+})
+$languageTimer.Start()
+$form.Add_FormClosed({ $languageTimer.Stop(); $languageTimer.Dispose(); $headerIcon.Image.Dispose() })
+
 $form.Controls.Add((New-Label 'Correction mode' 23 99 170 25 11 $true))
 $modePicker = New-Object Windows.Forms.ComboBox
 $modePicker.DropDownStyle = 'DropDownList'
@@ -48,10 +92,20 @@ $modePicker.Location = New-Object Drawing.Point(23,128)
 $modePicker.Size = New-Object Drawing.Size(350,32)
 $form.Controls.Add($modePicker)
 $form.Controls.Add((New-Label 'Shortcut: Shift + Backspace or Ctrl + Alt + R (last typed word).' 392 128 360 46 9 $false))
+$previewEngineAvailable = $false
+try {
+    if (-not ('ClipwarpRightLang.Engine' -as [type])) {
+        $engineSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs'))
+        Add-Type -TypeDefinition $engineSource -ReferencedAssemblies @('System','System.Windows.Forms','System.Drawing') -ErrorAction Stop
+    }
+    $previewEngineAvailable = $true
+} catch { $previewEngineAvailable = $false }
+
 $tabs = New-Object Windows.Forms.TabControl
 $tabs.Location = New-Object Drawing.Point(23,185)
 $tabs.Size = New-Object Drawing.Size(715,350)
 $tabs.Anchor = 'Top,Bottom,Left,Right'
+$tabs.Appearance = 'Normal'
 $form.Controls.Add($tabs)
 
 $instantTab = New-Object Windows.Forms.TabPage('Instant corrections')
@@ -75,6 +129,44 @@ $allowBox = New-TextEditor $appsTab ($cfg.allowedApps -join [Environment]::NewLi
 $appsTab.Controls.Add((New-Label 'Blocked applications (always ignored)' 15 180 660 23 10 $true))
 $blockBox = New-TextEditor $appsTab ($cfg.blockedApps -join [Environment]::NewLine) 15 211 675 99
 
+$previewTab = New-Object Windows.Forms.TabPage('Try correction')
+[void]$tabs.TabPages.Add($previewTab)
+$previewTab.Controls.Add((New-Label 'Type a sample to preview its conversion' 15 15 650 26 11 $true))
+$previewTab.Controls.Add((New-Label 'No changes are made to other apps. This preview never uses the clipboard.' 15 43 665 28 9 $false))
+$sampleBox = New-Object Windows.Forms.TextBox
+$sampleBox.Location = New-Object Drawing.Point(16,88)
+$sampleBox.Size = New-Object Drawing.Size(645,31)
+$sampleBox.Anchor = 'Top,Left,Right'
+$sampleBox.Text = 'l;ylfu'
+$previewTab.Controls.Add($sampleBox)
+$previewResult = New-Label ' ' 17 148 630 75 13 $true
+$previewResult.ForeColor = [Drawing.Color]::FromArgb(30,95,175)
+$previewResult.Anchor = 'Top,Left,Right'
+$previewTab.Controls.Add($previewResult)
+$previewCancel = New-Object Windows.Forms.Button
+$previewCancel.Text = 'Cancel preview'
+$previewCancel.Location = New-Object Drawing.Point(16,245)
+$previewCancel.Size = New-Object Drawing.Size(165,35)
+$previewCancel.BackColor = [Drawing.Color]::FromArgb(239,242,247)
+$previewCancel.FlatStyle = 'Flat'
+$previewTab.Controls.Add($previewCancel)
+$refreshPreview = {
+    $sample = $sampleBox.Text
+    if (-not $sample) { $previewResult.Text = 'Enter text to preview'; return }
+    if ($sample.Length -gt 64) { $previewResult.Text = 'Maximum 64 characters'; return }
+    $rule = $null
+    if ($cfg.instant.Contains($sample)) { $rule = [string]$cfg.instant[$sample] }
+    if (-not $rule -and $previewEngineAvailable) {
+        try { $rule = [ClipwarpRightLang.Engine]::ConvertLayout($sample) } catch { }
+    }
+    $previewResult.Text = if ($rule -and $rule -ne $sample) { "$sample    →    $rule" }
+        else { 'No eligible correction for this sample' }
+}
+$sampleBox.Add_TextChanged($refreshPreview)
+$previewCancel.Add_Click({ $sampleBox.Clear(); $previewResult.Text = 'Preview cancelled — no text was changed' })
+& $refreshPreview
+
+
 $autostartBox = New-Object Windows.Forms.CheckBox
 $autostartBox.Text = 'Start ClipWarp and language correction when signing in to Windows'
 $autostartBox.Location = New-Object Drawing.Point(23,550)
@@ -84,15 +176,25 @@ try { $autostartBox.Checked = [bool](Get-ClipwarpAutostartEnabled) } catch {}
 $form.Controls.Add($autostartBox)
 
 $saveButton = New-Object Windows.Forms.Button
-$saveButton.Text = 'Save settings'
+$saveButton.Text = 'Save changes'
 $saveButton.Size = New-Object Drawing.Size(140,35)
 $saveButton.Location = New-Object Drawing.Point(598,545)
 $saveButton.Anchor = 'Right,Bottom'
-$saveButton.BackColor = [Drawing.Color]::FromArgb(45,110,221)
+$saveButton.BackColor = [Drawing.Color]::FromArgb(30,95,190)
 $saveButton.ForeColor = [Drawing.Color]::White
 $saveButton.FlatStyle = 'Flat'
 $saveButton.FlatAppearance.BorderSize = 0
 $form.Controls.Add($saveButton)
+$form.AcceptButton = $saveButton
+$form.KeyPreview = $true
+$form.Add_KeyDown({
+    param($sender,$e)
+    if ($tabs.SelectedTab -eq $previewTab -and $e.KeyCode -eq [Windows.Forms.Keys]::Escape) {
+        $sampleBox.Clear()
+        $previewResult.Text = 'Preview cancelled — no text was changed'
+        $e.Handled = $true
+    }
+})
 $saveButton.Add_Click({
     try {
         $now = Get-ClipwarpRightLangConfig
