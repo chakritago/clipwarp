@@ -1731,7 +1731,8 @@ $rightlangReload = {
         $effectiveMode = if (Get-ClipwarpPaused) { 'off' } else { [string]$cfg.mode }
         $rightlang.Configure($effectiveMode, $rules,
             [string[]]@($cfg.words), [string[]]@($cfg.allowedApps), [string[]]@($cfg.blockedApps),
-            [bool]$cfg.editorBridgeEnabled, [bool]$cfg.learnAccepted)
+            [bool]$cfg.editorBridgeEnabled, [bool]$cfg.learnAccepted,
+            [bool]$cfg.smartSuggestions, [bool]$cfg.undoHistory)
     } catch {
         # No fallback to arbitrary global correction on invalid config.
         $rightlang.Configure('off', $null, $null, $null, $null)
@@ -1879,6 +1880,31 @@ Start-Sleep -Milliseconds 250
     [void]$langMenu.DropDownItems.Add($langOff)
     [void]$langMenu.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator))
     [void]$langMenu.DropDownItems.Add($langSettings)
+    $recentMenu = New-Object System.Windows.Forms.ToolStripMenuItem("ประวัติการแก้ไข (เฉพาะในหน่วยความจำ)")
+    $recentMenu.add_DropDownOpening({
+        $recentMenu.DropDownItems.Clear()
+        try {
+            $recent = @($rightlang.RecentCorrections)
+            if ($recent.Count -eq 0) {
+                $none = New-Object System.Windows.Forms.ToolStripMenuItem('ไม่มีประวัติหรือยังไม่เปิดใช้')
+                $none.Enabled = $false
+                [void]$recentMenu.DropDownItems.Add($none)
+            } else {
+                foreach ($entry in $recent) {
+                    $short = [string]$entry
+                    if ($short.Length -gt 55) { $short = $short.Substring(0,55) + '…' }
+                    $item = New-Object System.Windows.Forms.ToolStripMenuItem($short)
+                    $item.Enabled = $false
+                    [void]$recentMenu.DropDownItems.Add($item)
+                }
+                [void]$recentMenu.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+                $clearRecent = New-Object System.Windows.Forms.ToolStripMenuItem('ล้างประวัติ')
+                $clearRecent.add_Click({ $rightlang.ClearRecentCorrections() })
+                [void]$recentMenu.DropDownItems.Add($clearRecent)
+            }
+        } catch {}
+    })
+    [void]$langMenu.DropDownItems.Add($recentMenu)
     [void]$contextMenu.Items.Add($langMenu)
 
     $versionItem = New-Object System.Windows.Forms.ToolStripMenuItem("Version")
