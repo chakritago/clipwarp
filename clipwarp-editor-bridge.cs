@@ -118,7 +118,9 @@ namespace ClipwarpRightLang
                 return true;
             try {
                 object mixed = TextType.GetField("MixedAttributeValue").GetValue(null);
-                object notSupported = TextType.GetField("NotSupported").GetValue(null);
+                // UI Automation's sentinel lives on AutomationElement, not TextPattern.
+                FieldInfo nsField = ElementType.GetField("NotSupported", BindingFlags.Static | BindingFlags.Public);
+                object notSupported = nsField != null ? nsField.GetValue(null) : null;
                 System.Text.StringBuilder result = new System.Text.StringBuilder();
                 foreach (string field in WordStyleAttributes) {
                     FieldInfo info = TextType.GetField(field);
@@ -131,7 +133,7 @@ namespace ClipwarpRightLang
                 }
                 string selectedText = (string)Call(textRange, "GetText", Limit + 1);
                 // Embedded object replacement (U+FFFC) must never be edited.
-                if (string.IsNullOrEmpty(selectedText) || selectedText.IndexOf('\\uFFFC') >= 0) return false;
+                if (string.IsNullOrEmpty(selectedText) || selectedText.IndexOf('\uFFFC') >= 0) return false;
                 fingerprint = result.ToString();
                 return fingerprint.Length > 0;
             } catch { return false; }
