@@ -6,7 +6,7 @@ function Get-ClipwarpRightLangDefaults {
         mode = 'manual'
         instant = [ordered]@{ 'l;ylfu' = 'สวัสดี'; '-v[86I' = 'ขอบคุณ'; '้ำสสน' = 'hello' }
         words = @('สวัสดี', 'ขอบคุณ', 'ครับ', 'ค่ะ', 'วันนี้', 'ไปมา', 'hello', 'twitter', 'correct')
-        allowedApps = @('notepad', 'winword')
+        allowedApps = @('notepad')
         blockedApps = @('keepass', 'keepassxc', 'bitwarden', '1password', 'lastpass', 'putty',
             'windowsterminal', 'powershell', 'pwsh', 'cmd', 'conhost')
     }
