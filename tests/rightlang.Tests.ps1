@@ -16,6 +16,11 @@ try {
     Assert-Equal $false $default.editorBridgeEnabled 'experimental editors default to off'
     Assert-Equal $false $default.learnAccepted 'learning disabled until explicitly enabled'
     Assert-Equal $false $default.darkMode 'light mode remains default'
+    Assert-Equal $false $default.highContrast 'High Contrast disabled by default'
+    Assert-Equal 11 $default.uiFontSize 'accessibility font default 11'
+    Assert-Equal 650 $default.suggestionDelayMs 'hint delay default 650ms'
+    Assert-Equal 5000 $default.suggestionCooldownMs 'hint cooldown default 5 seconds'
+    Assert-Equal 200 $default.learningLimit 'learned words capped by default'
     Assert-Equal $false $default.smartSuggestions 'passive suggestions disabled until enabled'
     Assert-Equal $false $default.undoHistory 'undo history is opt-in and memory-only'
     Assert-Equal $true ($default.allowedApps -contains 'notepad') 'allowed apps are explicitly scoped'
@@ -39,6 +44,12 @@ try {
     $optIn = Get-ClipwarpRightLangConfig -ConfigPath $path
     $optIn.editorBridgeEnabled = $true
     $optIn.darkMode = $true
+    $optIn.highContrast = $true
+    $optIn.uiFontSize = 16
+    $optIn.suggestionDelayMs = 1200
+    $optIn.suggestionCooldownMs = 15000
+    $optIn.learningLimit = 10
+    $optIn.ignoredSuggestions = @('repeatme')
     $optIn.learnAccepted = $true
     $optIn.smartSuggestions = $true
     $optIn.undoHistory = $true
@@ -46,6 +57,13 @@ try {
     $opts = Get-ClipwarpRightLangConfig -ConfigPath $path
     Assert-Equal $true $opts.editorBridgeEnabled 'explicit UI Automation opt-in persisted'
     Assert-Equal $true $opts.darkMode 'Dark Mode setting persisted'
+    Assert-Equal $true $opts.highContrast 'High Contrast setting persisted'
+    Assert-Equal 16 $opts.uiFontSize 'Large font setting persisted'
+    Assert-Equal 1200 $opts.suggestionDelayMs 'suggestion idle delay persisted'
+    Assert-Equal 15000 $opts.suggestionCooldownMs 'repeated suggestion cooldown persisted'
+    Assert-Equal 10 $opts.learningLimit 'learning cap persisted'
+    Assert-Equal $true ($opts.ignoredSuggestions -contains 'repeatme') 'ignored suggestion persisted'
+    Assert-Equal $false (Add-ClipwarpRightLangLearnedWord -Typed 'repeatme' -Corrected 'ไม่บันทึก' -ConfigPath $path) 'ignored words never learned'
     Assert-Equal $true $opts.learnAccepted 'learning opt-in persisted'
     Assert-Equal $true $opts.smartSuggestions 'passive suggestions opt-in persisted'
     Assert-Equal $true $opts.undoHistory 'memory-only history preference persisted'
@@ -56,6 +74,9 @@ try {
     Assert-Equal $false ($learned.learnedKeys -contains 'example') 'explicit instant rule not marked as learned'
     Assert-Equal $true (Remove-ClipwarpRightLangLearnedWord -Typed 'misspelling' -ConfigPath $path) 'individual learned word can be removed'
     Assert-Equal $false ((Get-ClipwarpRightLangConfig -ConfigPath $path).instant.Contains('misspelling')) 'deleted learned correction no longer active'
+    Assert-Equal $true (Add-ClipwarpRightLangLearnedWord -Typed 'example' -Corrected 'ตัวอย่าง' -ConfigPath $path) 'same explicit mapping accepted without changing provenance'
+    Assert-Equal $false (Add-ClipwarpRightLangLearnedWord -Typed 'example' -Corrected 'ไม่ควรแทนที่' -ConfigPath $path) 'learned correction cannot overwrite explicit rule'
+    Assert-Equal 'ตัวอย่าง' (Get-ClipwarpRightLangConfig -ConfigPath $path).instant['example'] 'user-authored instant rule remains unchanged'
     Assert-Equal $true ((Get-ClipwarpRightLangConfig -ConfigPath $path).instant.Contains('example')) 'explicit correction survives learned deletion'
     Assert-Equal $true (Add-ClipwarpRightLangLearnedWord -Typed 'again' -Corrected 'อีกครั้ง' -ConfigPath $path) 'learn again'
     Assert-Equal 1 (Clear-ClipwarpRightLangLearnedWords -ConfigPath $path) 'clear learned entries reports count'
