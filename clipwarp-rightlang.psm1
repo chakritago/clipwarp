@@ -50,7 +50,7 @@ function Save-ClipwarpRightLangConfig {
         foreach ($name in $Settings.instant.Keys) {
             $value = [string]$Settings.instant[$name]
             if ([string]::IsNullOrWhiteSpace([string]$name) -or [string]::IsNullOrWhiteSpace($value)) { continue }
-            if ([string]$name.Length -gt 64 -or $value.Length -gt 128) { throw 'Correction rule too long.' }
+            if (([string]$name).Length -gt 64 -or $value.Length -gt 128) { throw 'Correction rule too long.' }
             $rules[[string]$name] = $value
             if ($rules.Count -gt 1000) { throw 'Too many correction rules.' }
         }
