@@ -14,12 +14,12 @@ $process.StartInfo.CreateNoWindow=$true
 $process.StartInfo.RedirectStandardOutput=$true
 $process.StartInfo.RedirectStandardError=$true
 [void]$process.Start()
-$output=$process.StandardOutput.ReadToEnd()
-$errors=$process.StandardError.ReadToEnd()
 if(-not $process.WaitForExit(15000)) {
     try{$process.Kill()}catch{}
     throw 'Settings UI smoke test exceeded 15s timeout'
 }
+$output=$process.StandardOutput.ReadToEnd()
+$errors=$process.StandardError.ReadToEnd()
 if($process.ExitCode -ne 0 -or $output -notmatch 'PASS: Thai Settings 2.0') {
     throw "Settings GUI smoke test failed: code=$($process.ExitCode) stdout=$output stderr=$errors"
 }
