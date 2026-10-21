@@ -13,6 +13,9 @@ $path = Join-Path $temp 'settings.json'
 try {
     $default = Get-ClipwarpRightLangConfig -ConfigPath $path
     Assert-Equal 'manual' $default.mode 'safe default is manual mode'
+    Assert-Equal $false $default.editorBridgeEnabled 'experimental editors default to off'
+    Assert-Equal $false $default.learnAccepted 'learning disabled until explicitly enabled'
+    Assert-Equal $false $default.darkMode 'light mode remains default'
     Assert-Equal $true ($default.allowedApps -contains 'notepad') 'allowed apps are explicitly scoped'
     Assert-Equal $true ($default.blockedApps -contains 'bitwarden') 'password manager excluded'
 
