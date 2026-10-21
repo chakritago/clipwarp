@@ -370,8 +370,8 @@ $applyTheme = {
 }
 $applyFont = {
     $size=[float]$fontSizePicker.Value
-    $form.Font=New-Object Drawing.Font('Leelawadee UI',$size)
-    $tabs.Font=New-Object Drawing.Font('Leelawadee UI',$size)
+    if ($form.Font.Size -ne $size) { $form.Font=New-Object Drawing.Font('Leelawadee UI',$size) }
+    if ($tabs.Font.Size -ne $size) { $tabs.Font=New-Object Drawing.Font('Leelawadee UI',$size) }
     $hc=($form.ClientSize.Width -lt 820)
     $heading.Font=New-Object Drawing.Font('Leelawadee UI',($size + $(if($hc){2}else{5})),[Drawing.FontStyle]::Bold)
     $langBadge.Font=New-Object Drawing.Font('Leelawadee UI',$size,[Drawing.FontStyle]::Bold)
@@ -385,7 +385,7 @@ $form.Add_SizeChanged({
     $heading.Width=[Math]::Max(345,$form.ClientSize.Width - 120)
     $tagline.Width=[Math]::Max(345,$form.ClientSize.Width - 120)
     $save.Width=if($compact){155}else{175}
-    & $applyFont
+    # Do not reset Form.Font here: AutoScale can recursively fire SizeChanged.
 })
 & $applyTheme
 & $applyFont
