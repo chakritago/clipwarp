@@ -348,6 +348,58 @@ checklist of manually confirmed scenarios to the user's temp directory,
 without recording the test text. CI cannot prove real interactive hardware,
 Word/VS Code installation, or rich-text formatting preservation.
 
+#### Editor Compatibility 2.0 / Intelligent Suggestions (v1.17 development)
+
+**No stable release until real desktop validation.** This update continues on
+[Draft PR #2](https://github.com/chakritago/clipwarp/pull/2) after PR #1 was
+merged. Settings, editor correction, and Clipboard conversion remain separate.
+
+- **Modern editors:** the experimental (disabled-by-default) UI Automation
+  provider searches up to four ancestors of the focused element for an
+  accessible TextPattern, without crossing process boundaries or password
+  controls. It rechecks the exact document identity and selected text before
+  applying a correction. Selected text must be a single bounded line.
+  For Word, a selection with detectable mixed font properties is rejected.
+  Rich-text formatting *within* replacement text is not guaranteed;
+  styles outside the selection are not intentionally modified. Use only
+  after per-version checks in Notepad, Word and VS Code.
+- **Passive hints:** optional **แนะนำคำเมื่อหยุดพิมพ์** displays a suggestion
+  after an approximately 650 ms idle period for known words in validated
+  native Edit controls. Typing, Enter or Esc are **not** captured by these
+  passive hints. Click **ใช้คำนี้** to apply; otherwise keep typing.
+  This feature is independent of Auto mode and defaults **off**.
+- **Undo history:** optional **ประวัติ Undo** retains up to six recent
+  conversions **in RAM only**. The tray's Language correction submenu lets
+  you view or clear this list. This is a review history, not a mechanism to
+  undo older edits in other windows. Only the current context-checked F8/
+  preview button supports Undo, within its eight-second validity window.
+  History defaults off and is cleared when disabled or on exit.
+- **Learned words:** accepted corrections are only persisted with the separate
+  **เรียนรู้เมื่อผู้ใช้ยืนยัน** permission. Their keys are tracked so that
+  **คำที่เรียนรู้** in Settings can delete one or all learned corrections
+  without deleting manually written instant rules.
+- **Settings:** responsive localized cards, light/dark high-contrast palette,
+  keyboard layout badge, before/after comparison, and privacy-safe previews.
+  All optional capabilities default off to avoid new behavior on upgrade.
+
+Run automated Windows PowerShell 5.1 + PowerShell 7 tests:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run-all.ps1
+```
+
+Run genuine interactive Windows test checklist with supported desktop apps
+installed (not a headless CI test):
+
+```powershell
+powershell.exe -NoProfile -Sta -ExecutionPolicy Bypass -File .\tests\rightlang-interactive.ps1 -EditorBridge
+```
+
+Verify selected text, real keypresses, focus changes, F8 Undo, password
+fields, Word formatting, fast typing latency, and application differences
+before declaring Stable. CI covers compilation, syntax, policy, configuration
+and UI smoke checks, **not** physical keyboard or rich-editor E2E.
+
 ### Tray icon menu
 
 While the watcher runs, its system-tray icon menu exposes every command:
