@@ -34,6 +34,22 @@ try {
     $all = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     Assert-Equal 'dual' $all.targetMode 'other ClipWarp settings preserved'
     Assert-Equal $false $all.calendar.enabled 'Calendar setting preserved'
+    $optIn = Get-ClipwarpRightLangConfig -ConfigPath $path
+    $optIn.editorBridgeEnabled = $true
+    $optIn.darkMode = $true
+    $optIn.learnAccepted = $true
+    [void](Save-ClipwarpRightLangConfig -Settings $optIn -ConfigPath $path)
+    $opts = Get-ClipwarpRightLangConfig -ConfigPath $path
+    Assert-Equal $true $opts.editorBridgeEnabled 'explicit UI Automation opt-in persisted'
+    Assert-Equal $true $opts.darkMode 'Dark Mode setting persisted'
+    Assert-Equal $true $opts.learnAccepted 'learning opt-in persisted'
+    Assert-Equal $true (Add-ClipwarpRightLangLearnedWord -Typed 'misspelling' -Corrected 'คำที่ยืนยัน' -ConfigPath $path) 'confirmed word can be learned'
+    $learned = Get-ClipwarpRightLangConfig -ConfigPath $path
+    Assert-Equal 'คำที่ยืนยัน' $learned.instant['misspelling'] 'confirmed correction remembered'
+    $learned.learnAccepted = $false
+    [void](Save-ClipwarpRightLangConfig -Settings $learned -ConfigPath $path)
+    Assert-Equal $false (Add-ClipwarpRightLangLearnedWord -Typed 'ignoredword' -Corrected 'ไม่บันทึก' -ConfigPath $path) 'disabled learning ignores corrections'
+    Assert-Equal $false ((Get-ClipwarpRightLangConfig -ConfigPath $path).instant.Contains('ignoredword')) 'no correction stored without consent'
     [void](Set-ClipwarpRightLangMode -Mode off -ConfigPath $path)
     Assert-Equal 'off' (Get-ClipwarpRightLangConfig -ConfigPath $path).mode 'off mode persists'
     [void](Set-ClipwarpRightLangMode -Mode manual -ConfigPath $path)
