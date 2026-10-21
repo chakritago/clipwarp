@@ -15,7 +15,7 @@ namespace ClipwarpRightLang
         private const int WH_MOUSE_LL = 14, WM_LBUTTONDOWN = 0x0201, WM_RBUTTONDOWN = 0x0204, WM_MBUTTONDOWN = 0x0207;
         private const int WH_KEYBOARD_LL = 13, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
         private const int VK_BACK = 0x08, VK_TAB = 0x09, VK_RETURN = 0x0D, VK_SPACE = 0x20;
-        private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12;
+        private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LEFT = 0x25, VK_RIGHT = 0x27;
         private const int VK_CAPITAL = 0x14, VK_ESCAPE = 0x1B, VK_F8 = 0x77;
         private const int VK_LWIN = 0x5B, VK_RWIN = 0x5C;
         private const uint WM_GETTEXT = 0x000D, WM_GETTEXTLENGTH = 0x000E, EM_GETSEL = 0x00B0, EM_GETPASSWORDCHAR = 0x00D2;
@@ -45,6 +45,7 @@ namespace ClipwarpRightLang
         private sealed class UndoRequest {
             public IntPtr Window, Focus;
             public string Source, Replacement;
+            public bool HasTrailingSpace;
             public DateTime Until;
         }
         private sealed class PreviewBubble : Form {
@@ -293,7 +294,7 @@ namespace ClipwarpRightLang
             if (!TryReadEditor(window, out e) || !IsUndoCandidate(e.Text, e.Start, e.End, token)) return false;
             return ShowPreview(token, correction, window, e.Focus, false, e.Start, e.End);
         }
-        private bool ReplaceText(string source, string replacement, IntPtr window, IntPtr focus, bool selection) {
+        private bool ReplaceText(string source, string replacement, IntPtr window, IntPtr focus, bool selection, bool trailingSpace = false) {
             if (GetForegroundWindow() != window) return false;
             List<INPUT> events = new List<INPUT>();
             if (!selection)
@@ -310,7 +311,8 @@ namespace ClipwarpRightLang
             }
             token = "";
             lastUndo = new UndoRequest { Window = window, Focus = focus, Source = source,
-                Replacement = replacement, Until = DateTime.UtcNow.AddSeconds(8) };
+                Replacement = replacement, HasTrailingSpace = trailingSpace,
+                Until = DateTime.UtcNow.AddSeconds(8) };
             bubble.Present(source, replacement, "Applied ✓    F8 = Undo (8s)");
             return true;
         }
@@ -325,19 +327,34 @@ namespace ClipwarpRightLang
             UndoRequest last = lastUndo;
             if (last == null || DateTime.UtcNow > last.Until || last.Window != window) return false;
             EditorState e;
-            if (!TryReadEditor(window, out e) || e.Focus != last.Focus || e.Start != e.End ||
-                !IsUndoCandidate(e.Text, e.Start, e.End, last.Replacement)) {
+            if (!TryReadEditor(window, out e) || e.Focus != last.Focus || e.Start != e.End) {
+                lastUndo = null; bubble.Dismiss(); return false;
+            }
+            int effectiveCaret = e.Start;
+            if (last.HasTrailingSpace) {
+                if (effectiveCaret < 1 || e.Text[effectiveCaret - 1] != ' ') {
+                    lastUndo = null; bubble.Dismiss(); return false;
+                }
+                effectiveCaret--;
+            }
+            if (!IsUndoCandidate(e.Text, effectiveCaret, effectiveCaret, last.Replacement)) {
                 lastUndo = null; bubble.Dismiss(); return false;
             }
             lastUndo = null;
             bubble.Dismiss();
             List<INPUT> events = new List<INPUT>();
+            if (last.HasTrailingSpace) {
+                events.Add(Key(VK_LEFT, 0, 0)); events.Add(Key(VK_LEFT, 0, KEYEVENTF_KEYUP));
+            }
             for (int i = 0; i < last.Replacement.Length; i++) {
                 events.Add(Key(VK_BACK, 0, 0)); events.Add(Key(VK_BACK, 0, KEYEVENTF_KEYUP));
             }
             foreach (char c in last.Source) {
                 events.Add(Key(0, c, KEYEVENTF_UNICODE));
                 events.Add(Key(0, c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+            }
+            if (last.HasTrailingSpace) {
+                events.Add(Key(VK_RIGHT, 0, 0)); events.Add(Key(VK_RIGHT, 0, KEYEVENTF_KEYUP));
             }
             INPUT[] keys = events.ToArray();
             token = "";
@@ -448,7 +465,7 @@ namespace ClipwarpRightLang
             EditorState e;
             if (!TryReadEditor(window, out e) ||
                 !IsUndoCandidate(e.Text, e.Start, e.End, token)) return false;
-            return ReplaceText(token, replacement, window, e.Focus, false);
+            return ReplaceText(token, replacement, window, e.Focus, false, true);
         }
 
         private static INPUT Key(int vk, char scan, uint flags)
