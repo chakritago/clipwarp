@@ -67,7 +67,7 @@ Write-Host 'PASS: fake-only language tests; no watcher or form instantiated'
 Assert ($src.Contains('thread.SetApartmentState(System.Threading.ApartmentState.STA)') -and $src.Contains('Application.Run()')) 'source contract: independent STA pump for language timers'
 Assert ($src.Contains('Application.ExitThread()') -and $src.Contains('thread.Join(1000)')) 'source contract: bounded language pump shutdown'
 
-$indicator=$src.Substring($src.IndexOf('internal sealed class LanguageIndicator :'),$src.IndexOf('public class Watcher :')-$src.IndexOf('internal sealed class LanguageIndicator :'))
+$indicator=$src.Substring($src.IndexOf('internal sealed class LanguageIndicator :'),$src.IndexOf('public sealed class ClipboardBurstGuard')-$src.IndexOf('internal sealed class LanguageIndicator :'))
 Assert ($indicator -notmatch 'Clipboard|CaptureForeground|OnForegroundWindowChanged|SetForegroundWindow|SetFocus|AttachThreadInput') 'source contract: no clipboard, target tracking or focus calls in indicator'
 Assert ($indicator.Contains('hide.Tick -= HideExpired') -and $indicator.Contains('poll.Tick -= Poll') -and $indicator.Contains('overlay.Dispose()')) 'source contract: timer handlers and overlay disposal'
 Assert ($indicator -notmatch 'GetCursorPos') 'source contract: label never anchors to the mouse cursor'
