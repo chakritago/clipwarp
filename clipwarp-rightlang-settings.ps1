@@ -77,7 +77,7 @@ $tagline.Anchor = 'Top,Left,Right'
 $header.Controls.Add($tagline)
 
 $themePanel = New-Object Windows.Forms.Panel
-$themePanel.Dock = 'Top'; $themePanel.Height = 65
+$themePanel.Dock = 'Top'; $themePanel.Height = 82
 $themePanel.BorderStyle = 'FixedSingle'
 $form.Controls.Add($themePanel)
 $themeLabel = New-Label 'โหมดสี'
@@ -87,15 +87,28 @@ $darkToggle.Text = 'Dark Mode'
 $darkToggle.SetBounds(97,13,180,37)
 $darkToggle.Checked = [bool]$config.darkMode
 $themePanel.Controls.Add($darkToggle)
+$contrastToggle = New-Object Windows.Forms.CheckBox
+$contrastToggle.Text = 'High Contrast'
+$contrastToggle.Checked = [bool]$config.highContrast
+$contrastToggle.SetBounds(260,13,155,34)
+$themePanel.Controls.Add($contrastToggle)
+$fontLabel = New-Label 'ขนาดตัวอักษร'
+$fontLabel.SetBounds(422,10,125,38)
+$themePanel.Controls.Add($fontLabel)
+$fontSizePicker = New-Object Windows.Forms.NumericUpDown
+$fontSizePicker.Minimum = 10; $fontSizePicker.Maximum = 18; $fontSizePicker.Increment = 1
+$fontSizePicker.Value = [decimal]$config.uiFontSize
+$fontSizePicker.SetBounds(550,15,75,34)
+$themePanel.Controls.Add($fontSizePicker)
 $langBadge = New-Label 'กำลังตรวจสอบภาษา…'
-$langBadge.SetBounds(625,12,270,38)
-$langBadge.Anchor = 'Top,Right'
+$langBadge.SetBounds(22,49,570,27)
+$langBadge.Anchor = 'Top,Left,Right'
 $langBadge.TextAlign = 'MiddleCenter'; $langBadge.BorderStyle = 'FixedSingle'
 $langBadge.Font = New-Object Drawing.Font('Leelawadee UI',10,[Drawing.FontStyle]::Bold)
 $themePanel.Controls.Add($langBadge)
 
 $optionsPanel = New-Object Windows.Forms.Panel
-$optionsPanel.Dock = 'Top'; $optionsPanel.Height = 246
+$optionsPanel.Dock = 'Top'; $optionsPanel.Height = 181
 $optionsPanel.BorderStyle = 'FixedSingle'
 $form.Controls.Add($optionsPanel)
 $modeLabel = New-Label 'รูปแบบการแก้ไข'
@@ -128,15 +141,13 @@ $learnCheck.Anchor = 'Top,Left';$optionsPanel.Controls.Add($learnCheck)
 $hintCheck = New-Object Windows.Forms.CheckBox
 $hintCheck.Text = 'แนะนำคำเมื่อหยุดพิมพ์ (ไม่แทรกคำอัตโนมัติ)'
 $hintCheck.Checked = [bool]$config.smartSuggestions
-$hintCheck.SetBounds(22,178,585,30)
+$hintCheck.SetBounds(15,10,640,31)
 $hintCheck.Anchor = 'Top,Left,Right'
-$optionsPanel.Controls.Add($hintCheck)
 $historyCheck = New-Object Windows.Forms.CheckBox
 $historyCheck.Text = 'เก็บประวัติ Undo ในหน่วยความจำเท่านั้น (ไม่บันทึกลงดิสก์)'
 $historyCheck.Checked = [bool]$config.undoHistory
-$historyCheck.SetBounds(22,208,825,30)
+$historyCheck.SetBounds(15,46,685,31)
 $historyCheck.Anchor = 'Top,Left,Right'
-$optionsPanel.Controls.Add($historyCheck)
 
 $footer = New-Object Windows.Forms.Panel
 $footer.Dock = 'Bottom'; $footer.Height = 85
@@ -223,6 +234,51 @@ $clearLearned.Text = 'ลบทั้งหมด';$clearLearned.Width=155;$clea
 $learnedLayout.Controls.Add($learnedActions,0,2)
 $learnedPage.Controls.Add($learnedLayout)
 [void]$tabs.TabPages.Add($learnedPage)
+
+$suggestPage = New-Object Windows.Forms.TabPage
+$suggestPage.Text = 'ปรับคำแนะนำ'
+$suggestPage.Padding = New-Object Windows.Forms.Padding(12)
+$suggestTop = New-Object Windows.Forms.Panel
+$suggestTop.Dock = 'Top'
+$suggestTop.Height = 175
+$suggestPage.Controls.Add($suggestTop)
+$suggestTop.Controls.Add($hintCheck)
+$suggestTop.Controls.Add($historyCheck)
+$delayLabel = New-Label 'หน่วงคำแนะนำ (ms)'
+$delayLabel.SetBounds(15,83,175,29)
+$suggestTop.Controls.Add($delayLabel)
+$delayPicker = New-Object Windows.Forms.NumericUpDown
+$delayPicker.Minimum=350;$delayPicker.Maximum=2000;$delayPicker.Increment=50
+$delayPicker.Value=[decimal]$config.suggestionDelayMs
+$delayPicker.SetBounds(15,115,140,32)
+$suggestTop.Controls.Add($delayPicker)
+$cooldownLabel=New-Label 'ไม่แนะนำคำเดิมซ้ำ (ms)'
+$cooldownLabel.SetBounds(170,83,210,29)
+$suggestTop.Controls.Add($cooldownLabel)
+$cooldownPicker=New-Object Windows.Forms.NumericUpDown
+$cooldownPicker.Minimum=500;$cooldownPicker.Maximum=120000;$cooldownPicker.Increment=500
+$cooldownPicker.Value=[decimal]$config.suggestionCooldownMs
+$cooldownPicker.SetBounds(170,115,155,32)
+$suggestTop.Controls.Add($cooldownPicker)
+$capLabel=New-Label 'เก็บคำที่เรียนรู้สูงสุด'
+$capLabel.SetBounds(344,83,190,29)
+$suggestTop.Controls.Add($capLabel)
+$limitPicker=New-Object Windows.Forms.NumericUpDown
+$limitPicker.Minimum=10;$limitPicker.Maximum=500;$limitPicker.Increment=10
+$limitPicker.Value=[decimal]$config.learningLimit
+$limitPicker.SetBounds(344,115,135,32)
+$suggestTop.Controls.Add($limitPicker)
+$ignoredPanel=New-Object Windows.Forms.Panel
+$ignoredPanel.Dock='Fill'
+$suggestPage.Controls.Add($ignoredPanel)
+$ignoredPanel.BringToFront()
+$ignoredLabel=New-Label 'ไม่แนะนำคำเหล่านี้ (หนึ่งคำต่อบรรทัด)'
+$ignoredLabel.Dock='Top';$ignoredLabel.Height=29
+$ignoredPanel.Controls.Add($ignoredLabel)
+$ignoredEditor=New-Box ($config.ignoredSuggestions -join [Environment]::NewLine)
+$ignoredPanel.Controls.Add($ignoredEditor)
+$ignoredEditor.BringToFront()
+[void]$tabs.TabPages.Add($suggestPage)
 $removedLearned = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $learnedOriginal = @($config.learnedKeys)
 foreach($key in $learnedOriginal){
@@ -339,10 +395,16 @@ $save.Add_Click({
         $settings.learnedKeys=@($learnedOriginal | Where-Object { -not $removedLearned.Contains([string]$_) })
         $settings.smartSuggestions=[bool]$hintCheck.Checked
         $settings.undoHistory=[bool]$historyCheck.Checked
+        $settings.suggestionDelayMs=[int]$delayPicker.Value
+        $settings.suggestionCooldownMs=[int]$cooldownPicker.Value
+        $settings.learningLimit=[int]$limitPicker.Value
+        $settings.ignoredSuggestions=@($ignoredEditor.Text -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
         $settings.words=@($wordPage.Editor.Text -split '\r?\n' | ForEach-Object {$_.Trim()} | Where-Object {$_} | Select-Object -Unique)
         $settings.allowedApps=@($allowPage.Editor.Text -split '\r?\n' | ForEach-Object {$_.Trim()} | Where-Object {$_} | Select-Object -Unique)
         $settings.blockedApps=@($blockPage.Editor.Text -split '\r?\n' | ForEach-Object {$_.Trim()} | Where-Object {$_} | Select-Object -Unique)
         $settings.darkMode=[bool]$darkToggle.Checked
+        $settings.highContrast=[bool]$contrastToggle.Checked
+        $settings.uiFontSize=[int]$fontSizePicker.Value
         $settings.editorBridgeEnabled=[bool]$bridgeCheck.Checked
         $settings.learnAccepted=[bool]$learnCheck.Checked
         [void](Save-ClipwarpRightLangConfig -Settings $settings)
@@ -368,7 +430,7 @@ $form.Add_FormClosed({
 })
 if($SelfTest){
     try {
-        if($tabs.TabPages.Count -ne 6){throw "Expected six settings tabs"}
+        if($tabs.TabPages.Count -ne 7){throw "Expected seven settings tabs"}
         if($mode.Items.Count -ne 3){throw "Expected three correction modes"}
         $darkToggle.Checked = $true
         if($form.BackColor.R -ne 28){throw "Dark theme did not apply"}
@@ -377,7 +439,13 @@ if($SelfTest){
         $before.Text = 'l;ylfu'
         if($after.Text -ne 'สวัสดี'){throw "Before/after preview was not rendered"}
         if(-not $bridgeCheck -or -not $learnCheck -or -not $hintCheck -or -not $historyCheck){throw "Missing opt-in controls"}
-        if($optionsPanel.Height -lt 230){throw "Missing responsive options area"}
+        if($optionsPanel.Height -lt 175){throw "Missing responsive options area"}
+        if($delayPicker.Value -lt 350 -or $limitPicker.Value -lt 10){throw "Missing suggestion settings"}
+        $contrastToggle.Checked=$true
+        if($form.BackColor.ToArgb() -ne [Drawing.SystemColors]::Window.ToArgb()){throw "High contrast palette unavailable"}
+        $contrastToggle.Checked=$false
+        $fontSizePicker.Value=14
+        if($form.Font.Size -ne 14){throw "Font scaling did not apply"}
         if($learnedPage.Text -ne 'คำที่เรียนรู้'){throw "Missing learned-word management"}
         Write-Host 'PASS: Thai Settings 2.0 structure, theme switching, local before/after and opt-ins'
     } finally {
