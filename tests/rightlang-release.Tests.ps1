@@ -46,4 +46,20 @@ Assert-Release ($installer.Contains('clipwarp-editor-bridge.cs') -and
 Assert-Release ($interactive.Contains('[switch]$EditorBridge') -and
     $interactive.Contains('Windows E2E checklist') -and
     $interactive.Contains('Password')) 'real keyboard and app compatibility remain an explicit manual release gate'
+Assert-Release ($bridge.Contains('TryWordStyleFingerprint') -and
+    $bridge.Contains('MixedAttributeValue') -and
+    $bridge.Contains('StyleFingerprint = styleFingerprint') -and
+    $bridge.Contains('SameSelection')) 'Word formatting is fingerprinted and selection revalidated'
+Assert-Release ($engine.Contains('suggestionDelayMs') -and
+    $engine.Contains('suggestionCooldownMs') -and
+    $engine.Contains('ignoredHints.Contains(token)') -and
+    $engine.Contains('recentCorrections.Count > 6')) 'hint sensitivity and Undo memory are bounded'
+Assert-Release ($module.Contains('highContrast = $false') -and
+    $module.Contains('uiFontSize = 11') -and
+    $module.Contains('learningLimit = 200') -and
+    $module.Contains('Too many ignored suggestions')) 'accessibility and learning limits validated'
+Assert-Release ($settings.Contains('AutoScaleMode') -and
+    $settings.Contains('contrastToggle') -and
+    $settings.Contains('fontSizePicker') -and
+    $settings.Contains('ignoredEditor')) 'accessible Settings and personalized hints wired'
 Write-Host 'PASS: static release guards completed. Physical keyboard and rich-text editor validation remain manual prerequisites.'
