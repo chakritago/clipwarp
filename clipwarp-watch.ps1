@@ -1711,10 +1711,10 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
     $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
     $references += @([AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator)
     $references += [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object Location | ForEach-Object Location
-    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs'))) -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
+    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-editor-bridge.cs'))) -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
 }
 else {
-    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs'))) -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
+    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-editor-bridge.cs'))) -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
 }
 
 $watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $configPath, $logFile)
@@ -1730,7 +1730,8 @@ $rightlangReload = {
         foreach ($entry in $cfg.instant.GetEnumerator()) { $rules[[string]$entry.Key] = [string]$entry.Value }
         $effectiveMode = if (Get-ClipwarpPaused) { 'off' } else { [string]$cfg.mode }
         $rightlang.Configure($effectiveMode, $rules,
-            [string[]]@($cfg.words), [string[]]@($cfg.allowedApps), [string[]]@($cfg.blockedApps))
+            [string[]]@($cfg.words), [string[]]@($cfg.allowedApps), [string[]]@($cfg.blockedApps),
+            [bool]$cfg.editorBridgeEnabled, [bool]$cfg.learnAccepted)
     } catch {
         # No fallback to arbitrary global correction on invalid config.
         $rightlang.Configure('off', $null, $null, $null, $null)
@@ -1740,6 +1741,10 @@ $rightlangReload = {
 $rightlang.add_ModeToggled({
     param($newMode)
     try { [void](Set-ClipwarpRightLangMode -Mode $newMode) } catch {}
+})
+$rightlang.add_CorrectionAccepted({
+    param($original, $confirmed)
+    try { [void](Add-ClipwarpRightLangLearnedWord -Typed $original -Corrected $confirmed) } catch {}
 })
 $rightlang.Start()
 $rightlangTimer = New-Object System.Windows.Forms.Timer
