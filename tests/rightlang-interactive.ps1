@@ -77,14 +77,14 @@ $instructions = @(
     '6. Password and Off: shortcuts must not correct'
     '7. Compatibility: confirm VS Code, Word, browsers are untouched by default'
 )
-$checks = New-Object Collections.Generic.List[Windows.Forms.CheckBox]
+$checks = @()
 for ($i = 0; $i -lt $instructions.Count; $i++) {
     $check = New-Object Windows.Forms.CheckBox
     $check.Text = $instructions[$i]
     $check.AutoSize = $false
     $check.SetBounds(18,(270+$i*34),740,31)
     $form.Controls.Add($check)
-    $checks.Add($check)
+    $checks += $check
 }
 $finish = New-Object Windows.Forms.Button
 $finish.Text = 'Summarize checked scenarios'
