@@ -23,8 +23,14 @@ namespace ClipwarpRightLang
         private static readonly Type TextUnitType = LoadType("System.Windows.Automation.Text.TextUnit");
 
         private static Type LoadType(string name) {
+            // UIAutomationClient is present in Windows Desktop .NET Framework;
+            // it is not a guaranteed component of every PowerShell 7 runtime.
+            // Do not fall back to screen scraping or clipboard access.
             try {
-                return Type.GetType(name + ", UIAutomationClient", false);
+                Type known = Type.GetType(name + ", UIAutomationClient", false);
+                if (known != null) return known;
+                Assembly library = Assembly.Load("UIAutomationClient");
+                return library.GetType(name, false);
             } catch { return null; }
         }
         private static Type LoadElementType() { return LoadType("System.Windows.Automation.AutomationElement"); }
