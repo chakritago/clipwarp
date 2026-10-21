@@ -73,6 +73,13 @@ Assert-True ([ClipwarpRightLang.Engine]::IsSupportedEditorClass('WindowsForms10.
 Assert-True (-not [ClipwarpRightLang.Engine]::IsSupportedEditorClass('Chrome_RenderWidgetHostHWND')) 'browser editor rejected'
 Assert-True (-not [ClipwarpRightLang.Engine]::IsSupportedEditorClass('RichEditD2DPT')) 'unverified modern editors rejected'
 Write-Host 'PASS: RightLang compatibility allowlist policy'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsProfile('notepad')) 'modern Notepad has an explicit UIA profile'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsProfile('WINWORD')) 'Microsoft Word has an explicit UIA profile'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsProfile('Code')) 'VS Code has an explicit UIA profile'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsProfile('chrome')) 'generic browsers denied by UIA adapter'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::ShouldProbe($false,'notepad',$allowedApps,$blockedApps)) 'no UIA probing without opt-in'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::ShouldProbe($true,'powershell',$allowedApps,$blockedApps)) 'blocklist excludes UIA even when enabled'
+Write-Host 'PASS: UIA opt-in policy and editor profiles'
 $t = New-Object ClipwarpWatch.OverlayTargetTracker
 $now = [datetime]'2026-09-08T12:00:00Z'
 $t.OnForegroundChanged('pwsh','Terminal','ConsoleWindowClass',$now)
