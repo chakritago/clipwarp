@@ -554,4 +554,4 @@ function Remove-ClipwarpLegacyAutostartShortcut {
         Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue
     }
 }
-Export-ModuleMember -Function Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused,Get-ClipwarpVersionInfo,Show-ClipwarpVersion,Update-Clipwarp,Get-ClipwarpLatestVersionInfo,Get-ClipwarpAutoUpdateEnabled,Get-ClipwarpAutostartEnabled,Set-ClipwarpAutostart,Remove-ClipwarpLegacyAutostartShortcut
+Export-ModuleMember -Function Get-ClipwarpDefaultConfigPath,Get-ClipwarpConfig,Save-ClipwarpConfig,Get-ClipwarpRetentionDays,Set-ClipwarpRetentionDays,Get-ClipwarpPaused,Set-ClipwarpPaused,Get-ClipwarpVersionInfo,Show-ClipwarpVersion,Update-Clipwarp,Get-ClipwarpLatestVersionInfo,Get-ClipwarpAutoUpdateEnabled,Get-ClipwarpAutostartEnabled,Set-ClipwarpAutostart,Remove-ClipwarpLegacyAutostartShortcut
