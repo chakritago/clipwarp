@@ -854,7 +854,7 @@ namespace ClipwarpWatch
                 sha.TransformBlock(data, 0, head, null, 0);
                 int tail = Math.Min(data.Length, 4096);
                 if (tail > 0 && tail < data.Length) sha.TransformBlock(data, data.Length - tail, tail, null, 0);
-                sha.TransformFinalBlock(BitConverter.GetBytes(data.Length), 0, 8);
+                sha.TransformFinalBlock(BitConverter.GetBytes((long)data.Length), 0, 8);
                 return "I:" + BitConverter.ToString(sha.Hash).Replace("-", string.Empty);
             }
         }
