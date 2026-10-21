@@ -434,7 +434,13 @@ namespace ClipwarpRightLang
                 Until = DateTime.UtcNow.AddSeconds(8) };
             bubble.Present(source, replacement, true);
             if (learnAccepted && !trailingSpace && CorrectionAccepted != null) {
-                try { CorrectionAccepted(source, replacement); } catch { }
+                // Persist accepted words after returning from the global keyboard hook.
+                string savedSource = source, savedReplacement = replacement;
+                try { bubble.BeginInvoke((MethodInvoker)delegate {
+                    if (CorrectionAccepted != null) {
+                        try { CorrectionAccepted(savedSource, savedReplacement); } catch { }
+                    }
+                }); } catch { }
             }
             return true;
         }
