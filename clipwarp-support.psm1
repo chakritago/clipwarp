@@ -7,7 +7,7 @@ function Get-ClipwarpCalendarEnabled {
     param([string]$ConfigPath = (Get-ClipwarpDefaultConfigPath))
     if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return $true }
     try {
-        $config = Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         if ($null -ne $config.calendar -and $null -ne $config.calendar.enabled -and $config.calendar.enabled -is [bool]) {
             return [bool]$config.calendar.enabled
         }
@@ -20,7 +20,7 @@ function Get-ClipwarpConfig {
     if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
         for ($i = 0; $i -lt 5; $i++) {
             try {
-                $raw = Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction Stop
+                $raw = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop
                 if (-not [string]::IsNullOrWhiteSpace($raw)) {
                     return $raw | ConvertFrom-Json -ErrorAction Stop
                 }
