@@ -17,7 +17,7 @@ namespace ClipwarpRightLang
         private const int VK_BACK = 0x08, VK_TAB = 0x09, VK_RETURN = 0x0D, VK_SPACE = 0x20;
         private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LEFT = 0x25, VK_RIGHT = 0x27;
         private const int VK_CAPITAL = 0x14, VK_ESCAPE = 0x1B, VK_F8 = 0x77;
-        private const int VK_LWIN = 0x5B, VK_RWIN = 0x5C;
+        private const int VK_LWIN = 0x5B, VK_RWIN = 0x5C, VK_Z = 0x5A;
         private const uint WM_GETTEXT = 0x000D, WM_GETTEXTLENGTH = 0x000E, EM_GETSEL = 0x00B0, EM_GETPASSWORDCHAR = 0x00D2;
         private const uint SMTO_ABORTIFHUNG = 0x0002, GWL_STYLE = 0xFFFFFFF0, ES_PASSWORD = 0x0020;
         private const uint KEYEVENTF_KEYUP = 2, KEYEVENTF_UNICODE = 4;
@@ -29,6 +29,8 @@ namespace ClipwarpRightLang
         private IntPtr mouseHook;
         private IntPtr previousWindow;
         private string token = "";
+        private bool editorBridgeEnabled = false;
+        private bool learnAccepted = false;
         private PreviewRequest pending;
         private UndoRequest lastUndo;
         private PreviewBubble bubble;
@@ -41,15 +43,19 @@ namespace ClipwarpRightLang
             public bool IsSelection;
             public int SelectionStart, SelectionEnd;
             public DateTime Until;
+            public EditorSnapshot Bridge;
         }
         private sealed class UndoRequest {
             public IntPtr Window, Focus;
             public string Source, Replacement;
             public bool HasTrailingSpace;
+            public EditorSnapshot Bridge;
             public DateTime Until;
         }
         private sealed class PreviewBubble : Form {
             readonly Label label;
+            readonly Button apply, cancel, undo;
+            public event Action ApplyClicked, CancelClicked, UndoClicked;
             protected override bool ShowWithoutActivation { get { return true; } }
             protected override CreateParams CreateParams {
                 get { CreateParams p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x00000080; return p; }
@@ -57,21 +63,34 @@ namespace ClipwarpRightLang
             public PreviewBubble() {
                 FormBorderStyle = FormBorderStyle.None;
                 ShowInTaskbar = false; TopMost = true; AutoScaleMode = AutoScaleMode.Dpi;
-                BackColor = Color.FromArgb(30, 37, 51);
-                Size = new Size(380, 110);
-                label = new Label { Dock = DockStyle.Fill, ForeColor = Color.White,
-                    Font = new Font("Segoe UI", 10.5f), TextAlign = ContentAlignment.MiddleLeft,
-                    Padding = new Padding(14), AutoEllipsis = true };
+                BackColor = Color.FromArgb(28, 36, 51); Size = new Size(404, 126);
+                label = new Label { ForeColor = Color.White,
+                    Font = new Font("Segoe UI", 10.5f), Location = new Point(13, 10),
+                    Size = new Size(376, 53), AutoEllipsis = true };
                 Controls.Add(label);
+                apply = ActionButton("ใช้คำนี้", 12);
+                cancel = ActionButton("ยกเลิก", 145);
+                undo = ActionButton("↶ ย้อนกลับ", 12);
+                apply.Click += delegate { if (ApplyClicked != null) ApplyClicked(); };
+                cancel.Click += delegate { if (CancelClicked != null) CancelClicked(); };
+                undo.Click += delegate { if (UndoClicked != null) UndoClicked(); };
             }
-            public void Present(string source, string corrected, string command) {
-                label.Text = source + "  →  " + corrected + Environment.NewLine + command;
+            private Button ActionButton(string title, int x) {
+                Button button = new Button { Text = title, Location = new Point(x, 75),
+                    Size = new Size(125, 35), FlatStyle = FlatStyle.Flat,
+                    BackColor = Color.FromArgb(48, 69, 96), ForeColor = Color.White };
+                button.FlatAppearance.BorderSize = 0; Controls.Add(button); return button;
+            }
+            public void Present(string source, string corrected, bool isUndo) {
+                label.Text = source + "  →  " + corrected +
+                    Environment.NewLine + (isUndo ? "F8 / คลิกเพื่อย้อนกลับ (8 วินาที)" : "Enter = ยืนยัน    Esc = ยกเลิก (6 วินาที)");
+                apply.Visible = cancel.Visible = !isUndo;
+                undo.Visible = isUndo;
                 Point pos = Cursor.Position;
                 Rectangle work = Screen.FromPoint(pos).WorkingArea;
                 Location = new Point(Math.Min(work.Right - Width, Math.Max(work.Left, pos.X + 12)),
                                      Math.Min(work.Bottom - Height, Math.Max(work.Top, pos.Y + 18)));
-                if (!Visible) Show();
-                else { TopMost = true; Invalidate(); }
+                if (!Visible) Show(); else { TopMost = true; Invalidate(); }
             }
             public void Dismiss() { if (Visible) Hide(); }
         }
@@ -85,6 +104,9 @@ namespace ClipwarpRightLang
         public Engine() {
             proc = OnKeyboard; mouseProc = OnMouse;
             bubble = new PreviewBubble();
+            bubble.ApplyClicked += delegate { ApplyPreview(); };
+            bubble.CancelClicked += delegate { CancelPreview(); token = ""; };
+            bubble.UndoClicked += delegate { if (lastUndo != null) UndoLast(lastUndo.Window); };
             bubbleTimer = new Timer();
             bubbleTimer.Interval = 250;
             bubbleTimer.Tick += delegate {
@@ -99,11 +121,18 @@ namespace ClipwarpRightLang
 
         public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
                               IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
-                              IEnumerable<string> excludedApps)
+                              IEnumerable<string> excludedApps) {
+            Configure(selectedMode, immediateWords, knownWords, allowedApps, excludedApps, false, false);
+        }
+        public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
+                              IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
+                              IEnumerable<string> excludedApps, bool enableEditorBridge, bool learnOnConfirm)
         {
             string next = selectedMode == "auto" || selectedMode == "manual" ? selectedMode : "off";
             if (next != mode) { token = ""; CancelPreview(); lastUndo = null; }
             mode = next;
+            editorBridgeEnabled = enableEditorBridge;
+            learnAccepted = learnOnConfirm;
             instant = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (immediateWords != null)
                 foreach (KeyValuePair<string, string> kv in immediateWords)
@@ -199,13 +228,13 @@ namespace ClipwarpRightLang
         }
 
         private bool ShowPreview(string source, string corrected, IntPtr window, IntPtr focus,
-                                 bool selection, int start, int end) {
+                                 bool selection, int start, int end, EditorSnapshot bridge = null) {
             if (!CanCorrect(source, corrected, true, false, false)) return false;
             pending = new PreviewRequest { Source = source, Replacement = corrected,
                 Window = window, Focus = focus, IsSelection = selection,
-                SelectionStart = start, SelectionEnd = end,
+                SelectionStart = start, SelectionEnd = end, Bridge = bridge,
                 Until = DateTime.UtcNow.AddSeconds(6) };
-            bubble.Present(source, corrected, "Enter = Apply     Esc = Cancel");
+            bubble.Present(source, corrected, false);
             return true;
         }
 
@@ -213,6 +242,10 @@ namespace ClipwarpRightLang
             PreviewRequest p = pending; pending = null;
             bubble.Dismiss();
             if (p == null || DateTime.UtcNow > p.Until || GetForegroundWindow() != p.Window) return false;
+            if (p.Bridge != null) {
+                if (!EditorBridge.SameSelection(p.Window, p.Bridge)) return false;
+                return ReplaceText(p.Source, p.Replacement, p.Window, IntPtr.Zero, true, false, p.Bridge);
+            }
             EditorState check;
             if (!TryReadEditor(p.Window, out check) || check.Focus != p.Focus) return false;
             if (p.IsSelection) {
@@ -278,9 +311,16 @@ namespace ClipwarpRightLang
         private static IntPtr GetWindowLongPtrSafe(IntPtr h, int index) {
             return IntPtr.Size == 8 ? GetWindowLongPtr(h, index) : new IntPtr(GetWindowLong(h, index));
         }
-        private bool ShowSelectionPreview(IntPtr window) {
+        private bool ShowSelectionPreview(IntPtr window, string processName) {
             EditorState e;
-            if (!TryReadEditor(window, out e)) return false;
+            if (!TryReadEditor(window, out e)) {
+                if (!EditorBridge.ShouldProbe(editorBridgeEnabled, processName, allowed, excluded)) return false;
+                EditorSnapshot snapshot;
+                if (!EditorBridge.TrySelected(window, processName, out snapshot)) return false;
+                string transformed = ReplacementFor(snapshot.SelectedText, true);
+                return transformed != null &&
+                    ShowPreview(snapshot.SelectedText, transformed, window, IntPtr.Zero, true, -1, -1, snapshot);
+            }
             int count = e.End - e.Start;
             if (count < 2 || count > MaxToken) return false;
             string source = e.Text.Substring(e.Start, count);
@@ -294,7 +334,9 @@ namespace ClipwarpRightLang
             if (!TryReadEditor(window, out e) || !IsUndoCandidate(e.Text, e.Start, e.End, token)) return false;
             return ShowPreview(token, correction, window, e.Focus, false, e.Start, e.End);
         }
-        private bool ReplaceText(string source, string replacement, IntPtr window, IntPtr focus, bool selection, bool trailingSpace = false) {
+        public event Action<string, string> CorrectionAccepted;
+        private bool ReplaceText(string source, string replacement, IntPtr window, IntPtr focus,
+                                 bool selection, bool trailingSpace = false, EditorSnapshot bridge = null) {
             if (GetForegroundWindow() != window) return false;
             List<INPUT> events = new List<INPUT>();
             if (!selection)
@@ -311,9 +353,12 @@ namespace ClipwarpRightLang
             }
             token = "";
             lastUndo = new UndoRequest { Window = window, Focus = focus, Source = source,
-                Replacement = replacement, HasTrailingSpace = trailingSpace,
+                Replacement = replacement, HasTrailingSpace = trailingSpace, Bridge = bridge,
                 Until = DateTime.UtcNow.AddSeconds(8) };
-            bubble.Present(source, replacement, "Applied ✓    F8 = Undo (8s)");
+            bubble.Present(source, replacement, true);
+            if (learnAccepted && !trailingSpace && CorrectionAccepted != null) {
+                try { CorrectionAccepted(source, replacement); } catch { }
+            }
             return true;
         }
         public static bool IsUndoCandidate(string text, int selectionStart, int selectionEnd, string replacement) {
@@ -326,6 +371,17 @@ namespace ClipwarpRightLang
         private bool UndoLast(IntPtr window) {
             UndoRequest last = lastUndo;
             if (last == null || DateTime.UtcNow > last.Until || last.Window != window) return false;
+            if (last.Bridge != null) {
+                if (!EditorBridge.MatchesCaretTail(window, last.Bridge, last.Replacement)) {
+                    lastUndo = null; bubble.Dismiss(); return false;
+                }
+                // Native editor Undo restores formatting instead of rewriting the entire rich document.
+                lastUndo = null; bubble.Dismiss();
+                INPUT[] undo = new INPUT[] { Key(VK_CONTROL, (char)0, 0), Key(VK_Z, (char)0, 0),
+                    Key(VK_Z, (char)0, KEYEVENTF_KEYUP), Key(VK_CONTROL, (char)0, KEYEVENTF_KEYUP) };
+                token = "";
+                return SendInput((uint)undo.Length, undo, Marshal.SizeOf(typeof(INPUT))) == undo.Length;
+            }
             EditorState e;
             if (!TryReadEditor(window, out e) || e.Focus != last.Focus || e.Start != e.End) {
                 lastUndo = null; bubble.Dismiss(); return false;
@@ -366,8 +422,12 @@ namespace ClipwarpRightLang
             if (code >= 0)
             {
                 int msg = message.ToInt32();
-                if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN)
-                { token = ""; lastUndo = null; CancelPreview(); }
+                if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN) {
+                    // A non-activating preview button must not erase its own pending action.
+                    if (!bubble.Visible || !bubble.Bounds.Contains(Cursor.Position)) {
+                        token = ""; lastUndo = null; CancelPreview();
+                    }
+                }
             }
             return CallNextHookEx(mouseHook, code, message, data);
         }
@@ -415,7 +475,7 @@ namespace ClipwarpRightLang
                     return new IntPtr(1);
                 }
                 if (shift && vk == VK_CAPITAL && !ctrl && !alt) {
-                    if (ShowSelectionPreview(window)) { token = ""; return new IntPtr(1); }
+                    if (ShowSelectionPreview(window, processName)) { token = ""; return new IntPtr(1); }
                 }
                 if ((shift && vk == VK_BACK && !ctrl && !alt) ||
                     (ctrl && alt && vk == (int)'R')) {
