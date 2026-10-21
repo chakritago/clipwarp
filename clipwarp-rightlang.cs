@@ -220,8 +220,7 @@ namespace ClipwarpRightLang
                 return ReplaceText(p.Source, p.Replacement, p.Window, p.Focus, true);
             }
             // The original token must still appear immediately before the caret.
-            if (check.Start != check.End || check.Start < p.Source.Length ||
-                check.Text.Substring(check.Start - p.Source.Length, p.Source.Length) != p.Source) return false;
+            if (!IsUndoCandidate(check.Text, check.Start, check.End, p.Source)) return false;
             return ReplaceText(p.Source, p.Replacement, p.Window, p.Focus, false);
         }
 
@@ -241,7 +240,10 @@ namespace ClipwarpRightLang
             if (!GetGUIThreadInfo(thread, ref info) || info.hwndFocus == IntPtr.Zero) return false;
             IntPtr focus = info.hwndFocus;
             StringBuilder cls = new StringBuilder(128);
-            if (GetClassName(focus, cls, cls.Capacity) < 1 || !cls.ToString().Equals("Edit", StringComparison.OrdinalIgnoreCase)) return false;
+            if (GetClassName(focus, cls, cls.Capacity) < 1) return false;
+            string controlClass = cls.ToString();
+            if (!controlClass.Equals("Edit", StringComparison.OrdinalIgnoreCase) &&
+                !controlClass.StartsWith("WindowsForms10.EDIT.", StringComparison.OrdinalIgnoreCase)) return false;
             if ((GetWindowLongPtrSafe(focus, -16).ToInt64() & ES_PASSWORD) != 0) return false;
             IntPtr reply;
             if (SendMessageTimeout(focus, EM_GETPASSWORDCHAR, IntPtr.Zero, IntPtr.Zero,
@@ -279,8 +281,7 @@ namespace ClipwarpRightLang
             string correction = ReplacementFor(token, true);
             if (correction == null) return false;
             EditorState e;
-            if (!TryReadEditor(window, out e) || e.Start != e.End || e.Start < token.Length ||
-                e.Text.Substring(e.Start - token.Length, token.Length) != token) return false;
+            if (!TryReadEditor(window, out e) || !IsUndoCandidate(e.Text, e.Start, e.End, token)) return false;
             return ShowPreview(token, correction, window, e.Focus, false, e.Start, e.End);
         }
         private bool ReplaceText(string source, string replacement, IntPtr window, IntPtr focus, bool selection) {
@@ -304,13 +305,19 @@ namespace ClipwarpRightLang
             bubble.Present(source, replacement, "Applied ✓    F8 = Undo (8s)");
             return true;
         }
+        public static bool IsUndoCandidate(string text, int selectionStart, int selectionEnd, string replacement) {
+            return !string.IsNullOrEmpty(text) && !string.IsNullOrEmpty(replacement) &&
+                replacement.Length <= 128 && selectionStart == selectionEnd &&
+                selectionStart >= replacement.Length && selectionStart <= text.Length &&
+                string.Equals(text.Substring(selectionStart - replacement.Length, replacement.Length),
+                              replacement, StringComparison.Ordinal);
+        }
         private bool UndoLast(IntPtr window) {
             UndoRequest last = lastUndo;
             if (last == null || DateTime.UtcNow > last.Until || last.Window != window) return false;
             EditorState e;
             if (!TryReadEditor(window, out e) || e.Focus != last.Focus || e.Start != e.End ||
-                e.Start < last.Replacement.Length ||
-                e.Text.Substring(e.Start - last.Replacement.Length, last.Replacement.Length) != last.Replacement) {
+                !IsUndoCandidate(e.Text, e.Start, e.End, last.Replacement)) {
                 lastUndo = null; bubble.Dismiss(); return false;
             }
             lastUndo = null;
@@ -359,13 +366,16 @@ namespace ClipwarpRightLang
                 { token = ""; CancelPreview(); lastUndo = null; return CallNextHookEx(hook, code, message, data); }
                 int vk = (int)entry.vkCode;
                 bool ctrl = KeyHeld(VK_CONTROL), alt = KeyHeld(VK_MENU), shift = KeyHeld(VK_SHIFT);
+                if (pending != null && DateTime.UtcNow > pending.Until) CancelPreview();
                 if (pending != null) {
                     if (vk == VK_ESCAPE) { CancelPreview(); token = ""; return new IntPtr(1); }
                     if (vk == VK_RETURN && !ctrl && !alt && !shift) {
                         ApplyPreview(); return new IntPtr(1);
                     }
-                    if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU && vk != VK_CAPITAL)
+                    if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU && vk != VK_CAPITAL) {
                         CancelPreview();
+                        token = "";
+                    }
                 }
                 if (vk == VK_F8 && !ctrl && !alt && !shift && lastUndo != null) {
                     bool undone = UndoLast(window);
@@ -387,7 +397,7 @@ namespace ClipwarpRightLang
                     return CallNextHookEx(hook, code, message, data);
                 }
                 if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU && vk != VK_CAPITAL
-                    && vk != VK_F8 && vk != VK_SPACE) { lastUndo = null; bubble.Dismiss(); }
+                    && vk != VK_F8) { lastUndo = null; if (pending == null) bubble.Dismiss(); }
                 if (ctrl || alt || KeyHeld(VK_LWIN) || KeyHeld(VK_RWIN))
                 { token = ""; return CallNextHookEx(hook, code, message, data); }
                 if (vk == VK_BACK)
@@ -427,8 +437,8 @@ namespace ClipwarpRightLang
             string replacement = ReplacementFor(token, forced);
             if (replacement == null) return false;
             EditorState e;
-            if (!TryReadEditor(window, out e) || e.Start != e.End || e.Start < token.Length
-                || e.Text.Substring(e.Start - token.Length, token.Length) != token) return false;
+            if (!TryReadEditor(window, out e) ||
+                !IsUndoCandidate(e.Text, e.Start, e.End, token)) return false;
             return ReplaceText(token, replacement, window, e.Focus, false);
         }
 
