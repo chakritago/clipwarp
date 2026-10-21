@@ -79,7 +79,7 @@ $languageTimer.Add_Tick({
     } catch { $languageBadge.Text = 'Language unavailable' }
 })
 $languageTimer.Start()
-$form.Add_FormClosed({ $languageTimer.Stop(); $languageTimer.Dispose(); $headerIcon.Image.Dispose() })
+$form.Add_FormClosed({ $languageTimer.Stop(); $languageTimer.Dispose(); if ($headerIcon.Image) { $headerIcon.Image.Dispose() } })
 
 $form.Controls.Add((New-Label 'Correction mode' 23 99 170 25 11 $true))
 $modePicker = New-Object Windows.Forms.ComboBox
@@ -185,7 +185,6 @@ $saveButton.ForeColor = [Drawing.Color]::White
 $saveButton.FlatStyle = 'Flat'
 $saveButton.FlatAppearance.BorderSize = 0
 $form.Controls.Add($saveButton)
-$form.AcceptButton = $saveButton
 $form.KeyPreview = $true
 $form.Add_KeyDown({
     param($sender,$e)
