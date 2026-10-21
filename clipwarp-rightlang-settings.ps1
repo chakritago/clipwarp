@@ -457,6 +457,13 @@ if($SelfTest){
         $contrastToggle.Checked=$false
         $fontSizePicker.Value=14
         if($form.Font.Size -ne 14){throw "Font scaling did not apply"}
+        foreach ($dimensions in @(@(700,620),@(780,650),@(930,730))) {
+            $form.Size=New-Object Drawing.Size($dimensions[0],$dimensions[1])
+            $form.PerformLayout()
+            if($tabs.Width -lt 10 -or $tabs.Height -lt 10){throw "Responsive tabs have invalid bounds"}
+            if($save.Width -lt 150){throw "Save button inaccessible at width $($dimensions[0])"}
+        }
+        if($form.AutoScaleMode -ne [Windows.Forms.AutoScaleMode]::Dpi){throw "DPI autoscaling disabled"}
         if($learnedPage.Text -ne 'คำที่เรียนรู้'){throw "Missing learned-word management"}
         Write-Host 'PASS: Thai Settings 2.0 structure, theme switching, local before/after and opt-ins'
     } finally {
