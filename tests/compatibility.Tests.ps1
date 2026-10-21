@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $powershellFiles = @(Get-ChildItem -LiteralPath $root -File | Where-Object Extension -in @('.ps1','.psm1')) + @(Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.ps1')
 foreach ($file in $powershellFiles) {
