@@ -21,6 +21,8 @@ namespace ClipwarpRightLang
         private static readonly Type TextType = LoadType("System.Windows.Automation.TextPattern");
         private static readonly Type EndpointType = LoadType("System.Windows.Automation.Text.TextPatternRangeEndpoint");
         private static readonly Type TextUnitType = LoadType("System.Windows.Automation.Text.TextUnit");
+        private static readonly Type WalkerType = LoadType("System.Windows.Automation.TreeWalker");
+        private const int MaxAncestors = 4;
 
         private static Type LoadType(string name) {
             // Microsoft splits UIA APIs across Client and Types assemblies.
@@ -61,8 +63,56 @@ namespace ClipwarpRightLang
             return instance.GetType().GetMethod(method).Invoke(instance, args);
         }
         private static object Pattern(object focused) {
+            if (focused == null || TextType == null) return null;
             object identifier = TextType.GetField("Pattern").GetValue(null);
-            return focused.GetType().GetMethod("GetCurrentPattern").Invoke(focused, new object[]{ identifier });
+            // Unsupported TextPattern is expected with rich editors and must not throw.
+            object[] args = new object[] { identifier, null };
+            try {
+                bool ok = (bool)focused.GetType().GetMethod("TryGetCurrentPattern").Invoke(focused, args);
+                return ok ? args[1] : null;
+            } catch { return null; }
+        }
+
+        // Some recent Word/Notepad/VS Code providers expose TextPattern on a
+        // document ancestor rather than on the keyboard-focused child.
+        private static object ParentOf(object element) {
+            if (element == null || WalkerType == null) return null;
+            try {
+                object walker = WalkerType.GetProperty("ControlViewWalker",
+                    BindingFlags.Static | BindingFlags.Public).GetValue(null, null);
+                return Call(walker, "GetParent", element);
+            } catch { return null; }
+        }
+        private static bool ValidNode(object element, int pid, bool mustHaveFocus) {
+            if (element == null) return false;
+            object state = ReadProperty(element, "Current");
+            if ((int)ReadProperty(state,"ProcessId") != pid) return false;
+            if ((bool)ReadProperty(state,"IsPassword")) return false;
+            if (mustHaveFocus && !(bool)ReadProperty(state,"HasKeyboardFocus")) return false;
+            return true;
+        }
+        public static bool IsSingleLineSelection(string value) {
+            return !string.IsNullOrWhiteSpace(value) && value.Length >= 2 && value.Length <= Limit
+                && value.IndexOf('\r') < 0 && value.IndexOf('\n') < 0
+                && value.IndexOf('\0') < 0;
+        }
+
+        // Preserve surrounding formatting by replacing only the selection.
+        // A mixed-style Word selection is deliberately rejected; replacement
+        // text may still adopt the editor's insertion style, so UI verification
+        // is required before use with production documents.
+        private static bool HasUniformWordFormatting(object textRange, string processName) {
+            if (!string.Equals(processName, "winword", StringComparison.OrdinalIgnoreCase)) return true;
+            try {
+                object mixed = TextType.GetField("MixedAttributeValue").GetValue(null);
+                foreach (string field in new[] { "FontNameAttribute", "FontSizeAttribute",
+                                                   "FontWeightAttribute", "IsItalicAttribute" }) {
+                    object attr = TextType.GetField(field).GetValue(null);
+                    object observed = Call(textRange, "GetAttributeValue", attr);
+                    if (observed == null || Object.ReferenceEquals(observed,mixed)) return false;
+                }
+                return true;
+            } catch { return false; }
         }
 
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
@@ -78,18 +128,23 @@ namespace ClipwarpRightLang
                 using (Process proc = Process.GetProcessById((int)pid)) {
                     if (!string.Equals(proc.ProcessName, processName, StringComparison.OrdinalIgnoreCase)) return false;
                 }
-                element = ElementType.GetProperty("FocusedElement", BindingFlags.Static | BindingFlags.Public).GetValue(null, null);
-                if (element == null) return false;
-                object current = ReadProperty(element, "Current");
-                if ((int)ReadProperty(current, "ProcessId") != (int)pid) return false;
-                if ((bool)ReadProperty(current, "IsPassword")) return false;
-                object focusState = ReadProperty(current, "HasKeyboardFocus");
-                if (!(bool)focusState) return false;
-                int[] runtime = (int[])Call(element, "GetRuntimeId");
-                if (runtime == null || runtime.Length == 0) return false;
-                id = ((int)pid).ToString() + ":" + string.Join(".", runtime);
-                pattern = Pattern(element);
-                return pattern != null;
+                object focused = ElementType.GetProperty("FocusedElement",
+                    BindingFlags.Static | BindingFlags.Public).GetValue(null, null);
+                if (!ValidNode(focused, (int)pid, true)) return false;
+                object candidate = focused;
+                for (int depth=0; depth<=MaxAncestors && candidate!=null; depth++) {
+                    if (!ValidNode(candidate,(int)pid,depth==0)) return false;
+                    pattern = Pattern(candidate);
+                    if (pattern != null) {
+                        int[] runtime = (int[])Call(candidate,"GetRuntimeId");
+                        if (runtime == null || runtime.Length == 0) return false;
+                        id = ((int)pid).ToString() + ":" + string.Join(".",runtime);
+                        element = candidate;
+                        return true;
+                    }
+                    candidate = ParentOf(candidate);
+                }
+                return false;
             } catch { return false; }
         }
 
@@ -102,8 +157,8 @@ namespace ClipwarpRightLang
                 Array ranges = (Array)Call(pattern, "GetSelection");
                 if (ranges == null || ranges.Length != 1) return false;
                 string value = (string)Call(ranges.GetValue(0), "GetText", Limit + 1);
-                if (string.IsNullOrWhiteSpace(value) || value.Length < 2 || value.Length > Limit ||
-                    value.IndexOf('\r') >= 0 || value.IndexOf('\n') >= 0) return false;
+                if (!IsSingleLineSelection(value) ||
+                    !HasUniformWordFormatting(ranges.GetValue(0), processName)) return false;
                 uint pid; GetWindowThreadProcessId(window, out pid);
                 snapshot = new EditorSnapshot { ProcessName = processName, ProcessId = (int)pid,
                     Identity = id, SelectedText = value };
@@ -122,7 +177,8 @@ namespace ClipwarpRightLang
         // GetSelection returns a degenerate caret range after insertion in compliant
         // TextPattern providers; never guess when provider lacks character traversal.
         public static bool MatchesCaretTail(IntPtr window, EditorSnapshot prior, string replacement) {
-            if (prior == null || !Available || string.IsNullOrEmpty(replacement) || replacement.Length > 128) return false;
+            if (prior == null || !Available || EndpointType == null || TextUnitType == null ||
+                string.IsNullOrEmpty(replacement) || replacement.Length > 128) return false;
             object element, pattern; string id;
             if (!TryFocused(window, prior.ProcessName, out element, out pattern, out id)
                 || prior.Identity != id) return false;
