@@ -8,6 +8,7 @@ namespace ClipwarpRightLang
     using System.Diagnostics;
     using System.Runtime.InteropServices;
     using System.Text;
+    using System.Threading;
     using System.Windows.Forms;
     using System.Drawing;
     public sealed class Engine : IDisposable
@@ -31,6 +32,8 @@ namespace ClipwarpRightLang
         private string token = "";
         private bool editorBridgeEnabled = false;
         private bool learnAccepted = false;
+        private int bridgeSerial;
+        private int bridgeBusy;
         private PreviewRequest pending;
         private UndoRequest lastUndo;
         private PreviewBubble bubble;
@@ -129,7 +132,7 @@ namespace ClipwarpRightLang
                               IEnumerable<string> excludedApps, bool enableEditorBridge, bool learnOnConfirm)
         {
             string next = selectedMode == "auto" || selectedMode == "manual" ? selectedMode : "off";
-            if (next != mode) { token = ""; CancelPreview(); lastUndo = null; }
+            if (next != mode) { token = ""; Interlocked.Increment(ref bridgeSerial); CancelPreview(); lastUndo = null; }
             mode = next;
             editorBridgeEnabled = enableEditorBridge;
             learnAccepted = learnOnConfirm;
@@ -170,6 +173,7 @@ namespace ClipwarpRightLang
             if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
             if (mouseHook != IntPtr.Zero) { UnhookWindowsHookEx(mouseHook); mouseHook = IntPtr.Zero; }
             token = ""; pending = null; lastUndo = null;
+            Interlocked.Increment(ref bridgeSerial);
             bubbleTimer.Stop(); bubbleTimer.Dispose(); bubble.Dispose();
             GC.KeepAlive(proc);
             GC.KeepAlive(mouseProc);
@@ -238,14 +242,91 @@ namespace ClipwarpRightLang
             return true;
         }
 
+        private bool QueueBridgeSelection(IntPtr window, string processName) {
+            if (Interlocked.CompareExchange(ref bridgeBusy, 1, 0) != 0) return false;
+            int serial = Interlocked.Increment(ref bridgeSerial);
+            Thread worker = new Thread(delegate() {
+                EditorSnapshot snapshot = null;
+                string correction = null;
+                try {
+                    if (EditorBridge.TrySelected(window, processName, out snapshot))
+                        correction = ReplacementFor(snapshot.SelectedText, true);
+                } catch { }
+                finally { Interlocked.Exchange(ref bridgeBusy, 0); }
+                if (snapshot == null || correction == null) return;
+                try {
+                    bubble.BeginInvoke((MethodInvoker)delegate {
+                        if (serial != bridgeSerial || mode == "off" ||
+                            GetForegroundWindow() != window || !editorBridgeEnabled) return;
+                        ShowPreview(snapshot.SelectedText, correction, window, IntPtr.Zero, true, -1, -1, snapshot);
+                    });
+                } catch { }
+            });
+            worker.IsBackground = true;
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
+            return true;
+        }
+        private static bool InjectBridgeSelection(string replacement) {
+            List<INPUT> events = new List<INPUT>();
+            foreach (char ch in replacement) {
+                events.Add(Key(0, ch, KEYEVENTF_UNICODE));
+                events.Add(Key(0, ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+            }
+            INPUT[] keys = events.ToArray();
+            return keys.Length > 0 &&
+                SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT))) == keys.Length;
+        }
+        private void ApplyBridgePreview(PreviewRequest p) {
+            if (p == null || p.Bridge == null || Interlocked.CompareExchange(ref bridgeBusy,1,0) != 0) return;
+            int serial = Interlocked.Increment(ref bridgeSerial);
+            Thread worker = new Thread(delegate() {
+                bool sent = false;
+                try {
+                    if (DateTime.UtcNow <= p.Until && serial == bridgeSerial &&
+                        EditorBridge.SameSelection(p.Window,p.Bridge) && GetForegroundWindow() == p.Window)
+                        sent = InjectBridgeSelection(p.Replacement);
+                } catch { }
+                finally { Interlocked.Exchange(ref bridgeBusy,0); }
+                if (!sent) return;
+                try { bubble.BeginInvoke((MethodInvoker)delegate {
+                    if (serial != bridgeSerial) return;
+                    token = "";
+                    lastUndo = new UndoRequest { Window = p.Window, Focus = IntPtr.Zero,
+                        Source = p.Source, Replacement = p.Replacement, Bridge = p.Bridge,
+                        Until = DateTime.UtcNow.AddSeconds(8) };
+                    bubble.Present(p.Source,p.Replacement,true);
+                    if (learnAccepted && CorrectionAccepted != null) {
+                        try { CorrectionAccepted(p.Source,p.Replacement); } catch { }
+                    }
+                }); } catch { }
+            });
+            worker.IsBackground=true;
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
+        }
+        private void UndoBridge(UndoRequest last) {
+            if (last == null || last.Bridge == null || Interlocked.CompareExchange(ref bridgeBusy,1,0) != 0) return;
+            int serial = Interlocked.Increment(ref bridgeSerial);
+            Thread worker = new Thread(delegate() {
+                try {
+                    if (serial != bridgeSerial || GetForegroundWindow() != last.Window ||
+                        !EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Replacement)) return;
+                    INPUT[] undo = new INPUT[] { Key(VK_CONTROL,(char)0,0), Key(VK_Z,(char)0,0),
+                        Key(VK_Z,(char)0,KEYEVENTF_KEYUP), Key(VK_CONTROL,(char)0,KEYEVENTF_KEYUP) };
+                    SendInput((uint)undo.Length,undo,Marshal.SizeOf(typeof(INPUT)));
+                } catch { }
+                finally { Interlocked.Exchange(ref bridgeBusy,0); }
+            });
+            worker.IsBackground=true;
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
+        }
         private bool ApplyPreview() {
             PreviewRequest p = pending; pending = null;
             bubble.Dismiss();
             if (p == null || DateTime.UtcNow > p.Until || GetForegroundWindow() != p.Window) return false;
-            if (p.Bridge != null) {
-                if (!EditorBridge.SameSelection(p.Window, p.Bridge)) return false;
-                return ReplaceText(p.Source, p.Replacement, p.Window, IntPtr.Zero, true, false, p.Bridge);
-            }
+            if (p.Bridge != null) { ApplyBridgePreview(p); return true; }
             EditorState check;
             if (!TryReadEditor(p.Window, out check) || check.Focus != p.Focus) return false;
             if (p.IsSelection) {
@@ -315,11 +396,7 @@ namespace ClipwarpRightLang
             EditorState e;
             if (!TryReadEditor(window, out e)) {
                 if (!EditorBridge.ShouldProbe(editorBridgeEnabled, processName, allowed, excluded)) return false;
-                EditorSnapshot snapshot;
-                if (!EditorBridge.TrySelected(window, processName, out snapshot)) return false;
-                string transformed = ReplacementFor(snapshot.SelectedText, true);
-                return transformed != null &&
-                    ShowPreview(snapshot.SelectedText, transformed, window, IntPtr.Zero, true, -1, -1, snapshot);
+                return QueueBridgeSelection(window, processName);
             }
             int count = e.End - e.Start;
             if (count < 2 || count > MaxToken) return false;
@@ -372,15 +449,10 @@ namespace ClipwarpRightLang
             UndoRequest last = lastUndo;
             if (last == null || DateTime.UtcNow > last.Until || last.Window != window) return false;
             if (last.Bridge != null) {
-                if (!EditorBridge.MatchesCaretTail(window, last.Bridge, last.Replacement)) {
-                    lastUndo = null; bubble.Dismiss(); return false;
-                }
-                // Native editor Undo restores formatting instead of rewriting the entire rich document.
-                lastUndo = null; bubble.Dismiss();
-                INPUT[] undo = new INPUT[] { Key(VK_CONTROL, (char)0, 0), Key(VK_Z, (char)0, 0),
-                    Key(VK_Z, (char)0, KEYEVENTF_KEYUP), Key(VK_CONTROL, (char)0, KEYEVENTF_KEYUP) };
-                token = "";
-                return SendInput((uint)undo.Length, undo, Marshal.SizeOf(typeof(INPUT))) == undo.Length;
+                // UI Automation is cross-process: never query providers inside the keyboard hook.
+                lastUndo = null; bubble.Dismiss(); token = "";
+                UndoBridge(last);
+                return true;
             }
             EditorState e;
             if (!TryReadEditor(window, out e) || e.Focus != last.Focus || e.Start != e.End) {
@@ -425,7 +497,7 @@ namespace ClipwarpRightLang
                 if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN) {
                     // A non-activating preview button must not erase its own pending action.
                     if (!bubble.Visible || !bubble.Bounds.Contains(Cursor.Position)) {
-                        token = ""; lastUndo = null; CancelPreview();
+                        token = ""; Interlocked.Increment(ref bridgeSerial); lastUndo = null; CancelPreview();
                     }
                 }
             }
@@ -442,7 +514,7 @@ namespace ClipwarpRightLang
             {
                 if (mode == "off") { token = ""; CancelPreview(); lastUndo = null; return CallNextHookEx(hook, code, message, data); }
                 IntPtr window = GetForegroundWindow();
-                if (window != previousWindow) { token = ""; CancelPreview(); lastUndo = null; previousWindow = window; }
+                if (window != previousWindow) { token = ""; Interlocked.Increment(ref bridgeSerial); CancelPreview(); lastUndo = null; previousWindow = window; }
                 uint pid;
                 uint thread = GetWindowThreadProcessId(window, out pid);
                 string processName;
@@ -459,6 +531,7 @@ namespace ClipwarpRightLang
                         ApplyPreview(); return new IntPtr(1);
                     }
                     if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU && vk != VK_CAPITAL) {
+                        Interlocked.Increment(ref bridgeSerial);
                         CancelPreview();
                         token = "";
                     }
@@ -483,7 +556,10 @@ namespace ClipwarpRightLang
                     return CallNextHookEx(hook, code, message, data);
                 }
                 if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU && vk != VK_CAPITAL
-                    && vk != VK_F8) { lastUndo = null; if (pending == null) bubble.Dismiss(); }
+                    && vk != VK_F8) {
+                    Interlocked.Increment(ref bridgeSerial);
+                    lastUndo = null; if (pending == null) bubble.Dismiss();
+                }
                 if (ctrl || alt || KeyHeld(VK_LWIN) || KeyHeld(VK_RWIN))
                 { token = ""; return CallNextHookEx(hook, code, message, data); }
                 if (vk == VK_BACK)
