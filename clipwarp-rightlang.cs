@@ -512,6 +512,7 @@ namespace ClipwarpRightLang
         private static extern uint MapVirtualKeyEx(uint code, uint mapType, IntPtr layout);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern int ToUnicodeEx(uint vk, uint scan, byte[] keys, StringBuilder result, int size, uint flags, IntPtr layout);
+        [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint thread);
         [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vk);
         [DllImport("user32.dll")] private static extern short GetKeyState(int vk);
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
