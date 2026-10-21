@@ -16,6 +16,8 @@ try {
     Assert-Equal $false $default.editorBridgeEnabled 'experimental editors default to off'
     Assert-Equal $false $default.learnAccepted 'learning disabled until explicitly enabled'
     Assert-Equal $false $default.darkMode 'light mode remains default'
+    Assert-Equal $false $default.smartSuggestions 'passive suggestions disabled until enabled'
+    Assert-Equal $false $default.undoHistory 'undo history is opt-in and memory-only'
     Assert-Equal $true ($default.allowedApps -contains 'notepad') 'allowed apps are explicitly scoped'
     Assert-Equal $true ($default.blockedApps -contains 'bitwarden') 'password manager excluded'
 
@@ -38,14 +40,26 @@ try {
     $optIn.editorBridgeEnabled = $true
     $optIn.darkMode = $true
     $optIn.learnAccepted = $true
+    $optIn.smartSuggestions = $true
+    $optIn.undoHistory = $true
     [void](Save-ClipwarpRightLangConfig -Settings $optIn -ConfigPath $path)
     $opts = Get-ClipwarpRightLangConfig -ConfigPath $path
     Assert-Equal $true $opts.editorBridgeEnabled 'explicit UI Automation opt-in persisted'
     Assert-Equal $true $opts.darkMode 'Dark Mode setting persisted'
     Assert-Equal $true $opts.learnAccepted 'learning opt-in persisted'
+    Assert-Equal $true $opts.smartSuggestions 'passive suggestions opt-in persisted'
+    Assert-Equal $true $opts.undoHistory 'memory-only history preference persisted'
     Assert-Equal $true (Add-ClipwarpRightLangLearnedWord -Typed 'misspelling' -Corrected 'คำที่ยืนยัน' -ConfigPath $path) 'confirmed word can be learned'
     $learned = Get-ClipwarpRightLangConfig -ConfigPath $path
     Assert-Equal 'คำที่ยืนยัน' $learned.instant['misspelling'] 'confirmed correction remembered'
+    Assert-Equal $true ($learned.learnedKeys -contains 'misspelling') 'learned correction distinguished from user rules'
+    Assert-Equal $false ($learned.learnedKeys -contains 'example') 'explicit instant rule not marked as learned'
+    Assert-Equal $true (Remove-ClipwarpRightLangLearnedWord -Typed 'misspelling' -ConfigPath $path) 'individual learned word can be removed'
+    Assert-Equal $false ((Get-ClipwarpRightLangConfig -ConfigPath $path).instant.Contains('misspelling')) 'deleted learned correction no longer active'
+    Assert-Equal $true ((Get-ClipwarpRightLangConfig -ConfigPath $path).instant.Contains('example')) 'explicit correction survives learned deletion'
+    Assert-Equal $true (Add-ClipwarpRightLangLearnedWord -Typed 'again' -Corrected 'อีกครั้ง' -ConfigPath $path) 'learn again'
+    Assert-Equal 1 (Clear-ClipwarpRightLangLearnedWords -ConfigPath $path) 'clear learned entries reports count'
+    Assert-Equal 0 @((Get-ClipwarpRightLangConfig -ConfigPath $path).learnedKeys).Count 'learned list cleared'
     $learned.learnAccepted = $false
     [void](Save-ClipwarpRightLangConfig -Settings $learned -ConfigPath $path)
     Assert-Equal $false (Add-ClipwarpRightLangLearnedWord -Typed 'ignoredword' -Corrected 'ไม่บันทึก' -ConfigPath $path) 'disabled learning ignores corrections'
