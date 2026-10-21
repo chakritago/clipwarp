@@ -87,6 +87,18 @@ Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection(('a'*6
 Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection('')) 'empty UIA selection rejected'
 Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection('a')) 'single-character UIA selection rejected'
 Write-Host 'PASS: UIA bounded selection guards for Word, VS Code and Notepad'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsWordStyleSafe($false,$false,$true,$true)) 'plain editor selection is not blocked by Word policy'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsWordStyleSafe($true,$true,$false,$false)) 'uniform Word formatting qualifies'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsWordStyleSafe($true,$true,$true,$false)) 'mixed Word runs are rejected'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsWordStyleSafe($true,$false,$false,$false)) 'unknown Word formatting fails closed'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsWordStyleSafe($true,$true,$false,$true)) 'embedded rich object is rejected'
+Write-Host 'PASS: Word format protection policy'
+Assert-True ([ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$true,$false,650,700,12000)) 'idle known word may suggest'
+Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$true,$false,1200,700,12000)) 'sensitivity delay respected'
+Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$true,$true,650,700,12000)) 'ignored suggestion rejected'
+Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$false,$false,650,700,12000)) 'disabled suggestion remains off'
+Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$true,$false,650,700,200)) 'repeat debounce respected'
+Write-Host 'PASS: passive suggestion and duplicate suppression policy'
 
 $t = New-Object ClipwarpWatch.OverlayTargetTracker
 $now = [datetime]'2026-09-08T12:00:00Z'
