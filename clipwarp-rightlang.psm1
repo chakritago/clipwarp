@@ -7,6 +7,9 @@ function Get-ClipwarpRightLangDefaults {
         instant = [ordered]@{ 'l;ylfu' = 'สวัสดี'; '-v[86I' = 'ขอบคุณ'; '้ำสสน' = 'hello' }
         words = @('สวัสดี', 'ขอบคุณ', 'ครับ', 'ค่ะ', 'วันนี้', 'ไปมา', 'hello', 'twitter', 'correct')
         allowedApps = @('notepad')
+        editorBridgeEnabled = $false
+        learnAccepted = $false
+        darkMode = $false
         blockedApps = @('keepass', 'keepassxc', 'bitwarden', '1password', 'lastpass', 'putty',
             'windowsterminal', 'powershell', 'pwsh', 'cmd', 'conhost')
     }
@@ -38,6 +41,9 @@ function Get-ClipwarpRightLangConfig {
         words = @($words)
         allowedApps = @($allowed)
         blockedApps = @($blocked)
+        editorBridgeEnabled = ($rl.editorBridgeEnabled -is [bool] -and $rl.editorBridgeEnabled)
+        learnAccepted = ($rl.learnAccepted -is [bool] -and $rl.learnAccepted)
+        darkMode = ($rl.darkMode -is [bool] -and $rl.darkMode)
     }
 }
 
@@ -55,7 +61,13 @@ function Save-ClipwarpRightLangConfig {
             if ($rules.Count -gt 1000) { throw 'Too many correction rules.' }
         }
     }
-    $normalized = [ordered]@{ mode = [string]$Settings.mode; instant = $rules }
+    $normalized = [ordered]@{
+        mode = [string]$Settings.mode
+        instant = $rules
+        editorBridgeEnabled = [bool]$Settings.editorBridgeEnabled
+        learnAccepted = [bool]$Settings.learnAccepted
+        darkMode = [bool]$Settings.darkMode
+    }
     foreach ($field in @('words','allowedApps','blockedApps')) {
         $values = @($Settings.$field | Where-Object { $_ -is [string] -and $_.Trim() })
         if ($values.Count -gt 2000) { throw "Too many $field entries." }
@@ -79,4 +91,18 @@ function Set-ClipwarpRightLangMode {
     $Mode
 }
 
-Export-ModuleMember -Function Get-ClipwarpRightLangDefaults,Get-ClipwarpRightLangConfig,Save-ClipwarpRightLangConfig,Set-ClipwarpRightLangMode
+function Add-ClipwarpRightLangLearnedWord {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$Typed,
+          [Parameter(Mandatory=$true)][string]$Corrected,
+          [string]$ConfigPath = (Get-ClipwarpDefaultConfigPath))
+    $cfg = Get-ClipwarpRightLangConfig -ConfigPath $ConfigPath
+    if (-not $cfg.learnAccepted) { return $false }
+    if ($Typed.Length -lt 2 -or $Typed.Length -gt 64 -or
+        $Corrected.Length -lt 2 -or $Corrected.Length -gt 128 -or $Typed -ceq $Corrected) { return $false }
+    if ($cfg.instant.Count -ge 1000 -and -not $cfg.instant.Contains($Typed)) { return $false }
+    $cfg.instant[$Typed] = $Corrected
+    [void](Save-ClipwarpRightLangConfig -Settings $cfg -ConfigPath $ConfigPath)
+    return $true
+}
+Export-ModuleMember -Function Get-ClipwarpRightLangDefaults,Get-ClipwarpRightLangConfig,Save-ClipwarpRightLangConfig,Set-ClipwarpRightLangMode,Add-ClipwarpRightLangLearnedWord
