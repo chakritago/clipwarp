@@ -25,7 +25,7 @@ Assert-Release ($engine.Contains('WH_KEYBOARD_LL') -and
 Assert-Release ($bridge.Contains('MaxAncestors = 4') -and
     $bridge.Contains('IsPassword') -and
     $bridge.Contains('SameSelection') -and
-    $bridge.Contains('HasUniformWordFormatting') -and
+    $bridge.Contains('TryWordStyleFingerprint') -and
     -not $bridge.Contains('Clipboard.') -and
     -not $bridge.Contains('SetValue(')) 'editor bridge is bounded, password-aware, revalidated and read-only'
 Assert-Release ($engine.Contains('if (!passive && vk == VK_RETURN') -and
@@ -39,7 +39,7 @@ Assert-Release ($watcher.Contains('[bool]$cfg.smartSuggestions') -and
 Assert-Release ($settings.Contains('คำที่เรียนรู้') -and
     $settings.Contains('Dark Mode') -and
     $settings.Contains('Set-Colors') -and
-    $settings.Contains('$form.Add_SizeChanged') -and
+    $settings.Contains('$form.Add_SizeChanged') -and $settings.Contains('High Contrast') -and
     $settings.Contains('ก่อนแก้ไข')) 'premium UI exposes theme, responsive layout and dictionary controls'
 Assert-Release ($installer.Contains('clipwarp-editor-bridge.cs') -and
     $uninstall.Contains('clipwarp-editor-bridge.cs')) 'installation and removal remain symmetrical'
