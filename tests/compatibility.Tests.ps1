@@ -80,6 +80,14 @@ Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsProfile('chrome')) 'generi
 Assert-True (-not [ClipwarpRightLang.EditorBridge]::ShouldProbe($false,'notepad',$allowedApps,$blockedApps)) 'no UIA probing without opt-in'
 Assert-True (-not [ClipwarpRightLang.EditorBridge]::ShouldProbe($true,'powershell',$allowedApps,$blockedApps)) 'blocklist excludes UIA even when enabled'
 Write-Host 'PASS: UIA opt-in policy and editor profiles'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsSingleLineSelection('l;ylfu')) 'bounded English correction selection permitted'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsSingleLineSelection('สวัสดี')) 'bounded Thai correction selection permitted'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection("hello`nworld")) 'multiline rich selection rejected'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection(('a'*65))) 'oversized UIA selection rejected'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection('')) 'empty UIA selection rejected'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection('a')) 'single-character UIA selection rejected'
+Write-Host 'PASS: UIA bounded selection guards for Word, VS Code and Notepad'
+
 $t = New-Object ClipwarpWatch.OverlayTargetTracker
 $now = [datetime]'2026-09-08T12:00:00Z'
 $t.OnForegroundChanged('pwsh','Terminal','ConsoleWindowClass',$now)
