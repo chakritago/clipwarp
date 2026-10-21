@@ -28,6 +28,20 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
     Add-Type -TypeDefinition $watchSource -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
 } else { Add-Type -TypeDefinition $watchSource -ReferencedAssemblies @('System','System.Windows.Forms','System.Drawing') }
 Write-Host 'PASS: compiled watcher C#'
+# Pure policy tests run on Windows CI without a live keyboard hook or clipboard.
+if (-not [ClipwarpRightLang.Engine]::CanCorrect('l;ylfu','สวัสดี',$true,$false,$false)) { throw 'selected text should qualify for conversion' }
+if (-not [ClipwarpRightLang.Engine]::CanCorrect('l;ylfu','สวัสดี',$false,$true,$false)) { throw 'explicit instant rule should qualify' }
+if (-not [ClipwarpRightLang.Engine]::CanCorrect('l;ylfu','สวัสดี',$false,$false,$true)) { throw 'known word should qualify' }
+if ([ClipwarpRightLang.Engine]::CanCorrect('l;ylfu','สวัสดี',$false,$false,$false)) { throw 'unknown word must not auto-convert' }
+if ([ClipwarpRightLang.Engine]::CanCorrect('password','password',$true,$true,$true)) { throw 'identity correction must be rejected' }
+if ([ClipwarpRightLang.Engine]::CanCorrect('a','บ',$true,$false,$false)) { throw 'single char correction must be rejected' }
+if ([ClipwarpRightLang.Engine]::CanCorrect(('a'*65),'คำ',$true,$false,$false)) { throw 'oversized token must be rejected' }
+if (-not [ClipwarpRightLang.Engine]::IsUndoCandidate('beforeสวัสดี',12,12,'สวัสดี')) { throw 'matching tail should permit undo' }
+if ([ClipwarpRightLang.Engine]::IsUndoCandidate('beforeสวัสดี',11,11,'สวัสดี')) { throw 'moved caret must block undo' }
+if ([ClipwarpRightLang.Engine]::IsUndoCandidate('beforeสวัสดี',6,12,'สวัสดี')) { throw 'active selection must block undo' }
+if ([ClipwarpRightLang.Engine]::IsUndoCandidate('beforeสวัสดี',12,12,'ขอบคุณ')) { throw 'changed text must block undo' }
+Write-Host 'PASS: RightLang correction and undo safety policy'
+
 
 $popupSource = Get-HereStringValue (Join-Path $root 'clipwarp-calendar-popup.ps1') 'public static class ClipwarpPopupNative'
 Add-Type -TypeDefinition $popupSource
