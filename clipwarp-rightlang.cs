@@ -32,6 +32,18 @@ namespace ClipwarpRightLang
         private string token = "";
         private bool editorBridgeEnabled = false;
         private bool learnAccepted = false;
+        private bool smartSuggestions = false;
+        private bool keepUndoHistory = false;
+        private DateTime lastTypedAt = DateTime.MinValue;
+        private string lastHint = "";
+        private readonly List<string> recentCorrections = new List<string>();
+        public string[] RecentCorrections { get { return recentCorrections.ToArray(); } }
+        public void ClearRecentCorrections() { recentCorrections.Clear(); }
+        private void Remember(string source, string target) {
+            if (!keepUndoHistory) return;
+            recentCorrections.Insert(0, source + " → " + target);
+            if (recentCorrections.Count > 6) recentCorrections.RemoveAt(6);
+        }
         private int bridgeSerial;
         private int bridgeBusy;
         private PreviewRequest pending;
@@ -44,6 +56,7 @@ namespace ClipwarpRightLang
             public IntPtr Window, Focus;
             public string Source, Replacement;
             public bool IsSelection;
+            public bool Passive;
             public int SelectionStart, SelectionEnd;
             public DateTime Until;
             public EditorSnapshot Bridge;
@@ -84,9 +97,11 @@ namespace ClipwarpRightLang
                     BackColor = Color.FromArgb(48, 69, 96), ForeColor = Color.White };
                 button.FlatAppearance.BorderSize = 0; Controls.Add(button); return button;
             }
-            public void Present(string source, string corrected, bool isUndo) {
+            public void Present(string source, string corrected, bool isUndo, bool passive = false) {
                 label.Text = source + "  →  " + corrected +
-                    Environment.NewLine + (isUndo ? "F8 / คลิกเพื่อย้อนกลับ (8 วินาที)" : "Enter = ยืนยัน    Esc = ยกเลิก (6 วินาที)");
+                    Environment.NewLine + (isUndo ? "F8 / คลิกเพื่อย้อนกลับ (8 วินาที)" :
+                        passive ? "คำแนะนำ · คลิกใช้คำนี้ หรือพิมพ์ต่อเพื่อข้าม" :
+                                  "Enter = ยืนยัน    Esc = ยกเลิก (6 วินาที)");
                 apply.Visible = cancel.Visible = !isUndo;
                 undo.Visible = isUndo;
                 Point pos = Cursor.Position;
@@ -120,6 +135,7 @@ namespace ClipwarpRightLang
                     lastUndo = null;
                     if (pending == null) bubble.Dismiss();
                 }
+                CheckSmartSuggestion();
             };
             bubbleTimer.Start();
         }
@@ -127,17 +143,27 @@ namespace ClipwarpRightLang
         public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
                               IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
                               IEnumerable<string> excludedApps) {
-            Configure(selectedMode, immediateWords, knownWords, allowedApps, excludedApps, false, false);
+            Configure(selectedMode, immediateWords, knownWords, allowedApps, excludedApps, false, false, false, false);
         }
         public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
                               IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
-                              IEnumerable<string> excludedApps, bool enableEditorBridge, bool learnOnConfirm)
+                              IEnumerable<string> excludedApps, bool enableEditorBridge, bool learnOnConfirm) {
+            Configure(selectedMode, immediateWords, knownWords, allowedApps, excludedApps,
+                      enableEditorBridge, learnOnConfirm, false, false);
+        }
+        public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
+                              IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
+                              IEnumerable<string> excludedApps, bool enableEditorBridge, bool learnOnConfirm,
+                              bool enableHints, bool enableHistory)
         {
             string next = selectedMode == "auto" || selectedMode == "manual" ? selectedMode : "off";
             if (next != mode) { token = ""; Interlocked.Increment(ref bridgeSerial); CancelPreview(); lastUndo = null; }
             mode = next;
             editorBridgeEnabled = enableEditorBridge;
             learnAccepted = learnOnConfirm;
+            smartSuggestions = enableHints;
+            keepUndoHistory = enableHistory;
+            if (!enableHistory || next == "off") recentCorrections.Clear();
             instant = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (immediateWords != null)
                 foreach (KeyValuePair<string, string> kv in immediateWords)
@@ -174,7 +200,7 @@ namespace ClipwarpRightLang
         {
             if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
             if (mouseHook != IntPtr.Zero) { UnhookWindowsHookEx(mouseHook); mouseHook = IntPtr.Zero; }
-            token = ""; pending = null; lastUndo = null;
+            token = ""; pending = null; lastUndo = null; recentCorrections.Clear();
             Interlocked.Increment(ref bridgeSerial);
             bubbleTimer.Stop(); bubbleTimer.Dispose(); bubble.Dispose();
             GC.KeepAlive(proc);
@@ -232,15 +258,37 @@ namespace ClipwarpRightLang
             pending = null;
             if (lastUndo == null) bubble.Dismiss();
         }
+        private void CheckSmartSuggestion() {
+            // Passive hints never capture Enter or auto-edit text. Only show
+            // suggestions for a verified native Edit field after typing stops.
+            if (!smartSuggestions || mode != "manual" || pending != null || lastUndo != null
+                || token.Length < 2 || token == lastHint ||
+                (DateTime.UtcNow - lastTypedAt).TotalMilliseconds < 650) return;
+            IntPtr window = GetForegroundWindow();
+            if (window == IntPtr.Zero || window != previousWindow) return;
+            uint pid; GetWindowThreadProcessId(window, out pid);
+            string processName;
+            try { processName = Process.GetProcessById((int)pid).ProcessName; }
+            catch { return; }
+            if (!IsApplicationEligible(processName, allowed, excluded)) return;
+            string correction = ReplacementFor(token, false);
+            if (correction == null) return;
+            EditorState editor;
+            if (!TryReadEditor(window, out editor) ||
+                !IsUndoCandidate(editor.Text, editor.Start, editor.End, token)) return;
+            lastHint = token;
+            ShowPreview(token, correction, window, editor.Focus, false,
+                        editor.Start, editor.End, null, true);
+        }
 
         private bool ShowPreview(string source, string corrected, IntPtr window, IntPtr focus,
-                                 bool selection, int start, int end, EditorSnapshot bridge = null) {
+                                 bool selection, int start, int end, EditorSnapshot bridge = null, bool passive = false) {
             if (!CanCorrect(source, corrected, true, false, false)) return false;
             pending = new PreviewRequest { Source = source, Replacement = corrected,
-                Window = window, Focus = focus, IsSelection = selection,
+                Window = window, Focus = focus, IsSelection = selection, Passive = passive,
                 SelectionStart = start, SelectionEnd = end, Bridge = bridge,
                 Until = DateTime.UtcNow.AddSeconds(6) };
-            bubble.Present(source, corrected, false);
+            bubble.Present(source, corrected, false, passive);
             return true;
         }
 
@@ -298,6 +346,7 @@ namespace ClipwarpRightLang
                         Source = p.Source, Replacement = p.Replacement, Bridge = p.Bridge,
                         Until = DateTime.UtcNow.AddSeconds(8) };
                     bubble.Present(p.Source,p.Replacement,true);
+                    Remember(p.Source,p.Replacement);
                     if (learnAccepted && CorrectionAccepted != null) {
                         try { CorrectionAccepted(p.Source,p.Replacement); } catch { }
                     }
@@ -435,6 +484,7 @@ namespace ClipwarpRightLang
                 Replacement = replacement, HasTrailingSpace = trailingSpace, Bridge = bridge,
                 Until = DateTime.UtcNow.AddSeconds(8) };
             bubble.Present(source, replacement, true);
+            Remember(source,replacement);
             if (learnAccepted && !trailingSpace && CorrectionAccepted != null) {
                 // Persist accepted words after returning from the global keyboard hook.
                 string savedSource = source, savedReplacement = replacement;
@@ -534,14 +584,17 @@ namespace ClipwarpRightLang
                 bool ctrl = KeyHeld(VK_CONTROL), alt = KeyHeld(VK_MENU), shift = KeyHeld(VK_SHIFT);
                 if (pending != null && DateTime.UtcNow > pending.Until) CancelPreview();
                 if (pending != null) {
-                    if (vk == VK_ESCAPE) { CancelPreview(); token = ""; return new IntPtr(1); }
-                    if (vk == VK_RETURN && !ctrl && !alt && !shift) {
+                    // A smart suggestion is passive: ordinary Enter, Esc and
+                    // continued typing always reach the application.
+                    bool passive = pending.Passive;
+                    if (!passive && vk == VK_ESCAPE) { CancelPreview(); token = ""; return new IntPtr(1); }
+                    if (!passive && vk == VK_RETURN && !ctrl && !alt && !shift) {
                         ApplyPreview(); return new IntPtr(1);
                     }
                     if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU && vk != VK_CAPITAL) {
                         Interlocked.Increment(ref bridgeSerial);
                         CancelPreview();
-                        token = "";
+                        if (!passive) token = "";
                     }
                 }
                 if (vk == VK_F8 && !ctrl && !alt && !shift && lastUndo != null) {
@@ -595,6 +648,8 @@ namespace ClipwarpRightLang
                         token = (token + result[0]);
                     else token = "";
                     if (token.Length > 64) token = "";
+                    lastTypedAt = DateTime.UtcNow;
+                    if (token != lastHint) lastHint = "";
                 }
             }
             catch { token = ""; } // never block the originating keystroke if inspection fails
