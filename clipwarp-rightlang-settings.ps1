@@ -1,4 +1,4 @@
-# Windows-only settings UI for ClipWarp's original RightLang-inspired feature.
+﻿# Windows-only settings UI for ClipWarp's original RightLang-inspired feature.
 [CmdletBinding()]
 param()
 Add-Type -AssemblyName System.Windows.Forms
