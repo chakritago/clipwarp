@@ -19,6 +19,7 @@ function Get-HereStringValue([string]$Path, [string]$Contains) {
 
 $watchSource = Get-HereStringValue (Join-Path $root 'clipwarp-watch.ps1') 'namespace ClipwarpWatch'
 $watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-clipboard.cs'))
+$watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-rightlang.cs'))
 if ($PSVersionTable.PSEdition -eq 'Core') {
     # Prefer compilation contracts over runtime facades (notably System.Collections).
     $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
