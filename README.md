@@ -301,6 +301,53 @@ deliberately excluded. A passing CI build **does not** mean real Notepad/Word/
 browser integration has passed. Until both paths are confirmed on Windows,
 the feature is maintained in Draft PR #1 rather than merged into main.
 
+#### Settings 2.0 and optional modern editor bridge
+
+The RightLang settings window is now in **Thai** with an explicit **Dark Mode**
+switch and a responsive five-tab layout. The **ก่อน / หลัง** tab shows the
+source and converted text side-by-side and lets you clear the preview without
+modifying any application. The current Windows TH/EN layout is displayed at
+the top. Changes are saved to local ClipWarp configuration only.
+
+**Selection correction in modern Notepad, Word and VS Code** uses a new
+experimental, **opt-in** Windows UI Automation TextPattern adapter, where
+that app/version exposes a readable selection. It never reads the clipboard or
+rewrites the entire rich-text document. It checks process identity, UIA focus,
+password status, a single selected text range (2–64 characters), and matching
+selection immediately before injection. Unrecognized providers fail closed.
+The UIA work runs on a separate STA worker thread to avoid blocking the
+low-level keyboard hook.
+
+**Important:** TextPattern is a read-only API, not an editor write API.
+Replacing a selection by Unicode keystrokes generally preserves text
+outside the selected range, but it **may change formatting inside the
+replacement**, especially in Word. A native Ctrl+Z undo is attempted only
+after verifying an unchanged caret context using TextPattern, and can be
+unavailable when providers do not support character-level range navigation.
+VS Code requires a compatible accessibility provider; modern Notepad
+builds vary. Do not enable for production documents until verified locally.
+
+With **เรียนรู้เมื่อผู้ใช้ยืนยัน** turned on, accepting a manual correction
+with Enter or the preview button saves the exact typed→corrected mapping in
+the local `rightlang.instant` dictionary for later automatic correction.
+It is **disabled by default** because saving such mappings can retain
+sensitive typed words on disk. Learned entries can be edited or cleared in
+the **คำแก้ไขทันที** tab. The floating suggestion now offers clickable
+**ใช้คำนี้**, **ยกเลิก**, and **ย้อนกลับ**, without stealing focus.
+
+Run the real desktop test harness with the editor bridge explicitly enabled:
+
+```powershell
+powershell.exe -NoProfile -Sta -ExecutionPolicy Bypass -File .\tests\rightlang-interactive.ps1 -EditorBridge
+```
+
+Verify real physical keyboard input, selected text, formatting outside the
+selection, preview cancellation, native Undo, password rejection and app
+compatibility in each installed editor. The test harness writes a JSON
+checklist of manually confirmed scenarios to the user's temp directory,
+without recording the test text. CI cannot prove real interactive hardware,
+Word/VS Code installation, or rich-text formatting preservation.
+
 ### Tray icon menu
 
 While the watcher runs, its system-tray icon menu exposes every command:
