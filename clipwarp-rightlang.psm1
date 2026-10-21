@@ -10,6 +10,8 @@ function Get-ClipwarpRightLangDefaults {
         editorBridgeEnabled = $false
         learnAccepted = $false
         darkMode = $false
+        highContrast = $false
+        uiFontSize = 11
         smartSuggestions = $false
         suggestionDelayMs = 650
         suggestionCooldownMs = 5000
@@ -51,6 +53,8 @@ function Get-ClipwarpRightLangConfig {
         editorBridgeEnabled = ($rl.editorBridgeEnabled -is [bool] -and $rl.editorBridgeEnabled)
         learnAccepted = ($rl.learnAccepted -is [bool] -and $rl.learnAccepted)
         darkMode = ($rl.darkMode -is [bool] -and $rl.darkMode)
+        highContrast = ($rl.highContrast -is [bool] -and $rl.highContrast)
+        uiFontSize = if ($rl.uiFontSize -ge 10 -and $rl.uiFontSize -le 18) { [int]$rl.uiFontSize } else { 11 }
         smartSuggestions = ($rl.smartSuggestions -is [bool] -and $rl.smartSuggestions)
         suggestionDelayMs = if ($rl.suggestionDelayMs -ge 350 -and $rl.suggestionDelayMs -le 2000) { [int]$rl.suggestionDelayMs } else { 650 }
         suggestionCooldownMs = if ($rl.suggestionCooldownMs -ge 500 -and $rl.suggestionCooldownMs -le 120000) { [int]$rl.suggestionCooldownMs } else { 5000 }
@@ -81,6 +85,8 @@ function Save-ClipwarpRightLangConfig {
         editorBridgeEnabled = [bool]$Settings.editorBridgeEnabled
         learnAccepted = [bool]$Settings.learnAccepted
         darkMode = [bool]$Settings.darkMode
+        highContrast = [bool]$Settings.highContrast
+        uiFontSize = 11
         smartSuggestions = [bool]$Settings.smartSuggestions
         suggestionDelayMs = 650
         suggestionCooldownMs = 5000
@@ -90,7 +96,8 @@ function Save-ClipwarpRightLangConfig {
     foreach ($setting in @(
         @{ Name = 'suggestionDelayMs'; Min = 350; Max = 2000 },
         @{ Name = 'suggestionCooldownMs'; Min = 500; Max = 120000 },
-        @{ Name = 'learningLimit'; Min = 10; Max = 500 }
+        @{ Name = 'learningLimit'; Min = 10; Max = 500 },
+        @{ Name = 'uiFontSize'; Min = 10; Max = 18 }
     )) {
         $val = $Settings.($setting.Name)
         if ($null -ne $val -and [string]$val -match '^\d+ | Where-Object {
