@@ -8,13 +8,18 @@ namespace ClipwarpRightLang
     using System.Diagnostics;
     using System.Runtime.InteropServices;
     using System.Text;
+    using System.Windows.Forms;
+    using System.Drawing;
     public sealed class Engine : IDisposable
     {
         private const int WH_MOUSE_LL = 14, WM_LBUTTONDOWN = 0x0201, WM_RBUTTONDOWN = 0x0204, WM_MBUTTONDOWN = 0x0207;
         private const int WH_KEYBOARD_LL = 13, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
         private const int VK_BACK = 0x08, VK_TAB = 0x09, VK_RETURN = 0x0D, VK_SPACE = 0x20;
         private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12;
-        private const int VK_CAPITAL = 0x14, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
+        private const int VK_CAPITAL = 0x14, VK_ESCAPE = 0x1B, VK_F8 = 0x77;
+        private const int VK_LWIN = 0x5B, VK_RWIN = 0x5C;
+        private const uint WM_GETTEXT = 0x000D, WM_GETTEXTLENGTH = 0x000E, EM_GETSEL = 0x00B0, EM_GETPASSWORDCHAR = 0x00D2;
+        private const uint SMTO_ABORTIFHUNG = 0x0002, GWL_STYLE = 0xFFFFFFF0, ES_PASSWORD = 0x0020;
         private const uint KEYEVENTF_KEYUP = 2, KEYEVENTF_UNICODE = 4;
         private const uint LLKHF_INJECTED = 0x10;
         private delegate IntPtr KeyboardProc(int code, IntPtr message, IntPtr data);
@@ -24,6 +29,51 @@ namespace ClipwarpRightLang
         private IntPtr mouseHook;
         private IntPtr previousWindow;
         private string token = "";
+        private PreviewRequest pending;
+        private UndoRequest lastUndo;
+        private PreviewBubble bubble;
+        private Timer bubbleTimer;
+        private const int MaxText = 4096;
+        private const int MaxToken = 64;
+        private sealed class PreviewRequest {
+            public IntPtr Window, Focus;
+            public string Source, Replacement;
+            public bool IsSelection;
+            public int SelectionStart, SelectionEnd;
+            public DateTime Until;
+        }
+        private sealed class UndoRequest {
+            public IntPtr Window, Focus;
+            public string Source, Replacement;
+            public DateTime Until;
+        }
+        private sealed class PreviewBubble : Form {
+            readonly Label label;
+            protected override bool ShowWithoutActivation { get { return true; } }
+            protected override CreateParams CreateParams {
+                get { CreateParams p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x00000080; return p; }
+            }
+            public PreviewBubble() {
+                FormBorderStyle = FormBorderStyle.None;
+                ShowInTaskbar = false; TopMost = true; AutoScaleMode = AutoScaleMode.Dpi;
+                BackColor = Color.FromArgb(30, 37, 51);
+                Size = new Size(380, 110);
+                label = new Label { Dock = DockStyle.Fill, ForeColor = Color.White,
+                    Font = new Font("Segoe UI", 10.5f), TextAlign = ContentAlignment.MiddleLeft,
+                    Padding = new Padding(14), AutoEllipsis = true };
+                Controls.Add(label);
+            }
+            public void Present(string source, string corrected, string command) {
+                label.Text = source + "  →  " + corrected + Environment.NewLine + command;
+                Point pos = Cursor.Position;
+                Rectangle work = Screen.FromPoint(pos).WorkingArea;
+                Location = new Point(Math.Min(work.Right - Width, Math.Max(work.Left, pos.X + 12)),
+                                     Math.Min(work.Bottom - Height, Math.Max(work.Top, pos.Y + 18)));
+                if (!Visible) Show();
+                else { TopMost = true; Invalidate(); }
+            }
+            public void Dismiss() { if (Visible) Hide(); }
+        }
         private string mode = "manual";
         private Dictionary<string, string> instant = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> words = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -31,14 +81,27 @@ namespace ClipwarpRightLang
         private HashSet<string> excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public bool Installed { get { return hook != IntPtr.Zero; } }
 
-        public Engine() { proc = OnKeyboard; mouseProc = OnMouse; }
+        public Engine() {
+            proc = OnKeyboard; mouseProc = OnMouse;
+            bubble = new PreviewBubble();
+            bubbleTimer = new Timer();
+            bubbleTimer.Interval = 250;
+            bubbleTimer.Tick += delegate {
+                if (pending != null && DateTime.UtcNow > pending.Until) CancelPreview();
+                if (lastUndo != null && DateTime.UtcNow > lastUndo.Until) {
+                    lastUndo = null;
+                    if (pending == null) bubble.Dismiss();
+                }
+            };
+            bubbleTimer.Start();
+        }
 
         public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
                               IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
                               IEnumerable<string> excludedApps)
         {
             string next = selectedMode == "auto" || selectedMode == "manual" ? selectedMode : "off";
-            if (next != mode) token = "";
+            if (next != mode) { token = ""; CancelPreview(); lastUndo = null; }
             mode = next;
             instant = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (immediateWords != null)
@@ -76,7 +139,8 @@ namespace ClipwarpRightLang
         {
             if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
             if (mouseHook != IntPtr.Zero) { UnhookWindowsHookEx(mouseHook); mouseHook = IntPtr.Zero; }
-            token = "";
+            token = ""; pending = null; lastUndo = null;
+            bubbleTimer.Stop(); bubbleTimer.Dispose(); bubble.Dispose();
             GC.KeepAlive(proc);
             GC.KeepAlive(mouseProc);
         }
@@ -113,13 +177,164 @@ namespace ClipwarpRightLang
             return result.ToString();
         }
 
+        public static bool CanCorrect(string source, string target, bool selected, bool explicitRule, bool knownWord) {
+            return !string.IsNullOrEmpty(source) && source.Length >= 2 && source.Length <= MaxToken
+                && !string.IsNullOrEmpty(target) && target.Length <= 128 && source != target
+                && (selected || explicitRule || knownWord);
+        }
+
+        private string ReplacementFor(string source, bool forced) {
+            if (string.IsNullOrEmpty(source) || source.Length > MaxToken) return null;
+            string correction;
+            bool rule = instant.TryGetValue(source, out correction);
+            if (!rule) correction = ConvertLayout(source);
+            if (!CanCorrect(source, correction, forced, rule, correction != null && words.Contains(correction))) return null;
+            return correction;
+        }
+
+        private void CancelPreview() {
+            pending = null;
+            if (lastUndo == null) bubble.Dismiss();
+        }
+
+        private bool ShowPreview(string source, string corrected, IntPtr window, IntPtr focus,
+                                 bool selection, int start, int end) {
+            if (!CanCorrect(source, corrected, true, false, false)) return false;
+            pending = new PreviewRequest { Source = source, Replacement = corrected,
+                Window = window, Focus = focus, IsSelection = selection,
+                SelectionStart = start, SelectionEnd = end,
+                Until = DateTime.UtcNow.AddSeconds(6) };
+            bubble.Present(source, corrected, "Enter = Apply     Esc = Cancel");
+            return true;
+        }
+
+        private bool ApplyPreview() {
+            PreviewRequest p = pending; pending = null;
+            bubble.Dismiss();
+            if (p == null || DateTime.UtcNow > p.Until || GetForegroundWindow() != p.Window) return false;
+            EditorState check;
+            if (!TryReadEditor(p.Window, out check) || check.Focus != p.Focus) return false;
+            if (p.IsSelection) {
+                if (check.Start != p.SelectionStart || check.End != p.SelectionEnd
+                    || check.Text.Substring(check.Start, check.End - check.Start) != p.Source) return false;
+                return ReplaceText(p.Source, p.Replacement, p.Window, p.Focus, true);
+            }
+            // The original token must still appear immediately before the caret.
+            if (check.Start != check.End || check.Start < p.Source.Length ||
+                check.Text.Substring(check.Start - p.Source.Length, p.Source.Length) != p.Source) return false;
+            return ReplaceText(p.Source, p.Replacement, p.Window, p.Focus, false);
+        }
+
+        private sealed class EditorState {
+            public IntPtr Focus;
+            public string Text;
+            public int Start, End;
+        }
+        // Cross-process read is bounded (4 Ki UTF-16 chars), timed out and limited
+        // to documented native Edit controls. Never use the clipboard for selection.
+        private static bool TryReadEditor(IntPtr window, out EditorState state) {
+            state = null;
+            uint pid;
+            uint thread = GetWindowThreadProcessId(window, out pid);
+            if (thread == 0) return false;
+            GUITHREADINFO info = new GUITHREADINFO(); info.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+            if (!GetGUIThreadInfo(thread, ref info) || info.hwndFocus == IntPtr.Zero) return false;
+            IntPtr focus = info.hwndFocus;
+            StringBuilder cls = new StringBuilder(128);
+            if (GetClassName(focus, cls, cls.Capacity) < 1 || !cls.ToString().Equals("Edit", StringComparison.OrdinalIgnoreCase)) return false;
+            if ((GetWindowLongPtrSafe(focus, -16).ToInt64() & ES_PASSWORD) != 0) return false;
+            IntPtr reply;
+            if (SendMessageTimeout(focus, EM_GETPASSWORDCHAR, IntPtr.Zero, IntPtr.Zero,
+                                   SMTO_ABORTIFHUNG, 80, out reply) == IntPtr.Zero || reply != IntPtr.Zero) return false;
+            if (SendMessageTimeout(focus, WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero,
+                                   SMTO_ABORTIFHUNG, 80, out reply) == IntPtr.Zero) return false;
+            long length = reply.ToInt64();
+            if (length < 0 || length > MaxText) return false;
+            if (SendMessageTimeout(focus, EM_GETSEL, IntPtr.Zero, IntPtr.Zero,
+                                   SMTO_ABORTIFHUNG, 80, out reply) == IntPtr.Zero) return false;
+            long packed = reply.ToInt64();
+            int start = (int)(packed & 0xffff), end = (int)((packed >> 16) & 0xffff);
+            if (end < start || end > length) return false;
+            StringBuilder textBuffer = new StringBuilder((int)length + 1);
+            if (SendMessageTimeoutText(focus, WM_GETTEXT, new IntPtr(length + 1), textBuffer,
+                                       SMTO_ABORTIFHUNG, 80, out reply) == IntPtr.Zero) return false;
+            string text = textBuffer.ToString();
+            if (text.Length != length) return false;
+            state = new EditorState { Focus = focus, Text = text, Start = start, End = end };
+            return true;
+        }
+        private static IntPtr GetWindowLongPtrSafe(IntPtr h, int index) {
+            return IntPtr.Size == 8 ? GetWindowLongPtr(h, index) : new IntPtr(GetWindowLong(h, index));
+        }
+        private bool ShowSelectionPreview(IntPtr window) {
+            EditorState e;
+            if (!TryReadEditor(window, out e)) return false;
+            int count = e.End - e.Start;
+            if (count < 2 || count > MaxToken) return false;
+            string source = e.Text.Substring(e.Start, count);
+            string correction = ReplacementFor(source, true);
+            return correction != null && ShowPreview(source, correction, window, e.Focus, true, e.Start, e.End);
+        }
+        private bool ShowTokenPreview(IntPtr window) {
+            string correction = ReplacementFor(token, true);
+            if (correction == null) return false;
+            EditorState e;
+            if (!TryReadEditor(window, out e) || e.Start != e.End || e.Start < token.Length ||
+                e.Text.Substring(e.Start - token.Length, token.Length) != token) return false;
+            return ShowPreview(token, correction, window, e.Focus, false, e.Start, e.End);
+        }
+        private bool ReplaceText(string source, string replacement, IntPtr window, IntPtr focus, bool selection) {
+            if (GetForegroundWindow() != window) return false;
+            List<INPUT> events = new List<INPUT>();
+            if (!selection)
+                for (int i = 0; i < source.Length; i++) {
+                    events.Add(Key(VK_BACK, 0, 0)); events.Add(Key(VK_BACK, 0, KEYEVENTF_KEYUP));
+                }
+            foreach (char c in replacement) {
+                events.Add(Key(0, c, KEYEVENTF_UNICODE));
+                events.Add(Key(0, c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+            }
+            INPUT[] keys = events.ToArray();
+            if (SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT))) != keys.Length) {
+                token = ""; lastUndo = null; return false;
+            }
+            token = "";
+            lastUndo = new UndoRequest { Window = window, Focus = focus, Source = source,
+                Replacement = replacement, Until = DateTime.UtcNow.AddSeconds(8) };
+            bubble.Present(source, replacement, "Applied ✓    F8 = Undo (8s)");
+            return true;
+        }
+        private bool UndoLast(IntPtr window) {
+            UndoRequest last = lastUndo;
+            if (last == null || DateTime.UtcNow > last.Until || last.Window != window) return false;
+            EditorState e;
+            if (!TryReadEditor(window, out e) || e.Focus != last.Focus || e.Start != e.End ||
+                e.Start < last.Replacement.Length ||
+                e.Text.Substring(e.Start - last.Replacement.Length, last.Replacement.Length) != last.Replacement) {
+                lastUndo = null; bubble.Dismiss(); return false;
+            }
+            lastUndo = null;
+            bubble.Dismiss();
+            List<INPUT> events = new List<INPUT>();
+            for (int i = 0; i < last.Replacement.Length; i++) {
+                events.Add(Key(VK_BACK, 0, 0)); events.Add(Key(VK_BACK, 0, KEYEVENTF_KEYUP));
+            }
+            foreach (char c in last.Source) {
+                events.Add(Key(0, c, KEYEVENTF_UNICODE));
+                events.Add(Key(0, c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+            }
+            INPUT[] keys = events.ToArray();
+            token = "";
+            return SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT))) == keys.Length;
+        }
+
         private IntPtr OnMouse(int code, IntPtr message, IntPtr data)
         {
             if (code >= 0)
             {
                 int msg = message.ToInt32();
                 if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN)
-                    token = "";
+                { token = ""; lastUndo = null; CancelPreview(); }
             }
             return CallNextHookEx(mouseHook, code, message, data);
         }
@@ -132,18 +347,30 @@ namespace ClipwarpRightLang
             if ((entry.flags & LLKHF_INJECTED) != 0) return CallNextHookEx(hook, code, message, data);
             try
             {
-                if (mode == "off") { token = ""; return CallNextHookEx(hook, code, message, data); }
+                if (mode == "off") { token = ""; CancelPreview(); lastUndo = null; return CallNextHookEx(hook, code, message, data); }
                 IntPtr window = GetForegroundWindow();
-                if (window != previousWindow) { token = ""; previousWindow = window; }
+                if (window != previousWindow) { token = ""; CancelPreview(); lastUndo = null; previousWindow = window; }
                 uint pid;
                 uint thread = GetWindowThreadProcessId(window, out pid);
                 string processName;
                 try { processName = Process.GetProcessById((int)pid).ProcessName; }
                 catch { token = ""; return CallNextHookEx(hook, code, message, data); }
                 if (!allowed.Contains(processName) || excluded.Contains(processName))
-                { token = ""; return CallNextHookEx(hook, code, message, data); }
+                { token = ""; CancelPreview(); lastUndo = null; return CallNextHookEx(hook, code, message, data); }
                 int vk = (int)entry.vkCode;
                 bool ctrl = KeyHeld(VK_CONTROL), alt = KeyHeld(VK_MENU), shift = KeyHeld(VK_SHIFT);
+                if (pending != null) {
+                    if (vk == VK_ESCAPE) { CancelPreview(); token = ""; return new IntPtr(1); }
+                    if (vk == VK_RETURN && !ctrl && !alt && !shift) {
+                        ApplyPreview(); return new IntPtr(1);
+                    }
+                    if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU && vk != VK_CAPITAL)
+                        CancelPreview();
+                }
+                if (vk == VK_F8 && !ctrl && !alt && !shift && lastUndo != null) {
+                    bool undone = UndoLast(window);
+                    if (undone) return new IntPtr(1);
+                }
                 if (ctrl && vk == VK_CAPITAL && !alt)
                 {
                     mode = mode == "auto" ? "manual" : "auto";
@@ -151,12 +378,16 @@ namespace ClipwarpRightLang
                     if (ModeToggled != null) ModeToggled(mode);
                     return new IntPtr(1);
                 }
+                if (shift && vk == VK_CAPITAL && !ctrl && !alt) {
+                    if (ShowSelectionPreview(window)) { token = ""; return new IntPtr(1); }
+                }
                 if ((shift && vk == VK_BACK && !ctrl && !alt) ||
-                    (ctrl && alt && vk == (int)'R'))
-                {
-                    if (ReplaceToken(true)) return new IntPtr(1);
+                    (ctrl && alt && vk == (int)'R')) {
+                    if (ShowTokenPreview(window)) return new IntPtr(1);
                     return CallNextHookEx(hook, code, message, data);
                 }
+                if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU && vk != VK_CAPITAL
+                    && vk != VK_F8 && vk != VK_SPACE) { lastUndo = null; bubble.Dismiss(); }
                 if (ctrl || alt || KeyHeld(VK_LWIN) || KeyHeld(VK_RWIN))
                 { token = ""; return CallNextHookEx(hook, code, message, data); }
                 if (vk == VK_BACK)
@@ -165,7 +396,7 @@ namespace ClipwarpRightLang
                 }
                 else if (vk == VK_SPACE || vk == VK_RETURN || vk == VK_TAB)
                 {
-                    if (mode == "auto" && vk == VK_SPACE) ReplaceToken(false);
+                    if (mode == "auto" && vk == VK_SPACE) ReplaceToken(false, window);
                     token = "";
                 }
                 else if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU || vk == VK_CAPITAL) { }
@@ -192,28 +423,13 @@ namespace ClipwarpRightLang
 
         public event Action<string> ModeToggled;
 
-        private bool ReplaceToken(bool forced)
-        {
-            if (token.Length < 2 || token.Length > 64) return false;
-            string replacement;
-            if (!instant.TryGetValue(token, out replacement))
-            {
-                replacement = ConvertLayout(token);
-                if (replacement == null || (!forced && !words.Contains(replacement))) return false;
-            }
-            if (replacement == token || string.IsNullOrEmpty(replacement)) return false;
-            List<INPUT> events = new List<INPUT>();
-            for (int i = 0; i < token.Length; i++) { events.Add(Key(VK_BACK, 0, 0)); events.Add(Key(VK_BACK, 0, KEYEVENTF_KEYUP)); }
-            foreach (char ch in replacement)
-            {
-                events.Add(Key(0, ch, KEYEVENTF_UNICODE));
-                events.Add(Key(0, ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
-            }
-            INPUT[] sequence = events.ToArray();
-            uint sent = SendInput((uint)sequence.Length, sequence, Marshal.SizeOf(typeof(INPUT)));
-            if (sent != sequence.Length) { token = ""; return false; }
-            token = "";
-            return true;
+        private bool ReplaceToken(bool forced, IntPtr window) {
+            string replacement = ReplacementFor(token, forced);
+            if (replacement == null) return false;
+            EditorState e;
+            if (!TryReadEditor(window, out e) || e.Start != e.End || e.Start < token.Length
+                || e.Text.Substring(e.Start - token.Length, token.Length) != token) return false;
+            return ReplaceText(token, replacement, window, e.Focus, false);
         }
 
         private static INPUT Key(int vk, char scan, uint flags)
@@ -227,12 +443,31 @@ namespace ClipwarpRightLang
         private static bool KeyHeld(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
         [StructLayout(LayoutKind.Sequential)]
+        private struct GUITHREADINFO {
+            public int cbSize; public uint flags;
+            public IntPtr hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret;
+            public RECT rcCaret;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int left, top, right, bottom; }
+        [StructLayout(LayoutKind.Sequential)]
         private struct KBDLLHOOKSTRUCT { public uint vkCode, scanCode, flags, time; public IntPtr extraInfo; }
         [StructLayout(LayoutKind.Sequential)]
         private struct KEYBDINPUT { public ushort wVk, wScan; public uint dwFlags, time; public IntPtr dwExtraInfo; }
         [StructLayout(LayoutKind.Sequential)]
         private struct INPUT { public uint type; public KEYBDINPUT ki; }
 
+        [DllImport("user32.dll")] private static extern bool GetGUIThreadInfo(uint thread, ref GUITHREADINFO info);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassName(IntPtr handle, StringBuilder name, int count);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(IntPtr h, int index);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW", SetLastError = true)]
+        private static extern IntPtr SendMessageTimeout(IntPtr h, uint message, IntPtr w, IntPtr l,
+                                                         uint flags, uint timeout, out IntPtr result);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW", SetLastError = true)]
+        private static extern IntPtr SendMessageTimeoutText(IntPtr h, uint message, IntPtr w, StringBuilder text,
+                                                             uint flags, uint timeout, out IntPtr result);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern IntPtr LoadKeyboardLayout(string layout, uint flags);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
