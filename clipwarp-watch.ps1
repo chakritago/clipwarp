@@ -1732,7 +1732,9 @@ $rightlangReload = {
         $rightlang.Configure($effectiveMode, $rules,
             [string[]]@($cfg.words), [string[]]@($cfg.allowedApps), [string[]]@($cfg.blockedApps),
             [bool]$cfg.editorBridgeEnabled, [bool]$cfg.learnAccepted,
-            [bool]$cfg.smartSuggestions, [bool]$cfg.undoHistory)
+            [bool]$cfg.smartSuggestions, [bool]$cfg.undoHistory,
+            [int]$cfg.suggestionDelayMs, [int]$cfg.suggestionCooldownMs,
+            [string[]]@($cfg.ignoredSuggestions))
     } catch {
         # No fallback to arbitrary global correction on invalid config.
         $rightlang.Configure('off', $null, $null, $null, $null)
