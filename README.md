@@ -226,6 +226,58 @@ clipwarp unautostart  # remove the login autostart
 2. Run **`cw`** (short for `clipwarp`).
 3. Switch to Claude Code and press `Ctrl+V`. Done.
 
+### Thai / English wrong-language correction (RightLang-inspired)
+
+ClipWarp includes an **independently configurable** Thai Kedmanee ↔ English keyboard correction tool.
+It is an original, local implementation inspired by the RightLang interaction model; it does
+**not** install or embed RightLang, and it does **not** claim identical language detection.
+
+From a new PowerShell window after updating:
+
+```powershell
+clipwarp rightlang status
+clipwarp rightlang settings         # graphical settings: mode, rules, words, app compatibility
+clipwarp rightlang mode manual      # default: correct only when you press a shortcut
+clipwarp rightlang mode auto        # correct matching dictionary entries on Space
+clipwarp rightlang mode off         # no observation and no hotkey correction
+```
+
+The system tray has a single **Language correction** submenu for Manual, Automatic,
+Off and Settings. Existing clipboard conversion, Google Calendar and target modes
+remain unchanged. RightLang's old installer is **not required**.
+
+- **Manual:** type a wrong-language word, then press **Shift+Backspace** or
+  **Ctrl+Alt+R** to convert that just-typed word by physical key position.
+  **Ctrl+Caps Lock** toggles between Manual and Automatic modes.
+- **Automatic:** on Space, fix an exact instant rule or a wrong-layout word whose
+  converted result is in **Custom words**. It does not perform probabilistic
+  natural-language spelling correction; arbitrary words are intentionally left alone.
+- **Instant corrections:** configure `wrong=right` lines in Settings. For example,
+  `l;ylfu=สวัสดี` or `้ำสสน=hello`.
+- **Custom words:** enter valid English/Thai words, one per line, for safe automatic
+  matching. A word is only replaced when it maps to a known word.
+- **App compatibility:** correction runs **only in allowed Windows processes**,
+  with a separate blocked list that takes precedence. Defaults: Notepad and Word;
+  password managers, terminal shells and other sensitive apps are excluded. Apps
+  not explicitly allowed are never monitored.
+- **Autostart:** the Settings checkbox controls ClipWarp's existing scheduled
+  logon task. Its language engine starts with the clipboard watcher and needs no
+  second resident program. Turning the language mode Off does not stop ClipWarp.
+- **Privacy:** only the current short typed token (at most 64 UTF-16 characters)
+  is retained in memory; it is not written to disk, uploaded or included in logs.
+  `clipwarp privacy pause` also disables correction. Exclude confidential apps
+  and password fields; detection of password inputs *inside* an allowed app is
+  not guaranteed. The safest mode is Manual with a very narrow allowlist.
+
+**Limitations:** The correction hook and injected keystrokes require a normal,
+interactive Windows desktop and matching Windows keyboard layouts. Apps using custom
+editors, elevated input, IME composition, Remote Desktop or their own key handling
+may not support replacement; it is not an accessibility API-based document editor.
+The automatic vocabulary starts intentionally small to minimize false positives.
+Selected-text conversion (the historical Shift+Caps Lock behavior) is not implemented.
+Windows 10/11 interactive end-to-end operation must still be verified on a real
+desktop; the automated suite checks source compilation and settings behavior only.
+
 ### Tray icon menu
 
 While the watcher runs, its system-tray icon menu exposes every command:
