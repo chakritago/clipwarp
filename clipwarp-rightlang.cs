@@ -299,7 +299,7 @@ namespace ClipwarpRightLang
             List<INPUT> events = new List<INPUT>();
             if (!selection)
                 for (int i = 0; i < source.Length; i++) {
-                    events.Add(Key(VK_BACK, 0, 0)); events.Add(Key(VK_BACK, 0, KEYEVENTF_KEYUP));
+                    events.Add(Key(VK_BACK, (char)0, 0)); events.Add(Key(VK_BACK, (char)0, KEYEVENTF_KEYUP));
                 }
             foreach (char c in replacement) {
                 events.Add(Key(0, c, KEYEVENTF_UNICODE));
@@ -344,17 +344,17 @@ namespace ClipwarpRightLang
             bubble.Dismiss();
             List<INPUT> events = new List<INPUT>();
             if (last.HasTrailingSpace) {
-                events.Add(Key(VK_LEFT, 0, 0)); events.Add(Key(VK_LEFT, 0, KEYEVENTF_KEYUP));
+                events.Add(Key(VK_LEFT, (char)0, 0)); events.Add(Key(VK_LEFT, (char)0, KEYEVENTF_KEYUP));
             }
             for (int i = 0; i < last.Replacement.Length; i++) {
-                events.Add(Key(VK_BACK, 0, 0)); events.Add(Key(VK_BACK, 0, KEYEVENTF_KEYUP));
+                events.Add(Key(VK_BACK, (char)0, 0)); events.Add(Key(VK_BACK, (char)0, KEYEVENTF_KEYUP));
             }
             foreach (char c in last.Source) {
                 events.Add(Key(0, c, KEYEVENTF_UNICODE));
                 events.Add(Key(0, c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
             }
             if (last.HasTrailingSpace) {
-                events.Add(Key(VK_RIGHT, 0, 0)); events.Add(Key(VK_RIGHT, 0, KEYEVENTF_KEYUP));
+                events.Add(Key(VK_RIGHT, (char)0, 0)); events.Add(Key(VK_RIGHT, (char)0, KEYEVENTF_KEYUP));
             }
             INPUT[] keys = events.ToArray();
             token = "";
