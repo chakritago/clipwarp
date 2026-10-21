@@ -223,7 +223,7 @@ $clearLearned.Text = 'ลบทั้งหมด';$clearLearned.Width=155;$clea
 $learnedLayout.Controls.Add($learnedActions,0,2)
 $learnedPage.Controls.Add($learnedLayout)
 [void]$tabs.TabPages.Add($learnedPage)
-$removedLearned = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+$removedLearned = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $learnedOriginal = @($config.learnedKeys)
 foreach($key in $learnedOriginal){
     if($config.instant.Contains($key)){
@@ -313,10 +313,12 @@ $applyTheme = {
 $darkToggle.Add_CheckedChanged($applyTheme)
 $form.Add_SizeChanged({
     $compact = $form.ClientSize.Width -lt 820
-    $heading.Font = New-Object Drawing.Font('Leelawadee UI',(if($compact){14}else{17}),[Drawing.FontStyle]::Bold)
+    $headerSize = if($compact){14}else{17}
+    $heading.Font = New-Object Drawing.Font('Leelawadee UI',$headerSize,[Drawing.FontStyle]::Bold)
     $heading.Width = [Math]::Max(360,$form.ClientSize.Width - 120)
     $tagline.Width = [Math]::Max(360,$form.ClientSize.Width - 120)
-    $shortcuts.Font = New-Object Drawing.Font('Leelawadee UI',(if($compact){9}else{10}))
+    $shortcutSize = if($compact){9}else{10}
+    $shortcuts.Font = New-Object Drawing.Font('Leelawadee UI',$shortcutSize)
     $save.Width = if($compact){155}else{175}
 })
 & $applyTheme
