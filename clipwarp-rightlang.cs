@@ -26,8 +26,6 @@ namespace ClipwarpRightLang
         private HashSet<string> words = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        private readonly IntPtr en = LoadKeyboardLayout("00000409", 0);
-        private readonly IntPtr th = LoadKeyboardLayout("0000041E", 0);
         public bool Installed { get { return hook != IntPtr.Zero; } }
 
         public Engine() { proc = OnKeyboard; }
@@ -129,7 +127,7 @@ namespace ClipwarpRightLang
                 {
                     mode = mode == "auto" ? "manual" : "auto";
                     token = "";
-                    ModeToggled?.Invoke(mode);
+                    if (ModeToggled != null) ModeToggled(mode);
                     return new IntPtr(1);
                 }
                 if ((shift && vk == VK_BACK && !ctrl && !alt) ||
