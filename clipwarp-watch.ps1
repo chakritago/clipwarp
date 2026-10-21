@@ -1728,7 +1728,8 @@ $rightlangReload = {
         $cfg = Get-ClipwarpRightLangConfig
         $rules = [System.Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($entry in $cfg.instant.GetEnumerator()) { $rules[[string]$entry.Key] = [string]$entry.Value }
-        $rightlang.Configure([string]$cfg.mode, $rules,
+        $effectiveMode = if (Get-ClipwarpPaused) { 'off' } else { [string]$cfg.mode }
+        $rightlang.Configure($effectiveMode, $rules,
             [string[]]@($cfg.words), [string[]]@($cfg.allowedApps), [string[]]@($cfg.blockedApps))
     } catch {
         # No fallback to arbitrary global correction on invalid config.
