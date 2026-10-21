@@ -107,6 +107,8 @@ namespace ClipwarpRightLang
         public Engine() {
             proc = OnKeyboard; mouseProc = OnMouse;
             bubble = new PreviewBubble();
+            // A hidden handle is required before STA workers can post BeginInvoke.
+            IntPtr uiHandle = bubble.Handle;
             bubble.ApplyClicked += delegate { ApplyPreview(); };
             bubble.CancelClicked += delegate { CancelPreview(); token = ""; };
             bubble.UndoClicked += delegate { if (lastUndo != null) UndoLast(lastUndo.Window); };
