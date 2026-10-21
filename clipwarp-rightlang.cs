@@ -36,6 +36,10 @@ namespace ClipwarpRightLang
         private bool keepUndoHistory = false;
         private DateTime lastTypedAt = DateTime.MinValue;
         private string lastHint = "";
+        private int suggestionDelayMs = 650;
+        private int suggestionCooldownMs = 5000;
+        private readonly Dictionary<string, DateTime> hintShown = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        private HashSet<string> ignoredHints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> recentCorrections = new List<string>();
         public string[] RecentCorrections { get { return recentCorrections.ToArray(); } }
         public void ClearRecentCorrections() { recentCorrections.Clear(); }
@@ -143,18 +147,27 @@ namespace ClipwarpRightLang
         public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
                               IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
                               IEnumerable<string> excludedApps) {
-            Configure(selectedMode, immediateWords, knownWords, allowedApps, excludedApps, false, false, false, false);
+            Configure(selectedMode, immediateWords, knownWords, allowedApps, excludedApps, false, false, false, false, 650, 5000, null);
         }
         public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
                               IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
                               IEnumerable<string> excludedApps, bool enableEditorBridge, bool learnOnConfirm) {
             Configure(selectedMode, immediateWords, knownWords, allowedApps, excludedApps,
-                      enableEditorBridge, learnOnConfirm, false, false);
+                      enableEditorBridge, learnOnConfirm, false, false, 650, 5000, null);
         }
         public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
                               IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
                               IEnumerable<string> excludedApps, bool enableEditorBridge, bool learnOnConfirm,
                               bool enableHints, bool enableHistory)
+        {
+            Configure(selectedMode, immediateWords, knownWords, allowedApps, excludedApps,
+                      enableEditorBridge, learnOnConfirm, enableHints, enableHistory, 650, 5000, null);
+        }
+        public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
+                              IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
+                              IEnumerable<string> excludedApps, bool enableEditorBridge, bool learnOnConfirm,
+                              bool enableHints, bool enableHistory, int delayMs, int cooldownMs,
+                              IEnumerable<string> ignoredWords)
         {
             string next = selectedMode == "auto" || selectedMode == "manual" ? selectedMode : "off";
             if (next != mode) { token = ""; Interlocked.Increment(ref bridgeSerial); CancelPreview(); lastUndo = null; }
@@ -162,6 +175,10 @@ namespace ClipwarpRightLang
             editorBridgeEnabled = enableEditorBridge;
             learnAccepted = learnOnConfirm;
             smartSuggestions = enableHints;
+            suggestionDelayMs = Math.Max(350, Math.Min(2000, delayMs));
+            suggestionCooldownMs = Math.Max(500, Math.Min(120000, cooldownMs));
+            ignoredHints = MakeSet(ignoredWords);
+            if (!enableHints || next == "off") { hintShown.Clear(); lastHint = ""; }
             keepUndoHistory = enableHistory;
             if (!enableHistory || next == "off") recentCorrections.Clear();
             instant = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -200,7 +217,7 @@ namespace ClipwarpRightLang
         {
             if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
             if (mouseHook != IntPtr.Zero) { UnhookWindowsHookEx(mouseHook); mouseHook = IntPtr.Zero; }
-            token = ""; pending = null; lastUndo = null; recentCorrections.Clear();
+            token = ""; pending = null; lastUndo = null; recentCorrections.Clear(); hintShown.Clear();
             Interlocked.Increment(ref bridgeSerial);
             bubbleTimer.Stop(); bubbleTimer.Dispose(); bubble.Dispose();
             GC.KeepAlive(proc);
@@ -258,12 +275,25 @@ namespace ClipwarpRightLang
             pending = null;
             if (lastUndo == null) bubble.Dismiss();
         }
+        public static bool ShouldSuggest(string typed, bool enabled, bool ignored,
+                                         int delayMs, double idleMs, double elapsedSincePreviousMs) {
+            return enabled && !ignored && !string.IsNullOrEmpty(typed)
+                && typed.Length >= 2 && typed.Length <= 64
+                && idleMs >= Math.Max(350,Math.Min(2000,delayMs))
+                && elapsedSincePreviousMs >= 500;
+        }
         private void CheckSmartSuggestion() {
             // Passive hints never capture Enter or auto-edit text. Only show
             // suggestions for a verified native Edit field after typing stops.
-            if (!smartSuggestions || mode != "manual" || pending != null || lastUndo != null
-                || token.Length < 2 || token == lastHint ||
-                (DateTime.UtcNow - lastTypedAt).TotalMilliseconds < 650) return;
+            if (mode != "manual" || pending != null || lastUndo != null ||
+                token == lastHint || ignoredHints.Contains(token)) return;
+            DateTime now = DateTime.UtcNow;
+            DateTime previous;
+            double elapsed = hintShown.TryGetValue(token, out previous) ?
+                (now - previous).TotalMilliseconds : Double.MaxValue;
+            if (!ShouldSuggest(token, smartSuggestions, ignoredHints.Contains(token),
+                               suggestionDelayMs, (now - lastTypedAt).TotalMilliseconds,
+                               elapsed) || elapsed < suggestionCooldownMs) return;
             IntPtr window = GetForegroundWindow();
             if (window == IntPtr.Zero || window != previousWindow) return;
             uint pid; GetWindowThreadProcessId(window, out pid);
@@ -276,6 +306,8 @@ namespace ClipwarpRightLang
             EditorState editor;
             if (!TryReadEditor(window, out editor) ||
                 !IsUndoCandidate(editor.Text, editor.Start, editor.End, token)) return;
+            if (hintShown.Count >= 128) hintShown.Clear();
+            hintShown[token] = now;
             lastHint = token;
             ShowPreview(token, correction, window, editor.Focus, false,
                         editor.Start, editor.End, null, true);
