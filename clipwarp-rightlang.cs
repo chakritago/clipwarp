@@ -231,6 +231,16 @@ namespace ClipwarpRightLang
         }
         // Cross-process read is bounded (4 Ki UTF-16 chars), timed out and limited
         // to documented native Edit controls. Never use the clipboard for selection.
+        public static bool IsSupportedEditorClass(string name) {
+            return !string.IsNullOrEmpty(name) &&
+                (name.Equals("Edit", StringComparison.OrdinalIgnoreCase) ||
+                 name.StartsWith("WindowsForms10.EDIT.", StringComparison.OrdinalIgnoreCase));
+        }
+        public static bool IsApplicationEligible(string name, ICollection<string> allowedApps,
+                                                 ICollection<string> blockedApps) {
+            if (string.IsNullOrEmpty(name) || allowedApps == null || !allowedApps.Contains(name)) return false;
+            return blockedApps == null || !blockedApps.Contains(name);
+        }
         private static bool TryReadEditor(IntPtr window, out EditorState state) {
             state = null;
             uint pid;
@@ -242,8 +252,7 @@ namespace ClipwarpRightLang
             StringBuilder cls = new StringBuilder(128);
             if (GetClassName(focus, cls, cls.Capacity) < 1) return false;
             string controlClass = cls.ToString();
-            if (!controlClass.Equals("Edit", StringComparison.OrdinalIgnoreCase) &&
-                !controlClass.StartsWith("WindowsForms10.EDIT.", StringComparison.OrdinalIgnoreCase)) return false;
+            if (!IsSupportedEditorClass(controlClass)) return false;
             if ((GetWindowLongPtrSafe(focus, -16).ToInt64() & ES_PASSWORD) != 0) return false;
             IntPtr reply;
             if (SendMessageTimeout(focus, EM_GETPASSWORDCHAR, IntPtr.Zero, IntPtr.Zero,
@@ -362,7 +371,7 @@ namespace ClipwarpRightLang
                 string processName;
                 try { processName = Process.GetProcessById((int)pid).ProcessName; }
                 catch { token = ""; return CallNextHookEx(hook, code, message, data); }
-                if (!allowed.Contains(processName) || excluded.Contains(processName))
+                if (!IsApplicationEligible(processName, allowed, excluded))
                 { token = ""; CancelPreview(); lastUndo = null; return CallNextHookEx(hook, code, message, data); }
                 int vk = (int)entry.vkCode;
                 bool ctrl = KeyHeld(VK_CONTROL), alt = KeyHeld(VK_MENU), shift = KeyHeld(VK_SHIFT);
