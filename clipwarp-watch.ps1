@@ -854,7 +854,7 @@ namespace ClipwarpWatch
                 sha.TransformBlock(data, 0, head, null, 0);
                 int tail = Math.Min(data.Length, 4096);
                 if (tail > 0 && tail < data.Length) sha.TransformBlock(data, data.Length - tail, tail, null, 0);
-                sha.TransformFinalBlock(BitConverter.GetBytes(data.Length), 0, 8);
+                sha.TransformFinalBlock(BitConverter.GetBytes((long)data.Length), 0, 8);
                 return "I:" + BitConverter.ToString(sha.Hash).Replace("-", string.Empty);
             }
         }
@@ -1711,13 +1711,41 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
     $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
     $references += @([AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator)
     $references += [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object Location | ForEach-Object Location
-    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs'))) -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
+    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs'))) -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
 }
 else {
-    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs'))) -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
+    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs'))) -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
 }
 
 $watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $configPath, $logFile)
+
+# Independent keyboard-layout correction. Mode defaults to manual and works
+# only in explicitly allowed applications; no text is saved or transmitted.
+Import-Module (Join-Path $PSScriptRoot 'clipwarp-rightlang.psm1') -Force
+$rightlang = New-Object ClipwarpRightLang.Engine
+$rightlangReload = {
+    try {
+        $cfg = Get-ClipwarpRightLangConfig
+        $rules = [System.Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($entry in $cfg.instant.GetEnumerator()) { $rules[[string]$entry.Key] = [string]$entry.Value }
+        $effectiveMode = if (Get-ClipwarpPaused) { 'off' } else { [string]$cfg.mode }
+        $rightlang.Configure($effectiveMode, $rules,
+            [string[]]@($cfg.words), [string[]]@($cfg.allowedApps), [string[]]@($cfg.blockedApps))
+    } catch {
+        # No fallback to arbitrary global correction on invalid config.
+        $rightlang.Configure('off', $null, $null, $null, $null)
+    }
+}
+& $rightlangReload
+$rightlang.add_ModeToggled({
+    param($newMode)
+    try { [void](Set-ClipwarpRightLangMode -Mode $newMode) } catch {}
+})
+$rightlang.Start()
+$rightlangTimer = New-Object System.Windows.Forms.Timer
+$rightlangTimer.Interval = 1500
+$rightlangTimer.add_Tick($rightlangReload)
+$rightlangTimer.Start()
 
 function Get-ClipwarpTrayIcon {
     param([string]$ScriptDir, [string]$ScriptsDir)
@@ -1815,6 +1843,38 @@ Start-Sleep -Milliseconds 250
         } catch { }
     })
     [void]$contextMenu.Items.Add($pauseItem)
+
+    # A compact submenu keeps the tray readable instead of adding a row of buttons.
+    $langMenu = New-Object System.Windows.Forms.ToolStripMenuItem("Language correction")
+    $langAuto = New-Object System.Windows.Forms.ToolStripMenuItem("Automatic (known words)")
+    $langManual = New-Object System.Windows.Forms.ToolStripMenuItem("Manual (shortcut)")
+    $langOff = New-Object System.Windows.Forms.ToolStripMenuItem("Off")
+    $langSettings = New-Object System.Windows.Forms.ToolStripMenuItem("Settings and dictionaries...")
+    $langAuto.add_Click({ try { [void](Set-ClipwarpRightLangMode -Mode auto); & $rightlangReload } catch {} })
+    $langManual.add_Click({ try { [void](Set-ClipwarpRightLangMode -Mode manual); & $rightlangReload } catch {} })
+    $langOff.add_Click({ try { [void](Set-ClipwarpRightLangMode -Mode off); & $rightlangReload } catch {} })
+    $langSettings.add_Click({
+        try {
+            $gui = Join-Path $PSScriptRoot 'clipwarp-rightlang-settings.ps1'
+            Start-Process powershell.exe -ArgumentList @(
+                '-NoProfile', '-Sta', '-ExecutionPolicy', 'Bypass', '-File', ("`"" + $gui + "`"")
+            ) | Out-Null
+        } catch {}
+    })
+    $langMenu.add_DropDownOpening({
+        try {
+            $selectedMode = (Get-ClipwarpRightLangConfig).mode
+            $langAuto.Checked = $selectedMode -eq 'auto'
+            $langManual.Checked = $selectedMode -eq 'manual'
+            $langOff.Checked = $selectedMode -eq 'off'
+        } catch {}
+    })
+    [void]$langMenu.DropDownItems.Add($langManual)
+    [void]$langMenu.DropDownItems.Add($langAuto)
+    [void]$langMenu.DropDownItems.Add($langOff)
+    [void]$langMenu.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+    [void]$langMenu.DropDownItems.Add($langSettings)
+    [void]$contextMenu.Items.Add($langMenu)
 
     $versionItem = New-Object System.Windows.Forms.ToolStripMenuItem("Version")
     $versionItem.add_Click({
@@ -2073,6 +2133,8 @@ $cleanupScript = {
             $trayIcon.Visible = $false
             $trayIcon.Dispose()
         }
+        if ($rightlangTimer) { $rightlangTimer.Stop(); $rightlangTimer.Dispose() }
+        if ($rightlang) { $rightlang.Dispose() }
         if ($watcher) { $watcher.Shutdown() }
         Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
         if ($ownsMutex) {

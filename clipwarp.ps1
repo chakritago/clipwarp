@@ -79,7 +79,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('convert', 'watch', 'stop', 'restart', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'history', 'recopy', 'clean', 'doctor', 'version', 'update', 'pause', 'help')]
+    [ValidateSet('convert', 'watch', 'stop', 'restart', 'status', 'autostart', 'unautostart', 'privacy', 'calendar', 'target', 'rightlang', 'history', 'recopy', 'clean', 'doctor', 'version', 'update', 'pause', 'help')]
     [string]$Command = 'convert',
     [Parameter(Position = 1)][string]$Action,
     [Parameter(Position = 2)][string]$Setting,
@@ -104,9 +104,31 @@ param(
     [Nullable[int]]$PointerY
 )
 
-if ($Command -in @('privacy','calendar','target','history','recopy','clean','doctor','version','update','pause','help')) {
+if ($Command -in @('privacy','calendar','target','rightlang','history','recopy','clean','doctor','version','update','pause','help')) {
     Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
     switch ($Command) {
+        'rightlang' {
+            Import-Module (Join-Path $PSScriptRoot 'clipwarp-rightlang.psm1') -Force -ErrorAction Stop
+            switch ($Action) {
+                'mode' {
+                    if ($Setting -notin @('auto','manual','off')) { throw 'usage: clipwarp rightlang mode auto|manual|off' }
+                    [void](Set-ClipwarpRightLangMode -Mode $Setting)
+                    Write-Host "clipwarp rightlang: $Setting" -ForegroundColor Green
+                }
+                'settings' {
+                    $gui = Join-Path $PSScriptRoot 'clipwarp-rightlang-settings.ps1'
+                    if (-not (Test-Path -LiteralPath $gui)) { throw 'RightLang settings GUI is not installed. Run install.ps1 again.' }
+                    Start-Process -FilePath 'powershell.exe' -WindowStyle Normal -ArgumentList @(
+                        '-NoProfile','-Sta','-ExecutionPolicy','Bypass','-File',("`"" + $gui + "`"")
+                    ) | Out-Null
+                }
+                { $_ -eq 'status' -or [string]::IsNullOrWhiteSpace($_) } {
+                    $cfg = Get-ClipwarpRightLangConfig
+                    Write-Host "clipwarp rightlang: $($cfg.mode); allowed apps: $($cfg.allowedApps -join ', '); shortcuts: Shift+Backspace or Ctrl+Alt+R"
+                }
+                default { throw 'usage: clipwarp rightlang status|settings|mode auto|manual|off' }
+            }
+        }
         'version' {
             Show-ClipwarpVersion -ScriptRoot $PSScriptRoot
         }

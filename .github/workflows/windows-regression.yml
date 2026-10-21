@@ -1,0 +1,21 @@
+name: ClipWarp Windows regression
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+
+permissions:
+  contents: read
+
+jobs:
+  powershell:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and test under Windows PowerShell 5.1 and PowerShell 7
+        shell: powershell
+        run: |
+          .\tests\run-all.ps1

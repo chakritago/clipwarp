@@ -226,6 +226,81 @@ clipwarp unautostart  # remove the login autostart
 2. Run **`cw`** (short for `clipwarp`).
 3. Switch to Claude Code and press `Ctrl+V`. Done.
 
+### Thai / English wrong-language correction (RightLang-inspired)
+
+This optional, **offline** keyboard helper has three independent modes: Manual
+(default), Automatic (configured dictionary words only), and Off. It is an
+original implementation. RightLang itself is **not** embedded or installed.
+
+```powershell
+clipwarp rightlang status
+clipwarp rightlang settings
+clipwarp rightlang mode manual
+clipwarp rightlang mode auto
+clipwarp rightlang mode off
+```
+
+Open **Language correction** in the tray for the same controls. The Settings app
+has a high-contrast header, a live TH/EN layout label, tabs for **Instant
+corrections**, **Custom words**, **App compatibility**, and **Try correction**,
+plus an independent Windows autostart setting.
+
+| Action | Shortcut | Effect |
+|---|---|---|
+| Preview correction for the most recently typed word | Shift+Backspace / Ctrl+Alt+R | Shows original → corrected, without changing text |
+| Preview conversion of a selection | Shift+Caps Lock | Available only in validated native Edit controls |
+| Confirm preview | Enter | Revalidates original selection, focused control and foreground app before replacing |
+| Cancel preview | Esc | Closes preview, leaves content untouched |
+| Undo the most recent replacement | F8 within 8 seconds | Verifies unchanged text immediately before caret, then restores original |
+| Toggle Manual / Automatic | Ctrl+Caps Lock | Saves mode to ClipWarp configuration |
+| Automatic mode | Type a configured wrong-layout word and Space | Corrects exact instant rules or words whose conversion is in Custom words |
+
+To avoid silently corrupting text, previews expire after **6 seconds**, Undo
+expires after **8 seconds**, and changing focus, moving the cursor, or continuing
+to type invalidates the pending change. Partial injection failures cannot always
+be rolled back; all text replacement still requires verification in your editor.
+
+**App compatibility and privacy:** Only explicitly allowed Windows processes are
+eligible. The default allowlist is **Notepad** (not every modern Notepad build is
+supported). The editor itself must also be a verified native `Edit` or WinForms
+`WindowsForms10.EDIT.*` control, with no password style. Chrome, Edge, VS Code,
+Windows Terminal, and Microsoft Word editing surfaces are **not** yet supported
+by this selected-text implementation. The blocklist takes precedence over the
+allowlist. Be especially careful with confidential apps; no automatic sensitive
+field detection can be guaranteed in third-party custom controls.
+
+The helper uses a short in-memory token (up to 64 UTF-16 characters). It never
+writes captured words to disk, uploads them, or uses the clipboard to inspect a
+selection. `clipwarp privacy pause` turns off keyboard correction together with
+the clipboard watcher processing. Off mode keeps the watcher alive for other
+ClipWarp functions but disables all correction actions. The existing ClipWarp
+autostart scheduled task starts both features at login.
+
+#### Windows verification
+
+Automated regression suite (PowerShell 5.1 and 7):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run-all.ps1
+```
+
+This compiles embedded C# and tests correction eligibility, Undo guards,
+dictionary persistence, and compatibility policy without sending real keystrokes.
+
+For **genuine hardware keystroke integration**, open an interactive Windows
+desktop with Thai Kedmanee and English keyboard layouts installed and run:
+
+```powershell
+powershell.exe -NoProfile -Sta -ExecutionPolicy Bypass -File .\tests\rightlang-interactive.ps1
+```
+
+The native-edit test window walks through Manual, selected-text conversion,
+preview cancel, Undo, automatic correction, Off, password protection, and
+compatibility. It requires a human to type the keys; synthetic input is
+deliberately excluded. A passing CI build **does not** mean real Notepad/Word/
+browser integration has passed. Until both paths are confirmed on Windows,
+the feature is maintained in Draft PR #1 rather than merged into main.
+
 ### Tray icon menu
 
 While the watcher runs, its system-tray icon menu exposes every command:
