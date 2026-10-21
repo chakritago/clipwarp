@@ -1,4 +1,4 @@
-# Independent RightLang-inspired configuration; no changes to clipboard history or publishing.
+﻿# Independent RightLang-inspired configuration; no changes to clipboard history or publishing.
 Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
 
 function Get-ClipwarpRightLangDefaults {
