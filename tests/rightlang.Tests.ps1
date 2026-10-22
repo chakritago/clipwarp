@@ -65,6 +65,17 @@ try {
     Assert-Equal $true $opts.darkMode 'Dark Mode setting persisted'
     Assert-Equal $true $opts.highContrast 'High Contrast setting persisted'
     Assert-Equal 16 $opts.uiFontSize 'Large font setting persisted'
+    Assert-Equal 19 $opts.editorFontSize 'editor font size persisted separately'
+    Assert-Equal 21 $opts.previewFontSize 'preview font size persisted separately'
+    Assert-Equal 'manual,off' $opts.appPolicies['notepad'] 'notepad mode and hint policy persisted'
+    Assert-Equal 'off,inherit' $opts.appPolicies['winword'] 'word off policy persisted'
+    $invalidPolicy=$opts
+    $invalidPolicy.appPolicies=[ordered]@{ notepad='enable_all' }
+    $caughtPolicy=$false
+    try { [void](Save-ClipwarpRightLangConfig -Settings $invalidPolicy -ConfigPath $path) } catch { $caughtPolicy=$true }
+    Assert-Equal $true $caughtPolicy 'invalid per-app policy is rejected'
+    Assert-Equal 'manual,off' (Get-ClipwarpRightLangConfig -ConfigPath $path).appPolicies['notepad'] 'invalid policy did not mutate settings'
+    $opts.appPolicies=[ordered]@{ notepad='manual,off'; winword='off,inherit' }
     Assert-Equal 1200 $opts.suggestionDelayMs 'suggestion idle delay persisted'
     Assert-Equal 15000 $opts.suggestionCooldownMs 'repeated suggestion cooldown persisted'
     Assert-Equal 10 $opts.learningLimit 'learning cap persisted'
