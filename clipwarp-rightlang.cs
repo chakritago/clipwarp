@@ -34,6 +34,8 @@ namespace ClipwarpRightLang
         private bool learnAccepted = false;
         private bool smartSuggestions = false;
         private bool keepUndoHistory = false;
+        private Dictionary<string,string> applicationPolicies = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        public event Action<string> SuggestionIgnored;
         private DateTime lastTypedAt = DateTime.MinValue;
         private string lastHint = "";
         private int suggestionDelayMs = 650;
@@ -74,8 +76,8 @@ namespace ClipwarpRightLang
         }
         private sealed class PreviewBubble : Form {
             readonly Label label;
-            readonly Button apply, cancel, undo;
-            public event Action ApplyClicked, CancelClicked, UndoClicked;
+            readonly Button apply, cancel, undo, ignore;
+            public event Action ApplyClicked, CancelClicked, UndoClicked, IgnoreClicked;
             protected override bool ShowWithoutActivation { get { return true; } }
             protected override CreateParams CreateParams {
                 get { CreateParams p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x00000080; return p; }
@@ -91,9 +93,11 @@ namespace ClipwarpRightLang
                 apply = ActionButton("ใช้คำนี้", 12);
                 cancel = ActionButton("ยกเลิก", 145);
                 undo = ActionButton("↶ ย้อนกลับ", 12);
+                ignore = ActionButton("ไม่แนะนำอีก", 278);
                 apply.Click += delegate { if (ApplyClicked != null) ApplyClicked(); };
                 cancel.Click += delegate { if (CancelClicked != null) CancelClicked(); };
                 undo.Click += delegate { if (UndoClicked != null) UndoClicked(); };
+                ignore.Click += delegate { if (IgnoreClicked != null) IgnoreClicked(); };
             }
             private Button ActionButton(string title, int x) {
                 Button button = new Button { Text = title, Location = new Point(x, 75),
@@ -107,6 +111,7 @@ namespace ClipwarpRightLang
                         passive ? "คำแนะนำ · คลิกใช้คำนี้ หรือพิมพ์ต่อเพื่อข้าม" :
                                   "Enter = ยืนยัน    Esc = ยกเลิก (6 วินาที)");
                 apply.Visible = cancel.Visible = !isUndo;
+                ignore.Visible = passive && !isUndo;
                 undo.Visible = isUndo;
                 Point pos = Cursor.Position;
                 Rectangle work = Screen.FromPoint(pos).WorkingArea;
@@ -130,6 +135,7 @@ namespace ClipwarpRightLang
             IntPtr uiHandle = bubble.Handle;
             bubble.ApplyClicked += delegate { ApplyPreview(); };
             bubble.CancelClicked += delegate { CancelPreview(); token = ""; };
+            bubble.IgnoreClicked += delegate { IgnorePendingSuggestion(); };
             bubble.UndoClicked += delegate { if (lastUndo != null) UndoLast(lastUndo.Window); };
             bubbleTimer = new System.Windows.Forms.Timer();
             bubbleTimer.Interval = 250;
@@ -169,6 +175,16 @@ namespace ClipwarpRightLang
                               bool enableHints, bool enableHistory, int delayMs, int cooldownMs,
                               IEnumerable<string> ignoredWords)
         {
+            Configure(selectedMode, immediateWords, knownWords, allowedApps, excludedApps,
+                      enableEditorBridge, learnOnConfirm, enableHints, enableHistory,
+                      delayMs, cooldownMs, ignoredWords, null);
+        }
+        public void Configure(string selectedMode, IDictionary<string, string> immediateWords,
+                              IEnumerable<string> knownWords, IEnumerable<string> allowedApps,
+                              IEnumerable<string> excludedApps, bool enableEditorBridge, bool learnOnConfirm,
+                              bool enableHints, bool enableHistory, int delayMs, int cooldownMs,
+                              IEnumerable<string> ignoredWords, IDictionary<string,string> appRules)
+        {
             string next = selectedMode == "auto" || selectedMode == "manual" ? selectedMode : "off";
             if (next != mode) { token = ""; Interlocked.Increment(ref bridgeSerial); CancelPreview(); lastUndo = null; }
             mode = next;
@@ -178,6 +194,13 @@ namespace ClipwarpRightLang
             suggestionDelayMs = Math.Max(350, Math.Min(2000, delayMs));
             suggestionCooldownMs = Math.Max(500, Math.Min(120000, cooldownMs));
             ignoredHints = MakeSet(ignoredWords);
+            applicationPolicies = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+            if (appRules != null) foreach (KeyValuePair<string,string> entry in appRules) {
+                if (string.IsNullOrWhiteSpace(entry.Key) || string.IsNullOrWhiteSpace(entry.Value)) continue;
+                string key = entry.Key.Trim().ToLowerInvariant();
+                if (!IsApplicationEligible(key, MakeSet(allowedApps), MakeSet(excludedApps))) continue;
+                if (IsValidPolicy(entry.Value)) applicationPolicies[key] = entry.Value.Trim().ToLowerInvariant();
+            }
             if (!enableHints || next == "off") { hintShown.Clear(); lastHint = ""; }
             keepUndoHistory = enableHistory;
             if (!enableHistory || next == "off") recentCorrections.Clear();
@@ -271,6 +294,16 @@ namespace ClipwarpRightLang
             return correction;
         }
 
+        private void IgnorePendingSuggestion() {
+            if (pending == null || !pending.Passive) return;
+            string ignored = pending.Source;
+            if (string.IsNullOrEmpty(ignored) || ignored.Length > MaxToken) return;
+            ignoredHints.Add(ignored);
+            CancelPreview();
+            if (SuggestionIgnored != null) {
+                try { SuggestionIgnored(ignored); } catch { }
+            }
+        }
         private void CancelPreview() {
             pending = null;
             if (lastUndo == null) bubble.Dismiss();
@@ -282,10 +315,32 @@ namespace ClipwarpRightLang
                 && idleMs >= Math.Max(350,Math.Min(2000,delayMs))
                 && elapsedSincePreviousMs >= 500;
         }
+        public static bool IsValidPolicy(string policy) {
+            if (string.IsNullOrEmpty(policy)) return false;
+            string[] flags = policy.Trim().ToLowerInvariant().Split(',');
+            if (flags.Length != 2) return false;
+            return (flags[0] == "inherit" || flags[0] == "manual" || flags[0] == "auto" || flags[0] == "off") &&
+                   (flags[1] == "inherit" || flags[1] == "on" || flags[1] == "off");
+        }
+        public static string ResolveAppMode(string globalMode, string process, IDictionary<string,string> rules) {
+            if (globalMode == "off") return "off"; // global safety switch always wins
+            string rule;
+            if (rules == null || string.IsNullOrEmpty(process) || !rules.TryGetValue(process, out rule) ||
+                !IsValidPolicy(rule)) return globalMode;
+            string requested = rule.Split(',')[0].Trim().ToLowerInvariant();
+            return requested == "inherit" ? globalMode : requested;
+        }
+        public static bool ResolveAppHints(bool globalEnabled, string process, IDictionary<string,string> rules) {
+            if (!globalEnabled) return false; // per-app setting never overrides global privacy choice
+            string rule;
+            if (rules == null || string.IsNullOrEmpty(process) || !rules.TryGetValue(process, out rule) ||
+                !IsValidPolicy(rule)) return globalEnabled;
+            return rule.Split(',')[1].Trim().ToLowerInvariant() != "off";
+        }
         private void CheckSmartSuggestion() {
             // Passive hints never capture Enter or auto-edit text. Only show
             // suggestions for a verified native Edit field after typing stops.
-            if (mode != "manual" || pending != null || lastUndo != null ||
+            if (mode == "off" || pending != null || lastUndo != null ||
                 token == lastHint || ignoredHints.Contains(token)) return;
             DateTime now = DateTime.UtcNow;
             DateTime previous;
@@ -300,7 +355,9 @@ namespace ClipwarpRightLang
             string processName;
             try { processName = Process.GetProcessById((int)pid).ProcessName; }
             catch { return; }
-            if (!IsApplicationEligible(processName, allowed, excluded)) return;
+            if (!IsApplicationEligible(processName, allowed, excluded) ||
+                ResolveAppMode(mode, processName, applicationPolicies) != "manual" ||
+                !ResolveAppHints(smartSuggestions, processName, applicationPolicies)) return;
             string correction = ReplacementFor(token, false);
             if (correction == null) return;
             EditorState editor;
@@ -610,8 +667,10 @@ namespace ClipwarpRightLang
                 string processName;
                 try { processName = Process.GetProcessById((int)pid).ProcessName; }
                 catch { token = ""; return CallNextHookEx(hook, code, message, data); }
-                if (!IsApplicationEligible(processName, allowed, excluded))
+                if (!IsApplicationEligible(processName, allowed, excluded) ||
+                    ResolveAppMode(mode, processName, applicationPolicies) == "off")
                 { token = ""; CancelPreview(); lastUndo = null; return CallNextHookEx(hook, code, message, data); }
+                string effectiveMode = ResolveAppMode(mode, processName, applicationPolicies);
                 int vk = (int)entry.vkCode;
                 bool ctrl = KeyHeld(VK_CONTROL), alt = KeyHeld(VK_MENU), shift = KeyHeld(VK_SHIFT);
                 if (pending != null && DateTime.UtcNow > pending.Until) CancelPreview();
@@ -661,7 +720,7 @@ namespace ClipwarpRightLang
                 }
                 else if (vk == VK_SPACE || vk == VK_RETURN || vk == VK_TAB)
                 {
-                    if (mode == "auto" && vk == VK_SPACE) ReplaceToken(false, window);
+                    if (effectiveMode == "auto" && vk == VK_SPACE) ReplaceToken(false, window);
                     token = "";
                 }
                 else if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU || vk == VK_CAPITAL) { }
