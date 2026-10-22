@@ -49,6 +49,9 @@ try {
     $optIn.darkMode = $true
     $optIn.highContrast = $true
     $optIn.uiFontSize = 16
+    $optIn.editorFontSize = 19
+    $optIn.previewFontSize = 21
+    $optIn.appPolicies = [ordered]@{ notepad = 'manual,off'; winword = 'off,inherit' }
     $optIn.suggestionDelayMs = 1200
     $optIn.suggestionCooldownMs = 15000
     $optIn.learningLimit = 10
