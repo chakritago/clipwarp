@@ -84,6 +84,11 @@ $instructions = @(
     '11. Switch windows during preview; ensure no text changes'
     '12. While typing rapidly, verify no hangs from global keyboard hook'
     '13. Run with -EditorBridge and verify excluded browser/password fields unchanged'
+    '14. Clipboard: text, HTML, image and another clipboard writer remain correct'
+    '15. Accessibility: keyboard Tab/F6/Ctrl+F/Ctrl+S, visible focus, high contrast'
+    '16. Scaling: editor, preview and UI font sizes independently work at 150/200% DPI'
+    '17. Per-app mode: global Off dominates and blocked apps never receive hints'
+    '18. Search and filter learned words, ignore one suggestion, preserve manual rules'
 )
 $listPanel = New-Object Windows.Forms.Panel
 $listPanel.SetBounds(18,268,810,405)
@@ -105,6 +110,15 @@ $finish.SetBounds(18,690,300,38)
 $finish.Anchor = 'Bottom,Left'
 $finish.Add_Click({
     $passCount = @($checks | Where-Object Checked).Count
+    $apps = @('notepad','winword','code') | ForEach-Object {
+        $exe = $_
+        $running = @(Get-Process -Name $exe -ErrorAction SilentlyContinue)
+        $version = if ($running.Count -gt 0) {
+            try { [string]$running[0].MainModule.FileVersionInfo.ProductVersion } catch { 'unknown' }
+        } else { 'not running' }
+        [pscustomobject]@{ Application=$exe; Running=($running.Count -gt 0); ProductVersion=$version }
+    }
+    $requiredAppsRunning = (@($apps | Where-Object { -not $_.Running }).Count -eq 0)
     $summary = [pscustomobject]@{
         TestedAt = (Get-Date).ToString('o')
         Computer = [Environment]::OSVersion.VersionString
@@ -112,12 +126,16 @@ $finish.Add_Click({
         Total = $checks.Count
         Pass = $passCount
         AllConfirmed = ($passCount -eq $checks.Count)
+        AllRequiredApplicationsRunning = $requiredAppsRunning
+        RealDesktopGateSatisfied = ($passCount -eq $checks.Count -and $requiredAppsRunning -and [bool]$EditorBridge)
+        Applications = $apps
+        EvidenceType = 'Manual attestation; no automated physical keypress verification'
         Scenarios = @($checks | ForEach-Object { [pscustomobject]@{ Name=$_.Text; Confirmed=$_.Checked } })
     }
     $outFile = Join-Path ([IO.Path]::GetTempPath()) ('clipwarp-e2e-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.json')
     [IO.File]::WriteAllText($outFile,($summary | ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
     [Windows.Forms.MessageBox]::Show(
-        "ตรวจจริงแล้ว $passCount / $($checks.Count) รายการ`nบันทึกผลที่: $outFile`nบันทึกเฉพาะผลการตรวจ ไม่บันทึกข้อความที่พิมพ์",
+        "ตรวจจริงแล้ว $passCount / $($checks.Count) รายการ`nเปิด Notepad/Word/VS Code ครบ: $requiredAppsRunning`nบันทึกผลที่: $outFile`nไม่บันทึกข้อความที่พิมพ์หรือ Clipboard",
         'Windows E2E checklist') | Out-Null
 })
 $form.Controls.Add($finish)
