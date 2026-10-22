@@ -101,6 +101,13 @@ namespace ClipwarpRightLang
                 && value.IndexOf('\0') < 0;
         }
 
+        private static object StaticValue(Type type, string name) {
+            if (type == null) return null;
+            FieldInfo field = type.GetField(name, BindingFlags.Public | BindingFlags.Static);
+            if (field != null) return field.GetValue(null);
+            PropertyInfo property = type.GetProperty(name, BindingFlags.Public | BindingFlags.Static);
+            return property == null ? null : property.GetValue(null, null);
+        }
         // Inspect formatting BEFORE editing Word; refuse selections whose style
         // could not be established reliably. This does not promise identical
         // formatting of inserted text: only the selected range is replaced.
@@ -120,10 +127,10 @@ namespace ClipwarpRightLang
             if (!string.Equals(processName, "winword", StringComparison.OrdinalIgnoreCase))
                 return true;
             try {
-                object mixed = TextType.GetField("MixedAttributeValue").GetValue(null);
-                // UI Automation's sentinel lives on AutomationElement, not TextPattern.
-                FieldInfo nsField = ElementType.GetField("NotSupported", BindingFlags.Static | BindingFlags.Public);
-                object notSupported = nsField != null ? nsField.GetValue(null) : null;
+                // Reflect the UIA sentinels from either their public field or property.
+                object mixed = StaticValue(TextType, "MixedAttributeValue");
+                object notSupported = StaticValue(ElementType, "NotSupported");
+                if (mixed == null || notSupported == null) return false;
                 System.Text.StringBuilder result = new System.Text.StringBuilder();
                 foreach (string field in WordStyleAttributes) {
                     FieldInfo info = TextType.GetField(field);
