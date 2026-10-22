@@ -46,7 +46,12 @@ try {
     Assert-Dict ($again.Added -eq 0 -and $again.Skipped -gt 0) 'duplicate import skips existing rules'
     $saved=Export-ClipwarpRightLangDictionary -Path $learned -ConfigPath $sourceCfg -LearnedOnly
     $savedDoc=Get-Content -LiteralPath $learned -Encoding UTF8 -Raw | ConvertFrom-Json
-    Assert-Dict ($saved.Kind -eq 'learned' -and $savedDoc.instant.PSObject.Properties.Count -eq 1 -and @($savedDoc.words).Count -eq 0) 'learned-only backup excludes manual rules'
+    $exportedNames=@($savedDoc.instant.PSObject.Properties | Where-Object { $_.MemberType -eq 'NoteProperty' } | ForEach-Object { $_.Name })
+    $nonemptyWords=@($savedDoc.words | Where-Object { $_ -is [string] -and $_.Length -gt 0 })
+    Assert-Dict ($saved.Kind -eq 'learned' -and $exportedNames.Count -eq 1 -and
+        $exportedNames -contains 'learned-portable-key' -and
+        $exportedNames -notcontains 'custom-portable-key' -and
+        $nonemptyWords.Count -eq 0) 'learned-only backup excludes manual rules'
     $backup=Backup-ClipwarpRightLangLearnedWords -Directory $tmp -ConfigPath $sourceCfg
     Assert-Dict (Test-Path -LiteralPath $backup.Path) 'automatic learned backup path is unique and created'
     $alreadyExists=$false
