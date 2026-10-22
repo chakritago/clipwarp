@@ -40,6 +40,39 @@ reviewed evidence for Word formatting, VS Code provider behavior, full Undo,
 Clipboard race cases, and High DPI / High Contrast. It cannot by itself
 authorize a Stable release.
 
+## v1.18 dictionary/Undo verification and evidence audit
+
+- In the **นำเข้า / สำรองคำ** settings tab export a dictionary JSON, then
+  import it into a fresh test configuration. Compare UTF-8 Thai words,
+  manually written rules and learned-word provenance. Repeat import: existing
+  rules must **not** be overwritten. Deliberately corrupt an import file:
+  no partial configuration modification is permitted.
+- Back up learned words to a temporary folder. Inspect the JSON yourself:
+  it must contain no manually written instant rules, app allow/block lists,
+  Clipboard contents or Undo history. The JSON remains **unencrypted**.
+- In each supported editor, verify single-selection correction, mouse/focus
+  cancellation, Word formatting **inside and outside** the selection, and
+  Undo only when UI Automation verified the inserted caret tail. Compare
+  the history status: *inserted/verified*, *Ctrl+Z requested/unverified*,
+  *restored/verified* — these are materially different outcomes.
+- After the manual interactive checklist, collect benign, privacy-reviewed
+  screenshots with filenames: `notepad.png`, `word.png`, `vscode.png`,
+  `clipboard.png`, `undo.png`. Do not include personal documents.
+- Run the evidence verifier **on the same Windows desktop**. For example,
+  from the repository directory, replace the two paths with the actual local
+  report and screenshot directory:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\verify-rightlang-e2e.ps1 -ReportPath "$env:TEMP\clipwarp-e2e-REPORT.json" -EvidenceDirectory "$env:USERPROFILE\Pictures\ClipWarp-E2E"
+```
+
+The evidence verifier checks the manual attestation, required app versions
+and the SHA-256 of five PNG files. It refuses GitHub Actions environments,
+sets `StableReleaseApproved=false` explicitly, and **does not independently
+prove that physical keystrokes or Ctrl+Z were performed**. An actual reviewer
+must examine the screenshots and observed outcomes before authorizing a
+Stable merge. Do not manufacture a pass if any app is not available.
+
 ## Manual matrix (not satisfied by GitHub Actions)
 
 | Application | Check | Pass requirements |
