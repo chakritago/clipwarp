@@ -2,6 +2,15 @@
 [CmdletBinding()]
 param([switch]$SelfTest)
 $ErrorActionPreference = 'Stop'
+trap {
+    if ($SelfTest) {
+        [Console]::Error.WriteLine("UI SELFTEST FAILED: " + $_.Exception.Message)
+        [Console]::Error.WriteLine($_.InvocationInfo.PositionMessage)
+        [Console]::Error.WriteLine($_.ScriptStackTrace)
+        exit 1
+    }
+    throw
+}
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Import-Module (Join-Path $PSScriptRoot 'clipwarp-rightlang.psm1') -Force
