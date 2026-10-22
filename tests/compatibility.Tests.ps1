@@ -99,6 +99,19 @@ Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$true,$true
 Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$false,$false,650,700,12000)) 'disabled suggestion remains off'
 Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$true,$false,650,700,200)) 'repeat debounce respected'
 Write-Host 'PASS: passive suggestion and duplicate suppression policy'
+$policy=[System.Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+$policy['notepad']='manual,off'
+$policy['winword']='off,inherit'
+$policy['code']='auto,on'
+Assert-True ([ClipwarpRightLang.Engine]::IsValidPolicy('auto,off')) 'valid per-app policy accepted'
+Assert-True (-not [ClipwarpRightLang.Engine]::IsValidPolicy('admin,on')) 'unknown app mode rejected'
+Assert-True ([ClipwarpRightLang.Engine]::ResolveAppMode('manual','code',$policy) -eq 'auto') 'allowed editor can opt into automatic mode'
+Assert-True ([ClipwarpRightLang.Engine]::ResolveAppMode('manual','winword',$policy) -eq 'off') 'Word policy can disable correction'
+Assert-True ([ClipwarpRightLang.Engine]::ResolveAppMode('off','code',$policy) -eq 'off') 'global Off always overrides app policy'
+Assert-True (-not [ClipwarpRightLang.Engine]::ResolveAppHints($false,'code',$policy)) 'global hint opt-out always wins'
+Assert-True (-not [ClipwarpRightLang.Engine]::ResolveAppHints($true,'notepad',$policy)) 'app hint opt-out respected'
+Assert-True ([ClipwarpRightLang.Engine]::ResolveAppHints($true,'code',$policy)) 'per-app hint setting supported'
+Write-Host 'PASS: per-app modes and global privacy precedence'
 
 $t = New-Object ClipwarpWatch.OverlayTargetTracker
 $now = [datetime]'2026-09-08T12:00:00Z'
