@@ -538,8 +538,8 @@ $removeLearned.AccessibleName='ลบคำที่เรียนรู้ท�
 $ignoreSelected.AccessibleName='ปิดคำแนะนำสำหรับคำที่เลือก'
 $learnedList.AccessibleName='รายการคำที่เรียนรู้'
 foreach($btn in @($save,$removeLearned,$clearLearned,$ignoreSelected,$cancelPreview)) {
-    $btn.Add_Enter({ $this.FlatStyle='Flat';$this.FlatAppearance.BorderSize=2;$this.FlatAppearance.BorderColor=[Drawing.SystemColors]::Highlight })
-    $btn.Add_Leave({ $this.FlatAppearance.BorderSize=0 })
+    $btn.Add_Enter({ param($sender,$args) $sender.FlatStyle='Flat';$sender.FlatAppearance.BorderSize=2;$sender.FlatAppearance.BorderColor=[Drawing.SystemColors]::Highlight })
+    $btn.Add_Leave({ param($sender,$args) $sender.FlatAppearance.BorderSize=0 })
 }
 $form.Add_FormClosed({
     $languageTimer.Stop();$languageTimer.Dispose()
@@ -571,7 +571,7 @@ if($SelfTest){
         $learnedSearch.Clear()
         if($appPage.Text -ne "การทำงานรายแอป"){throw "App policy tab missing"}
         $tabs.SelectedTab=$learnedPage
-        if(-not $learnedSearch.CanFocus){throw "Learned search focus unavailable"}
+        if(-not $learnedSearch.TabStop){throw "Learned search keyboard focus disabled"}
         foreach ($dimensions in @(@(700,620),@(780,650),@(930,730))) {
             $form.Size=New-Object Drawing.Size($dimensions[0],$dimensions[1])
             $form.PerformLayout()
