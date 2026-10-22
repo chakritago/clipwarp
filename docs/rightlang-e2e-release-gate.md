@@ -12,6 +12,34 @@
 6. **Record app version and test observations**, not typed words or clipboard content.
 7. Do not approve Stable until all required steps are verified and any failures are fixed.
 
+## Accessibility 3.0, learned words and app-specific policy
+
+Settings offers independent scale values for general UI (10–18), list editors (10–24),
+and Before/After preview (10–24). Keyboard paths: **Tab / Shift+Tab** between
+fields, **F6** to the tabs, **Ctrl+F** to search learned words, **Delete** to remove
+a selected learned word and **Ctrl+S** to save. Check that focused controls remain
+visibly outlined with both regular and Windows High Contrast palettes. Settings
+use DPI autoscaling, but automated CI cannot simulate a physical monitor transition.
+
+Learning-management search includes contains and starts-with modes. The **ไม่แนะนำ
+คำที่เลือก** control adds an individual word to the ignored-suggestions list;
+it does not erase a manually defined correction. When using passive suggestions,
+the **ไม่แนะนำอีก** action explicitly records an ignored word. Do not log text
+content in diagnostic reports.
+
+App-specific rules use `process=mode,hints`. For example, `notepad=manual,off`,
+`winword=off,inherit`. Supported `mode` values: `inherit`, `manual`,
+`auto`, `off`; `hints`: `inherit`, `on`, `off`. These rules do **not**
+grant permission to monitor a process: the explicit allowed/blocked application
+lists still apply and **global Off or global hints disabled always wins**.
+
+The interactive test can only attest observations and running process versions.
+It does not perform a hidden or simulated physical keyboard run.
+Use the emitted `RealDesktopGateSatisfied` flag only alongside manually
+reviewed evidence for Word formatting, VS Code provider behavior, full Undo,
+Clipboard race cases, and High DPI / High Contrast. It cannot by itself
+authorize a Stable release.
+
 ## Manual matrix (not satisfied by GitHub Actions)
 
 | Application | Check | Pass requirements |
