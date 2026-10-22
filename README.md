@@ -400,6 +400,62 @@ fields, Word formatting, fast typing latency, and application differences
 before declaring Stable. CI covers compilation, syntax, policy, configuration
 and UI smoke checks, **not** physical keyboard or rich-editor E2E.
 
+#### RightLang advanced editor safety, dictionary backup & Undo history (v1.18 preview)
+
+**Experimental and opt-in.** Rich editor selection correction now compares the
+foreground process, focused UI Automation document identity, selected text,
+Word formatting fingerprint **and up to 12 characters of surrounding text**
+both before preview and immediately before insertion. Providers without
+TextPattern endpoint navigation are rejected rather than falling back to
+clipboard scraping. This improves selection precision but **does not guarantee
+that replacing selected text preserves internal Word rich-text formatting**.
+The engine now offers its native Undo button only if a post-insertion UIA
+caret-tail check succeeds. After Ctrl+Z it distinguishes a verified restored
+tail from a sent but unverified Undo request.
+
+Opt-in Undo history retains at most **six RAM-only records**, now including
+application, editor type, timestamp, original text, replacement and
+verification status in the tray submenu. It is informational, not persistent,
+and cannot undo arbitrary older document edits.
+
+The settings window has an additional **นำเข้า / สำรองคำ** tab:
+
+- **Export:** writes versioned UTF-8 JSON for instant rules, custom words and
+  learned-word provenance. Does not export app permissions, modes, security
+  toggles, clipboard contents or credentials.
+- **Import:** explicitly confirm an untrusted file. Validates schema, size,
+  rule lengths and learning limits, merges missing entries without overwriting
+  existing instant corrections, and leaves all privacy and app settings
+  unchanged. Invalid input is rejected before writing configuration.
+- **Learned backup:** saves a separate JSON containing *only* learned rules
+  to a user-selected directory with a unique filename.
+
+From a PowerShell session **in the repository directory**:
+
+```powershell
+Import-Module .\clipwarp-rightlang-dictionary.psm1 -Force
+Export-ClipwarpRightLangDictionary -Path "$env:USERPROFILE\Desktop\clipwarp-dictionary.json"
+Backup-ClipwarpRightLangLearnedWords -Directory "$env:USERPROFILE\Documents"
+Import-ClipwarpRightLangDictionary -Path "$env:USERPROFILE\Desktop\clipwarp-dictionary.json"
+```
+
+**Privacy:** exported dictionaries and backup files contain typed words in
+**plaintext JSON**. Review them before sharing; store them in an appropriately
+protected folder. They are not encrypted or uploaded automatically. The
+memory-only Undo history is *never* included in backups.
+
+Automated validation runs under Windows PowerShell 5.1 and 7 and includes
+new dictionary roundtrip/invalid-import regressions, editor guard tests and
+existing Clipboard transport regressions. **This is not physical Windows E2E.**
+The [physical Windows release gate](docs/rightlang-e2e-release-gate.md)
+requires manual Notepad/Word/VS Code typing, native Undo, formatting and
+Clipboard checks. Use `tests/rightlang-interactive.ps1 -EditorBridge` on
+a real interactive Windows desktop and then independently verify the
+manually collected evidence with `tests/verify-rightlang-e2e.ps1` (five
+privacy-reviewed benign PNGs named notepad.png, word.png, vscode.png,
+clipboard.png and undo.png). This records hashes, **not** automatic proof
+of genuine keyboard input. Keep PR #2 in Draft until that review is complete.
+
 ### Tray icon menu
 
 While the watcher runs, its system-tray icon menu exposes every command:
