@@ -323,7 +323,7 @@ $ignoredEditor.BringToFront()
 [void]$tabs.TabPages.Add($suggestPage)
 # Per-app policy never grants monitoring permission: allowlist and global Off always win.
 $appPage=New-Tab 'การทำงานรายแอป' 'หนึ่งบรรทัด: process=inherit|manual|auto|off,inherit|on|off เช่น notepad=manual,off' (($config.appPolicies.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join [Environment]::NewLine)
-[void]$tabs.TabPages.Add($appPage)
+[void]$tabs.TabPages.Add($appPage.Page)
 
 $removedLearned = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $learnedOriginal = @($config.learnedKeys)
@@ -578,7 +578,7 @@ if($SelfTest){
         $learnedSearch.Text="nomatch"
         if($learnedList.Items.Count -ne 0){throw "Learned search filtering failed"}
         $learnedSearch.Clear()
-        if($appPage.Text -ne "การทำงานรายแอป"){throw "App policy tab missing"}
+        if($appPage.Page.Text -ne "การทำงานรายแอป"){throw "App policy tab missing"}
         $tabs.SelectedTab=$learnedPage
         if(-not $learnedSearch.TabStop){throw "Learned search keyboard focus disabled"}
         foreach ($dimensions in @(@(700,620),@(780,650),@(930,730))) {
