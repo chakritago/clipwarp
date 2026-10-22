@@ -1892,16 +1892,19 @@ Start-Sleep -Milliseconds 250
     $recentMenu.add_DropDownOpening({
         $recentMenu.DropDownItems.Clear()
         try {
-            $recent = @($rightlang.RecentCorrections)
+            $recent = @($rightlang.RecentUndoDetails)
             if ($recent.Count -eq 0) {
                 $none = New-Object System.Windows.Forms.ToolStripMenuItem('ไม่มีประวัติหรือยังไม่เปิดใช้')
                 $none.Enabled = $false
                 [void]$recentMenu.DropDownItems.Add($none)
             } else {
                 foreach ($entry in $recent) {
-                    $short = [string]$entry
-                    if ($short.Length -gt 55) { $short = $short.Substring(0,55) + '…' }
+                    $short = '[{0:HH:mm:ss}] {1} | {2}: {3} → {4}' -f
+                        $entry.WhenUtc.ToLocalTime(), $entry.Application, $entry.EditorKind,
+                        $entry.Source, $entry.Replacement
+                    if ($short.Length -gt 100) { $short = $short.Substring(0,100) + '…' }
                     $item = New-Object System.Windows.Forms.ToolStripMenuItem($short)
+                    $item.ToolTipText = [string]$entry.Status
                     $item.Enabled = $false
                     [void]$recentMenu.DropDownItems.Add($item)
                 }
