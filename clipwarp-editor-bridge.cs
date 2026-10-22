@@ -14,6 +14,8 @@ namespace ClipwarpRightLang
         public string SelectedText;
         public int ProcessId;
         public string StyleFingerprint;
+        public string BeforeContext;
+        public string AfterContext;
     }
 
     public static class EditorBridge {
@@ -24,6 +26,7 @@ namespace ClipwarpRightLang
         private static readonly Type TextUnitType = LoadType("System.Windows.Automation.Text.TextUnit");
         private static readonly Type WalkerType = LoadType("System.Windows.Automation.TreeWalker");
         private const int MaxAncestors = 4;
+        private const int ContextLimit = 12;
 
         private static Type LoadType(string name) {
             // Microsoft splits UIA APIs across Client and Types assemblies.
@@ -139,6 +142,31 @@ namespace ClipwarpRightLang
             } catch { return false; }
         }
 
+        // Require the accessibility provider to expose stable text immediately
+        // before/after the selection. This catches duplicate-word ambiguity,
+        // cursor movement and same-text replacements at another document position.
+        // Providers lacking endpoint navigation fail closed; never scrape or
+        // fall back to the system clipboard.
+        private static bool TrySelectionContext(object range, out string before, out string after) {
+            before = null; after = null;
+            if (range == null || EndpointType == null || TextUnitType == null) return false;
+            try {
+                object start = Enum.Parse(EndpointType, "Start");
+                object end = Enum.Parse(EndpointType, "End");
+                object unit = Enum.Parse(TextUnitType, "Character");
+                object left = Call(range, "Clone");
+                Call(left, "MoveEndpointByRange", end, range, start);
+                Call(left, "MoveEndpointByUnit", start, unit, -ContextLimit);
+                object right = Call(range, "Clone");
+                Call(right, "MoveEndpointByRange", start, range, end);
+                Call(right, "MoveEndpointByUnit", end, unit, ContextLimit);
+                before = (string)Call(left, "GetText", ContextLimit + 1);
+                after = (string)Call(right, "GetText", ContextLimit + 1);
+                return before != null && after != null &&
+                    before.Length <= ContextLimit && after.Length <= ContextLimit;
+            } catch { return false; }
+        }
+
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
 
@@ -184,9 +212,12 @@ namespace ClipwarpRightLang
                 if (!IsSingleLineSelection(value)) return false;
                 string styleFingerprint;
                 if (!TryWordStyleFingerprint(ranges.GetValue(0), processName, out styleFingerprint)) return false;
+                string before, after;
+                if (!TrySelectionContext(ranges.GetValue(0), out before, out after)) return false;
                 uint pid; GetWindowThreadProcessId(window, out pid);
                 snapshot = new EditorSnapshot { ProcessName = processName, ProcessId = (int)pid,
-                    Identity = id, SelectedText = value, StyleFingerprint = styleFingerprint };
+                    Identity = id, SelectedText = value, StyleFingerprint = styleFingerprint,
+                    BeforeContext = before, AfterContext = after };
                 return true;
             } catch { return false; }
         }
@@ -197,7 +228,9 @@ namespace ClipwarpRightLang
             return TrySelected(window, prior.ProcessName, out current)
                 && prior.ProcessId == current.ProcessId && prior.Identity == current.Identity
                 && string.Equals(prior.SelectedText, current.SelectedText, StringComparison.Ordinal)
-                && string.Equals(prior.StyleFingerprint, current.StyleFingerprint, StringComparison.Ordinal);
+                && string.Equals(prior.StyleFingerprint, current.StyleFingerprint, StringComparison.Ordinal)
+                && string.Equals(prior.BeforeContext, current.BeforeContext, StringComparison.Ordinal)
+                && string.Equals(prior.AfterContext, current.AfterContext, StringComparison.Ordinal);
         }
 
         // GetSelection returns a degenerate caret range after insertion in compliant
