@@ -1729,12 +1729,14 @@ $rightlangReload = {
         $rules = [System.Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($entry in $cfg.instant.GetEnumerator()) { $rules[[string]$entry.Key] = [string]$entry.Value }
         $effectiveMode = if (Get-ClipwarpPaused) { 'off' } else { [string]$cfg.mode }
+        $policies = [System.Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($key in $cfg.appPolicies.Keys) { $policies[[string]$key] = [string]$cfg.appPolicies[$key] }
         $rightlang.Configure($effectiveMode, $rules,
             [string[]]@($cfg.words), [string[]]@($cfg.allowedApps), [string[]]@($cfg.blockedApps),
             [bool]$cfg.editorBridgeEnabled, [bool]$cfg.learnAccepted,
             [bool]$cfg.smartSuggestions, [bool]$cfg.undoHistory,
             [int]$cfg.suggestionDelayMs, [int]$cfg.suggestionCooldownMs,
-            [string[]]@($cfg.ignoredSuggestions))
+            [string[]]@($cfg.ignoredSuggestions), $policies)
     } catch {
         # No fallback to arbitrary global correction on invalid config.
         $rightlang.Configure('off', $null, $null, $null, $null)
@@ -1744,6 +1746,10 @@ $rightlangReload = {
 $rightlang.add_ModeToggled({
     param($newMode)
     try { [void](Set-ClipwarpRightLangMode -Mode $newMode) } catch {}
+})
+$rightlang.add_SuggestionIgnored({
+    param($word)
+    try { [void](Add-ClipwarpRightLangIgnoredSuggestion -Word ([string]$word)) } catch {}
 })
 $rightlang.add_CorrectionAccepted({
     param($original, $confirmed)
