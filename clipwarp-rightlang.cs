@@ -42,13 +42,37 @@ namespace ClipwarpRightLang
         private int suggestionCooldownMs = 5000;
         private readonly Dictionary<string, DateTime> hintShown = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> ignoredHints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public sealed class UndoHistoryEntry {
+            public DateTime WhenUtc { get; set; }
+            public string Application { get; set; }
+            public string Source { get; set; }
+            public string Replacement { get; set; }
+            public string EditorKind { get; set; }
+            public string Status { get; set; }
+        }
         private readonly List<string> recentCorrections = new List<string>();
+        private readonly List<UndoHistoryEntry> historyDetails = new List<UndoHistoryEntry>();
         public string[] RecentCorrections { get { return recentCorrections.ToArray(); } }
-        public void ClearRecentCorrections() { recentCorrections.Clear(); }
-        private void Remember(string source, string target) {
-            if (!keepUndoHistory) return;
-            recentCorrections.Insert(0, source + " → " + target);
+        public UndoHistoryEntry[] RecentUndoDetails { get { return historyDetails.ToArray(); } }
+        public void ClearRecentCorrections() { recentCorrections.Clear(); historyDetails.Clear(); }
+        private UndoHistoryEntry Remember(string source, string target, IntPtr window, bool rich) {
+            if (!keepUndoHistory) return null;
+            string application = "unknown";
+            try {
+                uint pid; GetWindowThreadProcessId(window, out pid);
+                if (pid > 0) application = Process.GetProcessById((int)pid).ProcessName;
+            } catch { }
+            UndoHistoryEntry record = new UndoHistoryEntry {
+                WhenUtc = DateTime.UtcNow, Application = application,
+                Source = source, Replacement = target,
+                EditorKind = rich ? "UI Automation" : "Native Edit",
+                Status = rich ? "Input sent; awaiting editor verification" : "Applied"
+            };
+            historyDetails.Insert(0, record);
+            if (historyDetails.Count > 6) historyDetails.RemoveAt(6);
+            recentCorrections.Insert(0, "[" + application + "] " + source + " → " + target);
             if (recentCorrections.Count > 6) recentCorrections.RemoveAt(6);
+            return record;
         }
         private int bridgeSerial;
         private int bridgeBusy;
@@ -72,6 +96,7 @@ namespace ClipwarpRightLang
             public string Source, Replacement;
             public bool HasTrailingSpace;
             public EditorSnapshot Bridge;
+            public UndoHistoryEntry History;
             public DateTime Until;
         }
         private sealed class PreviewBubble : Form {
@@ -203,7 +228,7 @@ namespace ClipwarpRightLang
             }
             if (!enableHints || next == "off") { hintShown.Clear(); lastHint = ""; }
             keepUndoHistory = enableHistory;
-            if (!enableHistory || next == "off") recentCorrections.Clear();
+            if (!enableHistory || next == "off") ClearRecentCorrections();
             instant = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (immediateWords != null)
                 foreach (KeyValuePair<string, string> kv in immediateWords)
@@ -240,7 +265,7 @@ namespace ClipwarpRightLang
         {
             if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
             if (mouseHook != IntPtr.Zero) { UnhookWindowsHookEx(mouseHook); mouseHook = IntPtr.Zero; }
-            token = ""; pending = null; lastUndo = null; recentCorrections.Clear(); hintShown.Clear();
+            token = ""; pending = null; lastUndo = null; ClearRecentCorrections(); hintShown.Clear();
             Interlocked.Increment(ref bridgeSerial);
             bubbleTimer.Stop(); bubbleTimer.Dispose(); bubble.Dispose();
             GC.KeepAlive(proc);
@@ -435,7 +460,7 @@ namespace ClipwarpRightLang
                         Source = p.Source, Replacement = p.Replacement, Bridge = p.Bridge,
                         Until = DateTime.UtcNow.AddSeconds(8) };
                     bubble.Present(p.Source,p.Replacement,true);
-                    Remember(p.Source,p.Replacement);
+                    lastUndo.History = Remember(p.Source,p.Replacement,p.Window,true);
                     if (learnAccepted && CorrectionAccepted != null) {
                         try { CorrectionAccepted(p.Source,p.Replacement); } catch { }
                     }
@@ -454,7 +479,9 @@ namespace ClipwarpRightLang
                         !EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Replacement)) return;
                     INPUT[] undo = new INPUT[] { Key(VK_CONTROL,(char)0,0), Key(VK_Z,(char)0,0),
                         Key(VK_Z,(char)0,KEYEVENTF_KEYUP), Key(VK_CONTROL,(char)0,KEYEVENTF_KEYUP) };
-                    SendInput((uint)undo.Length,undo,Marshal.SizeOf(typeof(INPUT)));
+                    bool sent = SendInput((uint)undo.Length,undo,Marshal.SizeOf(typeof(INPUT))) == undo.Length;
+                    if (last.History != null)
+                        last.History.Status = sent ? "Native Ctrl+Z sent (unverified)" : "Native Ctrl+Z rejected";
                 } catch { }
                 finally { Interlocked.Exchange(ref bridgeBusy,0); }
             });
@@ -573,7 +600,7 @@ namespace ClipwarpRightLang
                 Replacement = replacement, HasTrailingSpace = trailingSpace, Bridge = bridge,
                 Until = DateTime.UtcNow.AddSeconds(8) };
             bubble.Present(source, replacement, true);
-            Remember(source,replacement);
+            lastUndo.History = Remember(source,replacement,window,false);
             if (learnAccepted && !trailingSpace && CorrectionAccepted != null) {
                 // Persist accepted words after returning from the global keyboard hook.
                 string savedSource = source, savedReplacement = replacement;
@@ -633,7 +660,9 @@ namespace ClipwarpRightLang
             }
             INPUT[] keys = events.ToArray();
             token = "";
-            return SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT))) == keys.Length;
+            bool success = SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT))) == keys.Length;
+            if (last.History != null) last.History.Status = success ? "Undo input sent" : "Undo input failed";
+            return success;
         }
 
         private IntPtr OnMouse(int code, IntPtr message, IntPtr data)
