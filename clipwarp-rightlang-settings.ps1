@@ -14,6 +14,7 @@ trap {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Import-Module (Join-Path $PSScriptRoot 'clipwarp-rightlang.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'clipwarp-rightlang-dictionary.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
 
 $config = Get-ClipwarpRightLangConfig
@@ -322,6 +323,79 @@ $ignoredPanel.Controls.Add($ignoredEditor)
 $ignoredEditor.BringToFront()
 [void]$tabs.TabPages.Add($suggestPage)
 # Per-app policy never grants monitoring permission: allowlist and global Off always win.
+# Portable dictionary tools operate on a versioned JSON format and never
+# change the security allow/block lists, keyboard mode or Windows autostart.
+$archivePage = New-Object Windows.Forms.TabPage
+$archivePage.Text = 'นำเข้า / สำรองคำ'
+$archivePage.Padding = New-Object Windows.Forms.Padding(16)
+$archiveLayout = New-Object Windows.Forms.TableLayoutPanel
+$archiveLayout.Dock='Fill'; $archiveLayout.ColumnCount=1; $archiveLayout.RowCount=5
+[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',72)))
+[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',58)))
+[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',58)))
+[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',58)))
+[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
+$archiveInfo=New-Label 'JSON พกพา · เฉพาะพจนานุกรม ไม่ส่งข้อมูลออนไลน์ และไม่เปลี่ยนสิทธิ์แอป'
+$archiveInfo.Dock='Fill';$archiveInfo.AutoEllipsis=$true
+$archiveLayout.Controls.Add($archiveInfo,0,0)
+$exportDictionary=New-Object Windows.Forms.Button
+$exportDictionary.Text='ส่งออกพจนานุกรม (JSON)';$exportDictionary.Dock='Fill'
+$archiveLayout.Controls.Add($exportDictionary,0,1)
+$importDictionary=New-Object Windows.Forms.Button
+$importDictionary.Text='นำเข้าพจนานุกรม (รวมกับข้อมูลเดิม)';$importDictionary.Dock='Fill'
+$archiveLayout.Controls.Add($importDictionary,0,2)
+$backupLearned=New-Object Windows.Forms.Button
+$backupLearned.Text='สำรองเฉพาะคำที่เรียนรู้';$backupLearned.Dock='Fill'
+$archiveLayout.Controls.Add($backupLearned,0,3)
+$archiveStatus=New-Label 'ไฟล์ JSON เป็นข้อความธรรมดา โปรดเก็บในพื้นที่ที่ปลอดภัย'
+$archiveStatus.Dock='Fill';$archiveStatus.AutoEllipsis=$true
+$archiveLayout.Controls.Add($archiveStatus,0,4)
+$archivePage.Controls.Add($archiveLayout)
+[void]$tabs.TabPages.Add($archivePage)
+
+$exportDictionary.Add_Click({
+    $dialog=New-Object Windows.Forms.SaveFileDialog
+    try {
+        $dialog.Filter='JSON (*.json)|*.json';$dialog.DefaultExt='json'
+        $dialog.FileName='clipwarp-dictionary.json'
+        $dialog.OverwritePrompt=$true
+        if($dialog.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK){return}
+        $result=Export-ClipwarpRightLangDictionary -Path $dialog.FileName -Force
+        $archiveStatus.Text="ส่งออก $($result.Rules) กฎ · คำที่เรียนรู้ $($result.Learned) คำ"
+    } catch {
+        [Windows.Forms.MessageBox]::Show($_.Exception.Message,'ส่งออกไม่สำเร็จ') | Out-Null
+    } finally { $dialog.Dispose() }
+})
+$importDictionary.Add_Click({
+    $dialog=New-Object Windows.Forms.OpenFileDialog
+    try {
+        $dialog.Filter='JSON (*.json)|*.json';$dialog.CheckFileExists=$true
+        if($dialog.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK){return}
+        $answer=[Windows.Forms.MessageBox]::Show(
+            'นำเข้าจากไฟล์ที่เชื่อถือได้เท่านั้น ระบบจะข้ามกฎที่ซ้ำ ไม่แก้สิทธิ์แอป และปิดหน้าต่างตั้งค่าโดยไม่บันทึกค่าอื่นที่ยังไม่ได้กดบันทึก ยืนยันหรือไม่?',
+            'ยืนยันการนำเข้า',[Windows.Forms.MessageBoxButtons]::YesNo,[Windows.Forms.MessageBoxIcon]::Warning)
+        if($answer -ne [Windows.Forms.DialogResult]::Yes){return}
+        $result=Import-ClipwarpRightLangDictionary -Path $dialog.FileName
+        [Windows.Forms.MessageBox]::Show(
+            "นำเข้าเพิ่ม $($result.Added) กฎ, ข้าม $($result.Skipped) กฎ การตั้งค่าความปลอดภัยไม่เปลี่ยน เปิดหน้าต่างตั้งค่าใหม่เพื่อดูผล",
+            'ClipWarp') | Out-Null
+        $form.Close()
+    } catch {
+        [Windows.Forms.MessageBox]::Show($_.Exception.Message,'นำเข้าไม่สำเร็จ') | Out-Null
+    } finally { $dialog.Dispose() }
+})
+$backupLearned.Add_Click({
+    $dialog=New-Object Windows.Forms.FolderBrowserDialog
+    try {
+        $dialog.Description='เลือกโฟลเดอร์เก็บไฟล์ JSON ของคำที่เรียนรู้'
+        if($dialog.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK){return}
+        $result=Backup-ClipwarpRightLangLearnedWords -Directory $dialog.SelectedPath
+        $archiveStatus.Text="สำรอง $($result.Learned) คำ · $($result.Path)"
+    } catch {
+        [Windows.Forms.MessageBox]::Show($_.Exception.Message,'สำรองคำไม่สำเร็จ') | Out-Null
+    } finally { $dialog.Dispose() }
+})
+
 $appPage=New-Tab 'การทำงานรายแอป' 'หนึ่งบรรทัด: process=inherit|manual|auto|off,inherit|on|off เช่น notepad=manual,off' (($config.appPolicies.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join [Environment]::NewLine)
 [void]$tabs.TabPages.Add($appPage.Page)
 
@@ -556,7 +630,7 @@ $form.Add_FormClosed({
 })
 if($SelfTest){
     try {
-        if($tabs.TabPages.Count -ne 8){throw "Expected eight settings tabs"}
+        if($tabs.TabPages.Count -ne 9){throw "Expected nine settings tabs"}
         if($mode.Items.Count -ne 3){throw "Expected three correction modes"}
         $darkToggle.Checked = $true
         if($form.BackColor.R -ne 28){throw "Dark theme did not apply"}
@@ -579,6 +653,7 @@ if($SelfTest){
         if($learnedList.Items.Count -ne 0){throw "Learned search filtering failed"}
         $learnedSearch.Clear()
         if($appPage.Page.Text -ne "การทำงานรายแอป"){throw "App policy tab missing"}
+        if($archivePage.Text -ne "นำเข้า / สำรองคำ" -or -not $backupLearned.Enabled){throw "Dictionary tools unavailable"}
         $tabs.SelectedTab=$learnedPage
         if(-not $learnedSearch.TabStop){throw "Learned search keyboard focus disabled"}
         foreach ($dimensions in @(@(700,620),@(780,650),@(930,730))) {
