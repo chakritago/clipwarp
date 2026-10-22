@@ -62,4 +62,23 @@ Assert-Release ($settings.Contains('AutoScaleMode') -and
     $settings.Contains('contrastToggle') -and
     $settings.Contains('fontSizePicker') -and
     $settings.Contains('ignoredEditor')) 'accessible Settings and personalized hints wired'
+$dictionaryModule = [IO.File]::ReadAllText((Join-Path $root 'clipwarp-rightlang-dictionary.psm1'))
+$evidenceScript = [IO.File]::ReadAllText((Join-Path $root 'tests\verify-rightlang-e2e.ps1'))
+Assert-Release ($bridge.Contains('TrySelectionContext') -and $bridge.Contains('BeforeContext') -and
+    $bridge.Contains('AfterContext') -and $bridge.Contains('StyleFingerprint')) 'rich editor selection context is revalidated'
+Assert-Release ($engine.Contains('RecentUndoDetails') -and $engine.Contains('WhenUtc') -and
+    $engine.Contains('Application') -and $engine.Contains('Native Ctrl+Z sent; restore not verified') -and
+    $engine.Contains('EditorBridge.MatchesCaretTail')) 'Undo state is context-checked and reports uncertain native results'
+Assert-Release ($dictionaryModule.Contains('Export-ClipwarpRightLangDictionary') -and
+    $dictionaryModule.Contains('Import-ClipwarpRightLangDictionary') -and
+    $dictionaryModule.Contains('Backup-ClipwarpRightLangLearnedWords') -and
+    -not $dictionaryModule.Contains('Invoke-WebRequest')) 'portable dictionary and backup never upload data'
+Assert-Release ($installer.Contains('clipwarp-rightlang-dictionary.psm1') -and
+    $uninstall.Contains('clipwarp-rightlang-dictionary.psm1')) 'dictionary tools packaged and removed symmetrically'
+Assert-Release ($settings.Contains('นำเข้า / สำรองคำ') -and
+    $settings.Contains('Export-ClipwarpRightLangDictionary') -and
+    $settings.Contains('Import-ClipwarpRightLangDictionary')) 'dictionary UI provides explicit import and export actions'
+Assert-Release ($evidenceScript.Contains('RealDesktopGateSatisfied') -and
+    $evidenceScript.Contains('StableReleaseApproved=$false') -and
+    $evidenceScript.Contains('GITHUB_ACTIONS')) 'physical E2E attestation cannot promote a CI run to Stable'
 Write-Host 'PASS: static release guards completed. Physical keyboard and rich-text editor validation remain manual prerequisites.'
