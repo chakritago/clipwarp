@@ -446,22 +446,37 @@ namespace ClipwarpRightLang
             int serial = Interlocked.Increment(ref bridgeSerial);
             Thread worker = new Thread(delegate() {
                 bool sent = false;
+                bool verified = false;
                 try {
                     if (DateTime.UtcNow <= p.Until && serial == bridgeSerial &&
-                        EditorBridge.SameSelection(p.Window,p.Bridge) && GetForegroundWindow() == p.Window)
+                        EditorBridge.SameSelection(p.Window,p.Bridge) && GetForegroundWindow() == p.Window) {
                         sent = InjectBridgeSelection(p.Replacement);
+                        if (sent) {
+                            // Accessibility providers update asynchronously after SendInput.
+                            // Verify the editor's actual caret text before offering native Undo.
+                            Thread.Sleep(100);
+                            verified = EditorBridge.MatchesCaretTail(p.Window,p.Bridge,p.Replacement);
+                        }
+                    }
                 } catch { }
                 finally { Interlocked.Exchange(ref bridgeBusy,0); }
                 if (!sent) return;
+                bool verifiedCopy = verified;
                 try { bubble.BeginInvoke((MethodInvoker)delegate {
                     if (serial != bridgeSerial) return;
                     token = "";
-                    lastUndo = new UndoRequest { Window = p.Window, Focus = IntPtr.Zero,
+                    lastUndo = verifiedCopy ? new UndoRequest { Window = p.Window, Focus = IntPtr.Zero,
                         Source = p.Source, Replacement = p.Replacement, Bridge = p.Bridge,
-                        Until = DateTime.UtcNow.AddSeconds(8) };
-                    bubble.Present(p.Source,p.Replacement,true);
-                    lastUndo.History = Remember(p.Source,p.Replacement,p.Window,true);
-                    if (learnAccepted && CorrectionAccepted != null) {
+                        Until = DateTime.UtcNow.AddSeconds(8) } : null;
+                    UndoHistoryEntry entry = Remember(p.Source,p.Replacement,p.Window,true);
+                    if (entry != null) entry.Status = verifiedCopy ?
+                        "Inserted and caret verified; Undo eligible" :
+                        "Input sent; editor result not verified (Undo unavailable)";
+                    if (lastUndo != null) {
+                        lastUndo.History = entry;
+                        bubble.Present(p.Source,p.Replacement,true);
+                    } else bubble.Dismiss();
+                    if (learnAccepted && verifiedCopy && CorrectionAccepted != null) {
                         try { CorrectionAccepted(p.Source,p.Replacement); } catch { }
                     }
                 }); } catch { }
@@ -480,8 +495,15 @@ namespace ClipwarpRightLang
                     INPUT[] undo = new INPUT[] { Key(VK_CONTROL,(char)0,0), Key(VK_Z,(char)0,0),
                         Key(VK_Z,(char)0,KEYEVENTF_KEYUP), Key(VK_CONTROL,(char)0,KEYEVENTF_KEYUP) };
                     bool sent = SendInput((uint)undo.Length,undo,Marshal.SizeOf(typeof(INPUT))) == undo.Length;
+                    bool restored = false;
+                    if (sent) {
+                        Thread.Sleep(100);
+                        restored = EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Source);
+                    }
                     if (last.History != null)
-                        last.History.Status = sent ? "Native Ctrl+Z sent (unverified)" : "Native Ctrl+Z rejected";
+                        last.History.Status = !sent ? "Native Ctrl+Z rejected" :
+                            restored ? "Restored (UI Automation caret verified)" :
+                                       "Native Ctrl+Z sent; restore not verified";
                 } catch { }
                 finally { Interlocked.Exchange(ref bridgeBusy,0); }
             });
