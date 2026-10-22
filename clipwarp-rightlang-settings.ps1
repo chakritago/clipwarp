@@ -77,7 +77,7 @@ $tagline.Anchor = 'Top,Left,Right'
 $header.Controls.Add($tagline)
 
 $themePanel = New-Object Windows.Forms.Panel
-$themePanel.Dock = 'Top'; $themePanel.Height = 82
+$themePanel.Dock = 'Top'; $themePanel.Height = 118
 $themePanel.BorderStyle = 'FixedSingle'
 $form.Controls.Add($themePanel)
 $themeLabel = New-Label 'โหมดสี'
@@ -100,8 +100,20 @@ $fontSizePicker.Minimum = 10; $fontSizePicker.Maximum = 18; $fontSizePicker.Incr
 $fontSizePicker.Value = [decimal]$config.uiFontSize
 $fontSizePicker.SetBounds(550,15,75,34)
 $themePanel.Controls.Add($fontSizePicker)
+$editorFontLabel=New-Label 'ข้อความในรายการ'
+$editorFontLabel.SetBounds(22,51,145,30); $themePanel.Controls.Add($editorFontLabel)
+$editorFontPicker=New-Object Windows.Forms.NumericUpDown
+$editorFontPicker.Minimum=10; $editorFontPicker.Maximum=24
+$editorFontPicker.Value=[decimal]$config.editorFontSize
+$editorFontPicker.SetBounds(171,51,72,31); $themePanel.Controls.Add($editorFontPicker)
+$previewFontLabel=New-Label 'ข้อความตัวอย่าง'
+$previewFontLabel.SetBounds(274,51,145,30); $themePanel.Controls.Add($previewFontLabel)
+$previewFontPicker=New-Object Windows.Forms.NumericUpDown
+$previewFontPicker.Minimum=10; $previewFontPicker.Maximum=24
+$previewFontPicker.Value=[decimal]$config.previewFontSize
+$previewFontPicker.SetBounds(423,51,72,31); $themePanel.Controls.Add($previewFontPicker)
 $langBadge = New-Label 'กำลังตรวจสอบภาษา…'
-$langBadge.SetBounds(22,49,570,27)
+$langBadge.SetBounds(22,88,570,27)
 $langBadge.Anchor = 'Top,Left,Right'
 $langBadge.TextAlign = 'MiddleCenter'; $langBadge.BorderStyle = 'FixedSingle'
 $langBadge.Font = New-Object Drawing.Font('Leelawadee UI',10,[Drawing.FontStyle]::Bold)
@@ -214,12 +226,30 @@ $learnedPage.Text = 'คำที่เรียนรู้'
 $learnedPage.Padding = New-Object Windows.Forms.Padding(14)
 $learnedLayout = New-Object Windows.Forms.TableLayoutPanel
 $learnedLayout.Dock = 'Fill'; $learnedLayout.RowCount = 3; $learnedLayout.ColumnCount = 1
-[void]$learnedLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',48)))
+[void]$learnedLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',100)))
 [void]$learnedLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
 [void]$learnedLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',54)))
 $learnedInfo = New-Label 'รายการที่จดจำหลังคุณยืนยัน · เลือกลบได้โดยไม่กระทบคำที่เพิ่มเอง'
-$learnedInfo.Dock = 'Fill'
-$learnedLayout.Controls.Add($learnedInfo,0,0)
+$learnedToolbar=New-Object Windows.Forms.Panel
+$learnedToolbar.Dock='Fill'
+$learnedInfo.SetBounds(0,0,630,31)
+$learnedToolbar.Controls.Add($learnedInfo)
+$learnedSearch=New-Object Windows.Forms.TextBox
+$learnedSearch.SetBounds(0,39,345,32)
+$learnedSearch.Anchor='Top,Left,Right'
+$learnedSearch.AccessibleName='ค้นหาคำที่เรียนรู้'
+$learnedToolbar.Controls.Add($learnedSearch)
+$learnedFilter=New-Object Windows.Forms.ComboBox
+$learnedFilter.DropDownStyle='DropDownList'
+[void]$learnedFilter.Items.Add('มีคำค้นหา')
+[void]$learnedFilter.Items.Add('ขึ้นต้นด้วย')
+$learnedFilter.SelectedIndex=0
+$learnedFilter.SetBounds(358,39,155,32)
+$learnedToolbar.Controls.Add($learnedFilter)
+$learnedCount=New-Label '0 รายการ'
+$learnedCount.SetBounds(525,39,100,32)
+$learnedToolbar.Controls.Add($learnedCount)
+$learnedLayout.Controls.Add($learnedToolbar,0,0)
 $learnedList = New-Object Windows.Forms.ListBox
 $learnedList.Dock = 'Fill'
 $learnedLayout.Controls.Add($learnedList,0,1)
@@ -231,6 +261,9 @@ $clearLearned = New-Object Windows.Forms.Button
 $clearLearned.Text = 'ลบทั้งหมด';$clearLearned.Width=155;$clearLearned.Height=36
 [void]$learnedActions.Controls.Add($removeLearned)
 [void]$learnedActions.Controls.Add($clearLearned)
+$ignoreSelected = New-Object Windows.Forms.Button
+$ignoreSelected.Text='ไม่แนะนำคำที่เลือก';$ignoreSelected.Width=180;$ignoreSelected.Height=36
+[void]$learnedActions.Controls.Add($ignoreSelected)
 $learnedLayout.Controls.Add($learnedActions,0,2)
 $learnedPage.Controls.Add($learnedLayout)
 [void]$tabs.TabPages.Add($learnedPage)
@@ -279,23 +312,53 @@ $ignoredEditor=New-Box ($config.ignoredSuggestions -join [Environment]::NewLine)
 $ignoredPanel.Controls.Add($ignoredEditor)
 $ignoredEditor.BringToFront()
 [void]$tabs.TabPages.Add($suggestPage)
+# Per-app policy never grants monitoring permission: allowlist and global Off always win.
+$appPage=New-Tab 'การทำงานรายแอป' 'หนึ่งบรรทัด: process=inherit|manual|auto|off,inherit|on|off เช่น notepad=manual,off' (($config.appPolicies.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join [Environment]::NewLine)
+[void]$tabs.TabPages.Add($appPage)
+
 $removedLearned = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $learnedOriginal = @($config.learnedKeys)
-foreach($key in $learnedOriginal){
-    if($config.instant.Contains($key)){
-        [void]$learnedList.Items.Add([string]$key)
-    }
+$reloadLearned = {
+    $selected=[string]$learnedList.SelectedItem
+    $learnedList.BeginUpdate()
+    try {
+        $learnedList.Items.Clear()
+        $search=[string]$learnedSearch.Text
+        foreach($key in $learnedOriginal){
+            if($removedLearned.Contains([string]$key) -or -not $config.instant.Contains($key)) { continue }
+            if($search) {
+                $matches=if($learnedFilter.SelectedIndex -eq 1) {
+                    ([string]$key).StartsWith($search,[StringComparison]::OrdinalIgnoreCase)
+                } else {
+                    ([string]$key).IndexOf($search,[StringComparison]::OrdinalIgnoreCase) -ge 0
+                }
+                if(-not $matches){continue}
+            }
+            [void]$learnedList.Items.Add([string]$key)
+        }
+        $learnedCount.Text=("{0} รายการ" -f $learnedList.Items.Count)
+        if($selected -and $learnedList.Items.Contains($selected)) { $learnedList.SelectedItem=$selected }
+    } finally { $learnedList.EndUpdate() }
 }
+$learnedSearch.Add_TextChanged($reloadLearned)
+$learnedFilter.Add_SelectedIndexChanged($reloadLearned)
+& $reloadLearned
 $removeLearned.Add_Click({
     if($learnedList.SelectedItem){
         $key=[string]$learnedList.SelectedItem
         [void]$removedLearned.Add($key)
-        $learnedList.Items.Remove($key)
+        & $reloadLearned
     }
 })
 $clearLearned.Add_Click({
-    foreach($key in @($learnedList.Items)) { [void]$removedLearned.Add([string]$key) }
-    $learnedList.Items.Clear()
+    foreach($key in $learnedOriginal) { [void]$removedLearned.Add([string]$key) }
+    & $reloadLearned
+})
+$ignoreSelected.Add_Click({
+    if(-not $learnedList.SelectedItem){return}
+    $key=[string]$learnedList.SelectedItem
+    $existing=@($ignoredEditor.Text -split '\r?\n' | Where-Object { $_.Trim() })
+    if($existing -notcontains $key){$ignoredEditor.Text=(@($existing)+@($key) -join [Environment]::NewLine)}
 })
 
 $refresh = {
@@ -375,11 +438,21 @@ $applyFont = {
     $hc=($form.ClientSize.Width -lt 820)
     $heading.Font=New-Object Drawing.Font('Leelawadee UI',($size + $(if($hc){2}else{5})),[Drawing.FontStyle]::Bold)
     $langBadge.Font=New-Object Drawing.Font('Leelawadee UI',$size,[Drawing.FontStyle]::Bold)
+    $editorSize=[float]$editorFontPicker.Value
+    foreach($editor in @($instantPage.Editor,$wordPage.Editor,$allowPage.Editor,$blockPage.Editor,$ignoredEditor,$appPage.Editor)) {
+        if($editor.Font.Size -ne $editorSize){$editor.Font=New-Object Drawing.Font('Leelawadee UI',$editorSize)}
+    }
+    $previewSize=[float]$previewFontPicker.Value
+    foreach($editor in @($before,$after)) {
+        if($editor.Font.Size -ne $previewSize){$editor.Font=New-Object Drawing.Font('Leelawadee UI',$previewSize)}
+    }
     $shortcuts.Font=New-Object Drawing.Font('Leelawadee UI',[Math]::Max(9,$size - 1))
 }
 $darkToggle.Add_CheckedChanged($applyTheme)
 $contrastToggle.Add_CheckedChanged($applyTheme)
 $fontSizePicker.Add_ValueChanged($applyFont)
+$editorFontPicker.Add_ValueChanged($applyFont)
+$previewFontPicker.Add_ValueChanged($applyFont)
 $form.Add_SizeChanged({
     $compact=$form.ClientSize.Width -lt 820
     $heading.Width=[Math]::Max(345,$form.ClientSize.Width - 120)
@@ -416,6 +489,16 @@ $save.Add_Click({
         $settings.darkMode=[bool]$darkToggle.Checked
         $settings.highContrast=[bool]$contrastToggle.Checked
         $settings.uiFontSize=[int]$fontSizePicker.Value
+        $settings.editorFontSize=[int]$editorFontPicker.Value
+        $settings.previewFontSize=[int]$previewFontPicker.Value
+        $appRules=[ordered]@{}
+        foreach($line in ($appPage.Editor.Text -split '\r?\n')){
+            if(-not $line.Trim()){continue}
+            $parts=$line.Split([char[]]@('='),2)
+            if($parts.Count -ne 2){throw "กฎแอปไม่ถูกต้อง: $line"}
+            $appRules[$parts[0].Trim()]=$parts[1].Trim()
+        }
+        $settings.appPolicies=$appRules
         $settings.editorBridgeEnabled=[bool]$bridgeCheck.Checked
         $settings.learnAccepted=[bool]$learnCheck.Checked
         [void](Save-ClipwarpRightLangConfig -Settings $settings)
@@ -431,17 +514,40 @@ $save.Add_Click({
 })
 $form.Add_KeyDown({
     param($sender,$evt)
+    if($evt.Control -and $evt.KeyCode -eq [Windows.Forms.Keys]::S){
+        $save.PerformClick();$evt.SuppressKeyPress=$true;return
+    }
+    if($evt.Control -and $evt.KeyCode -eq [Windows.Forms.Keys]::F){
+        $tabs.SelectedTab=$learnedPage
+        $learnedSearch.Focus()
+        $evt.SuppressKeyPress=$true;return
+    }
+    if($evt.KeyCode -eq [Windows.Forms.Keys]::F6){
+        $tabs.Focus();$evt.SuppressKeyPress=$true;return
+    }
+    if($tabs.SelectedTab -eq $learnedPage -and $evt.KeyCode -eq [Windows.Forms.Keys]::Delete -and
+       $learnedList.Focused -and $learnedList.SelectedItem){
+        $removeLearned.PerformClick();$evt.SuppressKeyPress=$true;return
+    }
     if($evt.KeyCode -eq [Windows.Forms.Keys]::Escape -and $tabs.SelectedTab -eq $previewPage){
         $before.Clear();$after.Text='ยกเลิกตัวอย่างแล้ว';$evt.Handled=$true
     }
 })
+$save.AccessibleName='บันทึกการตั้งค่า ClipWarp'
+$removeLearned.AccessibleName='ลบคำที่เรียนรู้ที่เลือก'
+$ignoreSelected.AccessibleName='ปิดคำแนะนำสำหรับคำที่เลือก'
+$learnedList.AccessibleName='รายการคำที่เรียนรู้'
+foreach($btn in @($save,$removeLearned,$clearLearned,$ignoreSelected,$cancelPreview)) {
+    $btn.Add_Enter({ $this.FlatStyle='Flat';$this.FlatAppearance.BorderSize=2;$this.FlatAppearance.BorderColor=[Drawing.SystemColors]::Highlight })
+    $btn.Add_Leave({ $this.FlatAppearance.BorderSize=0 })
+}
 $form.Add_FormClosed({
     $languageTimer.Stop();$languageTimer.Dispose()
     if($icon.Image){$icon.Image.Dispose()}
 })
 if($SelfTest){
     try {
-        if($tabs.TabPages.Count -ne 7){throw "Expected seven settings tabs"}
+        if($tabs.TabPages.Count -ne 8){throw "Expected eight settings tabs"}
         if($mode.Items.Count -ne 3){throw "Expected three correction modes"}
         $darkToggle.Checked = $true
         if($form.BackColor.R -ne 28){throw "Dark theme did not apply"}
@@ -457,6 +563,15 @@ if($SelfTest){
         $contrastToggle.Checked=$false
         $fontSizePicker.Value=14
         if($form.Font.Size -ne 14){throw "Font scaling did not apply"}
+        $editorFontPicker.Value=16
+        $previewFontPicker.Value=17
+        if($instantPage.Editor.Font.Size -ne 16 -or $before.Font.Size -ne 17){throw "Independent font scaling failed"}
+        $learnedSearch.Text="nomatch"
+        if($learnedList.Items.Count -ne 0){throw "Learned search filtering failed"}
+        $learnedSearch.Clear()
+        if($appPage.Text -ne "การทำงานรายแอป"){throw "App policy tab missing"}
+        $tabs.SelectedTab=$learnedPage
+        if(-not $learnedSearch.CanFocus){throw "Learned search focus unavailable"}
         foreach ($dimensions in @(@(700,620),@(780,650),@(930,730))) {
             $form.Size=New-Object Drawing.Size($dimensions[0],$dimensions[1])
             $form.PerformLayout()
