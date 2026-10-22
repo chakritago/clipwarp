@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 Import-Module (Join-Path $root 'clipwarp-rightlang-dictionary.psm1') -Force
+Import-Module (Join-Path $root 'clipwarp-rightlang.psm1') -Force
 function Assert-Dict([bool]$Value, [string]$Message) {
     if (-not $Value) { throw $Message }
     Write-Host "PASS: $Message"
