@@ -15,6 +15,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Import-Module (Join-Path $PSScriptRoot 'clipwarp-rightlang.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'clipwarp-rightlang-dictionary.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'clipwarp-rightlang.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
 
 $config = Get-ClipwarpRightLangConfig
