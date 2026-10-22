@@ -1,5 +1,5 @@
 ﻿# ClipWarp portable dictionary interchange. No API calls, clipboard, credentials or app permissions.
-Import-Module (Join-Path $PSScriptRoot 'clipwarp-rightlang.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'clipwarp-rightlang.psm1') -ErrorAction Stop
 
 function Assert-ClipwarpDictionaryPath {
     param([Parameter(Mandatory)][string]$Path)
