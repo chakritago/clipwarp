@@ -343,7 +343,7 @@ $dictionaryToolbar.AutoScroll=$true
 $dictionarySearch=New-Object Windows.Forms.TextBox
 $dictionarySearch.Width=245;$dictionarySearch.Height=29
 $dictionarySearch.AccessibleName='ค้นหาพจนานุกรม'
-$dictionarySearch.PlaceholderText='ค้นหาคำ / คำแก้ / กลุ่ม'
+$dictionarySearch.AccessibleDescription='ค้นหาคำ / คำแก้ / กลุ่ม'
 $dictionaryToolbar.Controls.Add($dictionarySearch)
 $dictionaryGroupFilter=New-Object Windows.Forms.ComboBox
 $dictionaryGroupFilter.DropDownStyle='DropDownList';$dictionaryGroupFilter.Width=150
@@ -707,6 +707,16 @@ function Set-Colors([Windows.Forms.Control]$node,[bool]$dark,[bool]$contrast) {
     $foreground=if($contrast){[Drawing.SystemColors]::WindowText}elseif($dark){[Drawing.Color]::FromArgb(238,242,247)}else{[Drawing.Color]::FromArgb(30,41,57)}
     $inputBg=if($contrast){[Drawing.SystemColors]::Window}elseif($dark){[Drawing.Color]::FromArgb(41,48,59)}else{[Drawing.Color]::White}
     $node.BackColor=$background;$node.ForeColor=$foreground
+    if($node -is [Windows.Forms.DataGridView]){
+        $node.BackgroundColor=$inputBg
+        $node.DefaultCellStyle.BackColor=$inputBg
+        $node.DefaultCellStyle.ForeColor=$foreground
+        $node.AlternatingRowsDefaultCellStyle.BackColor=$background
+        $node.AlternatingRowsDefaultCellStyle.ForeColor=$foreground
+        $node.ColumnHeadersDefaultCellStyle.BackColor=$background
+        $node.ColumnHeadersDefaultCellStyle.ForeColor=$foreground
+        $node.EnableHeadersVisualStyles=$false
+    }
     if($node -is [Windows.Forms.TextBox] -or $node -is [Windows.Forms.ComboBox] -or
        $node -is [Windows.Forms.NumericUpDown] -or $node -is [Windows.Forms.ListBox]){
         $node.BackColor=$inputBg;$node.ForeColor=$foreground
@@ -734,7 +744,7 @@ $applyFont = {
     $heading.Font=New-Object Drawing.Font('Leelawadee UI',($size + $(if($hc){2}else{5})),[Drawing.FontStyle]::Bold)
     $langBadge.Font=New-Object Drawing.Font('Leelawadee UI',$size,[Drawing.FontStyle]::Bold)
     $editorSize=[float]$editorFontPicker.Value
-    foreach($editor in @($instantPage.Editor,$wordPage.Editor,$allowPage.Editor,$blockPage.Editor,$ignoredEditor,$appPage.Editor)) {
+    foreach($editor in @($instantPage.Editor,$wordPage.Editor,$allowPage.Editor,$blockPage.Editor,$ignoredEditor,$appPage.Editor,$dictionaryGrid)) {
         if($editor.Font.Size -ne $editorSize){$editor.Font=New-Object Drawing.Font('Leelawadee UI',$editorSize)}
     }
     $previewSize=[float]$previewFontPicker.Value
@@ -865,7 +875,9 @@ if($SelfTest){
         if($learnedList.Items.Count -ne 0){throw "Learned search filtering failed"}
         $learnedSearch.Clear()
         if($appPage.Page.Text -ne "การทำงานรายแอป"){throw "App policy tab missing"}
-        if($archivePage.Text -ne "นำเข้า / สำรองคำ" -or -not $backupLearned.Enabled){throw "Dictionary tools unavailable"}
+        if($archivePage.Text -ne "พจนานุกรม 3.0" -or -not $backupLearned.Enabled){throw "Dictionary tools unavailable"}
+        if($dictionaryGrid.Columns.Count -ne 8 -or -not $previewImport.Enabled -or -not $saveDictionaryRows.Enabled){throw "Dictionary Manager grid/actions missing"}
+        if($dictionaryGroupFilter.Items.Count -lt 1){throw "Dictionary group filter missing"}
         $tabs.SelectedTab=$learnedPage
         if(-not $learnedSearch.TabStop){throw "Learned search keyboard focus disabled"}
         foreach ($dimensions in @(@(700,620),@(780,650),@(930,730))) {
