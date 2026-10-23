@@ -260,16 +260,6 @@ function Add-ClipwarpRightLangIgnoredSuggestion {
 }
 
 Export-ModuleMember -Function Get-ClipwarpRightLangDefaults,Get-ClipwarpRightLangConfig,Save-ClipwarpRightLangConfig,Set-ClipwarpRightLangMode,Add-ClipwarpRightLangLearnedWord,Remove-ClipwarpRightLangLearnedWord,Clear-ClipwarpRightLangLearnedWords,Add-ClipwarpRightLangIgnoredSuggestion,Get-ClipwarpRightLangDictionaryGroups
-) { throw "Invalid dictionary group key: $key" }
-        if ([string]::IsNullOrWhiteSpace($value) -or $value.Length -gt 40 -or $value -match '[\r\n\t]') {
-            throw "Invalid dictionary group name for $key"
-        }
-        $result[$key] = $value
-        if ($result.Count -gt 3000) { throw 'Too many dictionary group assignments.' }
-    }
-    return $result
-}
-
 function Get-ClipwarpRightLangConfig {
     param([string]$ConfigPath = (Get-ClipwarpDefaultConfigPath))
     $defaults = Get-ClipwarpRightLangDefaults
