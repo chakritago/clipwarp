@@ -436,6 +436,7 @@ function Refresh-DictionaryGroupFilter {
 function Refresh-DictionaryStatuses {
     $ruleBuckets=@{};$wordBuckets=@{}
     foreach($dataRow in $dictionaryTable.Rows){
+        if(-not ([string]$dataRow['Group']).Trim()){$dataRow['Group']='ทั่วไป'}
         $source=([string]$dataRow['Source']).Trim()
         if(-not $source){$dataRow['Status']='ต้องระบุคำ';continue}
         $key=$source.ToLowerInvariant()
@@ -471,7 +472,10 @@ function Refresh-DictionaryGridFilter {
         $text=([string]$dataRow['Source'])+' '+([string]$dataRow['Replacement'])+' '+([string]$dataRow['Group'])+' '+([string]$dataRow['Origin'])
         $matchesText=(-not $query) -or ($text.IndexOf($query,[StringComparison]::OrdinalIgnoreCase) -ge 0)
         $matchesGroup=($group -eq 'ทั้งหมด') -or ([string]$dataRow['Group'] -eq $group)
-        $gridRow.Visible=$matchesText -and $matchesGroup
+        $shouldShow=$matchesText -and $matchesGroup
+        if(-not $shouldShow -and $dictionaryGrid.CurrentCell -and
+           $dictionaryGrid.CurrentCell.RowIndex -eq $gridRow.Index){$dictionaryGrid.CurrentCell=$null}
+        $gridRow.Visible=$shouldShow
         if($gridRow.Visible){$visible++}
     }
     $dictionaryCount.Text="$visible / $($dictionaryTable.Rows.Count) รายการ"
