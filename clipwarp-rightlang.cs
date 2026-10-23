@@ -3,6 +3,15 @@
 // It processes only a bounded in-memory token in explicitly allowed desktop apps.
 namespace ClipwarpRightLang
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Diagnostics;
+    using System.Runtime.InteropServices;
+    using System.Text;
+    using System.Threading;
+    using System.Windows.Forms;
+    using System.Drawing;
+
     public enum EditorTransactionState {
         PreflightRejected, NoInput, PartialInput, InputSentUnverified, Committed,
         UndoRejected, UndoSentUnverified, Restored
@@ -20,14 +29,6 @@ namespace ClipwarpRightLang
             CanOfferUndo=canUndo; RequiresRecovery=recovery; Status=status;
         }
     }
-    using System;
-    using System.Collections.Generic;
-    using System.Diagnostics;
-    using System.Runtime.InteropServices;
-    using System.Text;
-    using System.Threading;
-    using System.Windows.Forms;
-    using System.Drawing;
     public sealed class Engine : IDisposable
     {
         private const int WH_MOUSE_LL = 14, WM_LBUTTONDOWN = 0x0201, WM_RBUTTONDOWN = 0x0204, WM_MBUTTONDOWN = 0x0207;
