@@ -89,6 +89,8 @@ $instructions = @(
     '16. Scaling: editor, preview and UI font sizes independently work at 150/200% DPI'
     '17. Per-app mode: global Off dominates and blocked apps never receive hints'
     '18. Search and filter learned words, ignore one suggestion, preserve manual rules'
+    '19. Transaction stale-selection gate: change focus/selection after preview; no stale replacement may occur'
+    '20. Recovery and Dictionary Manager: move caret after correction; Undo must refuse; preview duplicate import before saving'
 )
 $listPanel = New-Object Windows.Forms.Panel
 $listPanel.SetBounds(18,268,810,405)

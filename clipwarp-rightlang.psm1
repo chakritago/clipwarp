@@ -24,6 +24,7 @@ function Get-ClipwarpRightLangDefaults {
         learningLimit = 200
         undoHistory = $false
         learnedKeys = @()
+        dictionaryGroups = [ordered]@{}
     }
 }
 
@@ -55,6 +56,31 @@ function Get-ClipwarpRightLangAppPolicies {
         if ($rule -notmatch '^(inherit|manual|auto|off),(inherit|on|off)$') { throw "Invalid application policy: $rule" }
         $result[$name] = $rule
         if ($result.Count -gt 100) { throw 'Too many application policies.' }
+    }
+    return $result
+}
+
+function Get-ClipwarpRightLangDictionaryGroups {
+    param($Groups)
+    $result = [ordered]@{}
+    if ($null -eq $Groups) { return $result }
+    $entries = @()
+    if ($Groups -is [System.Collections.IDictionary]) {
+        foreach ($key in $Groups.Keys) { $entries += [pscustomobject]@{ Key=[string]$key; Value=[string]$Groups[$key] } }
+    } else {
+        foreach ($p in $Groups.PSObject.Properties) {
+            if ($p.MemberType -eq 'NoteProperty') { $entries += [pscustomobject]@{ Key=[string]$p.Name; Value=[string]$p.Value } }
+        }
+    }
+    foreach ($entry in $entries) {
+        $key = $entry.Key.Trim()
+        $value = $entry.Value.Trim()
+        if ($key -notmatch '^(rule|word)\|.{1,128}$') { throw "Invalid dictionary group key: $key" }
+        if ([string]::IsNullOrWhiteSpace($value) -or $value.Length -gt 40 -or $value -match '[\r\n\t]') {
+            throw "Invalid dictionary group name for $key"
+        }
+        $result[$key] = $value
+        if ($result.Count -gt 3000) { throw 'Too many dictionary group assignments.' }
     }
     return $result
 }
@@ -104,6 +130,7 @@ function Get-ClipwarpRightLangConfig {
         learningLimit = Get-ClipwarpRightLangBoundedInt $rl.learningLimit 10 500 200
         undoHistory = ($rl.undoHistory -is [bool] -and $rl.undoHistory)
         learnedKeys = $keys
+        dictionaryGroups = Get-ClipwarpRightLangDictionaryGroups $rl.dictionaryGroups
     }
 }
 
@@ -152,6 +179,7 @@ function Save-ClipwarpRightLangConfig {
     $normalized['learnedKeys'] = @($Settings.learnedKeys | Where-Object {
         $_ -is [string] -and $rules.Contains($_)
     } | Select-Object -Unique)
+    $normalized['dictionaryGroups'] = Get-ClipwarpRightLangDictionaryGroups $Settings.dictionaryGroups
     foreach ($field in @('words','allowedApps','blockedApps')) {
         $values = @($Settings.$field | Where-Object { $_ -is [string] -and $_.Trim() })
         if ($values.Count -gt 2000) { throw "Too many $field entries." }
@@ -231,4 +259,4 @@ function Add-ClipwarpRightLangIgnoredSuggestion {
     return $true
 }
 
-Export-ModuleMember -Function Get-ClipwarpRightLangDefaults,Get-ClipwarpRightLangConfig,Save-ClipwarpRightLangConfig,Set-ClipwarpRightLangMode,Add-ClipwarpRightLangLearnedWord,Remove-ClipwarpRightLangLearnedWord,Clear-ClipwarpRightLangLearnedWords,Add-ClipwarpRightLangIgnoredSuggestion
+Export-ModuleMember -Function Get-ClipwarpRightLangDefaults,Get-ClipwarpRightLangConfig,Save-ClipwarpRightLangConfig,Set-ClipwarpRightLangMode,Add-ClipwarpRightLangLearnedWord,Remove-ClipwarpRightLangLearnedWord,Clear-ClipwarpRightLangLearnedWords,Add-ClipwarpRightLangIgnoredSuggestion,Get-ClipwarpRightLangDictionaryGroups

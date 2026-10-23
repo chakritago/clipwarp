@@ -60,6 +60,27 @@ function Assert-True([bool]$Value, [string]$Name) {
     if (-not $Value) { throw $Name }
     Write-Host "PASS: $Name"
 }
+
+Assert-True ([ClipwarpRightLang.Engine]::EvaluateInputTransaction(6,0,$false).State -eq [ClipwarpRightLang.EditorTransactionState]::NoInput) 'transaction distinguishes no accepted input'
+$partial=[ClipwarpRightLang.Engine]::EvaluateInputTransaction(6,4,$false)
+Assert-True ($partial.State -eq [ClipwarpRightLang.EditorTransactionState]::PartialInput -and
+    -not $partial.CanOfferUndo -and $partial.RequiresRecovery) 'partial SendInput is never offered as a safe Undo transaction'
+$unverified=[ClipwarpRightLang.Engine]::EvaluateInputTransaction(6,6,$false)
+Assert-True ($unverified.State -eq [ClipwarpRightLang.EditorTransactionState]::InputSentUnverified -and
+    -not $unverified.CanOfferUndo) 'full input without verified postcondition cannot offer Undo'
+$committed=[ClipwarpRightLang.Engine]::EvaluateInputTransaction(6,6,$true)
+Assert-True ($committed.State -eq [ClipwarpRightLang.EditorTransactionState]::Committed -and
+    $committed.CanOfferUndo) 'only a full send with verified postcondition commits'
+Assert-True ([ClipwarpRightLang.Engine]::EvaluateInputTransaction(6,8,$true).State -eq [ClipwarpRightLang.EditorTransactionState]::PartialInput) 'unexpected SendInput event count is rejected'
+Assert-True ([ClipwarpRightLang.Engine]::EvaluateUndoTransaction($true,$false).State -eq [ClipwarpRightLang.EditorTransactionState]::UndoSentUnverified) 'Undo request and verified restoration are distinct states'
+Assert-True ([ClipwarpRightLang.Engine]::EvaluateUndoTransaction($true,$true).State -eq [ClipwarpRightLang.EditorTransactionState]::Restored) 'Undo reports restored only after verification'
+$partialUndo=[ClipwarpRightLang.Engine]::EvaluateUndoInputTransaction(4,2,$false)
+Assert-True ($partialUndo.State -eq [ClipwarpRightLang.EditorTransactionState]::UndoPartialInput -and -not $partialUndo.CanOfferUndo -and $partialUndo.RequiresRecovery) 'partial Ctrl+Z input is reported separately and requires manual recovery'
+Assert-True ([ClipwarpRightLang.Engine]::IsExpectedTextAfterReplacement('hello world','world','โลก',6,11,$false,'hello โลก')) 'transaction checks exact full document postcondition'
+Assert-True (-not [ClipwarpRightLang.Engine]::IsExpectedTextAfterReplacement('hello world','world','โลก',6,11,$false,'hello xโลก')) 'unexpected editor content fails transaction postcondition'
+Assert-True ([ClipwarpRightLang.Engine]::IsExpectedTextAfterReplacement('hello world','world','โลก',6,11,$true,'hello โลก ')) 'automatic correction verifies the expected trailing space'
+Write-Host 'PASS: editor transaction and recovery state machine'
+
 $allowedApps = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 [void]$allowedApps.Add('notepad')
 [void]$allowedApps.Add('powershell')

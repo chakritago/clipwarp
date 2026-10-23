@@ -11,6 +11,24 @@ namespace ClipwarpRightLang
     using System.Threading;
     using System.Windows.Forms;
     using System.Drawing;
+
+    public enum EditorTransactionState {
+        PreflightRejected, NoInput, PartialInput, InputSentUnverified, Committed,
+        UndoRejected, UndoPartialInput, UndoSentUnverified, Restored
+    }
+    public sealed class EditorTransactionResult {
+        public EditorTransactionState State { get; private set; }
+        public int ExpectedInputEvents { get; private set; }
+        public int SentInputEvents { get; private set; }
+        public bool CanOfferUndo { get; private set; }
+        public bool RequiresRecovery { get; private set; }
+        public string Status { get; private set; }
+        public EditorTransactionResult(EditorTransactionState state, int expected, int sent,
+                                       bool canUndo, bool recovery, string status) {
+            State=state; ExpectedInputEvents=expected; SentInputEvents=sent;
+            CanOfferUndo=canUndo; RequiresRecovery=recovery; Status=status;
+        }
+    }
     public sealed class Engine : IDisposable
     {
         private const int WH_MOUSE_LL = 14, WM_LBUTTONDOWN = 0x0201, WM_RBUTTONDOWN = 0x0204, WM_MBUTTONDOWN = 0x0207;
@@ -130,6 +148,15 @@ namespace ClipwarpRightLang
                     BackColor = Color.FromArgb(48, 69, 96), ForeColor = Color.White };
                 button.FlatAppearance.BorderSize = 0; Controls.Add(button); return button;
             }
+            public void PresentStatus(string message) {
+                label.Text = message;
+                apply.Visible = cancel.Visible = undo.Visible = ignore.Visible = false;
+                Point pos = Cursor.Position;
+                Rectangle work = Screen.FromPoint(pos).WorkingArea;
+                Location = new Point(Math.Min(work.Right - Width, Math.Max(work.Left, pos.X + 12)),
+                                     Math.Min(work.Bottom - Height, Math.Max(work.Top, pos.Y + 18)));
+                if (!Visible) Show(); else { TopMost = true; Invalidate(); }
+            }
             public void Present(string source, string corrected, bool isUndo, bool passive = false) {
                 label.Text = source + "  →  " + corrected +
                     Environment.NewLine + (isUndo ? "F8 / คลิกเพื่อย้อนกลับ (8 วินาที)" :
@@ -151,7 +178,49 @@ namespace ClipwarpRightLang
         private HashSet<string> words = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private DateTime statusUntil = DateTime.MinValue;
         public bool Installed { get { return hook != IntPtr.Zero; } }
+
+        public static EditorTransactionResult EvaluateInputTransaction(int expectedEvents, int sentEvents, bool postconditionVerified) {
+            if (expectedEvents <= 0 || sentEvents <= 0)
+                return new EditorTransactionResult(EditorTransactionState.NoInput, expectedEvents, Math.Max(0,sentEvents),
+                    false, false, "No input events accepted");
+            if (sentEvents != expectedEvents)
+                return new EditorTransactionResult(EditorTransactionState.PartialInput, expectedEvents, sentEvents,
+                    false, true, "Partial input; inspect the editor before continuing");
+            if (!postconditionVerified)
+                return new EditorTransactionResult(EditorTransactionState.InputSentUnverified, expectedEvents, sentEvents,
+                    false, true, "Input sent; editor result could not be verified");
+            return new EditorTransactionResult(EditorTransactionState.Committed, expectedEvents, sentEvents,
+                true, false, "Committed; editor content verified");
+        }
+        public static EditorTransactionResult EvaluateUndoTransaction(bool inputSent, bool restoredVerified) {
+            return EvaluateUndoInputTransaction(1,inputSent ? 1 : 0,restoredVerified);
+        }
+        public static EditorTransactionResult EvaluateUndoInputTransaction(int expectedEvents, int sentEvents, bool restoredVerified) {
+            if(expectedEvents<=0 || sentEvents<=0)
+                return new EditorTransactionResult(EditorTransactionState.UndoRejected,Math.Max(1,expectedEvents),Math.Max(0,sentEvents),
+                    false,true,"Undo input was rejected; inspect the editor");
+            if(sentEvents!=expectedEvents)
+                return new EditorTransactionResult(EditorTransactionState.UndoPartialInput,expectedEvents,sentEvents,
+                    false,true,"Partial Undo input; inspect editor and do not repeat blindly");
+            if(!restoredVerified)
+                return new EditorTransactionResult(EditorTransactionState.UndoSentUnverified,expectedEvents,sentEvents,
+                    false,true,"Undo sent; restoration could not be verified");
+            return new EditorTransactionResult(EditorTransactionState.Restored,expectedEvents,sentEvents,
+                false,false,"Undo completed; editor content verified");
+        }
+        public static bool IsExpectedTextAfterReplacement(string original, string source, string replacement,
+                                                          int start, int end, bool trailingSpace, string actual) {
+            if (original == null || actual == null || string.IsNullOrEmpty(source) ||
+                string.IsNullOrEmpty(replacement) || start < 0 || end < start || end > original.Length ||
+                start > original.Length - source.Length || end - start != source.Length ||
+                !string.Equals(original.Substring(start, source.Length), source, StringComparison.Ordinal))
+                return false;
+            string expected = original.Substring(0,start) + replacement +
+                (trailingSpace ? " " : "") + original.Substring(end);
+            return string.Equals(expected,actual,StringComparison.Ordinal);
+        }
 
         public Engine() {
             proc = OnKeyboard; mouseProc = OnMouse;
@@ -165,6 +234,10 @@ namespace ClipwarpRightLang
             bubbleTimer = new System.Windows.Forms.Timer();
             bubbleTimer.Interval = 250;
             bubbleTimer.Tick += delegate {
+                if (statusUntil != DateTime.MinValue && DateTime.UtcNow > statusUntil) {
+                    statusUntil = DateTime.MinValue;
+                    if (pending == null && lastUndo == null) bubble.Dismiss();
+                }
                 if (pending != null && DateTime.UtcNow > pending.Until) CancelPreview();
                 if (lastUndo != null && DateTime.UtcNow > lastUndo.Until) {
                     lastUndo = null;
@@ -395,6 +468,10 @@ namespace ClipwarpRightLang
                         editor.Start, editor.End, null, true);
         }
 
+        private void ShowStatus(string message, int durationMs = 4500) {
+            statusUntil = DateTime.UtcNow.AddMilliseconds(Math.Max(1500,Math.Min(8000,durationMs)));
+            bubble.PresentStatus(message);
+        }
         private bool ShowPreview(string source, string corrected, IntPtr window, IntPtr focus,
                                  bool selection, int start, int end, EditorSnapshot bridge = null, bool passive = false) {
             if (!CanCorrect(source, corrected, true, false, false)) return false;
@@ -417,12 +494,21 @@ namespace ClipwarpRightLang
                         correction = ReplacementFor(snapshot.SelectedText, true);
                 } catch { }
                 finally { Interlocked.Exchange(ref bridgeBusy, 0); }
-                if (snapshot == null || correction == null) return;
+                if (snapshot == null || correction == null) {
+                    try { bubble.BeginInvoke((MethodInvoker)delegate {
+                        if(serial!=bridgeSerial || mode=="off" || GetForegroundWindow()!=window) return;
+                        ShowStatus(snapshot==null
+                            ? "Editor ไม่เปิดเผย Selection ที่รองรับ · ไม่มีการแก้ข้อความ"
+                            : "ไม่พบกฎแก้ไขสำหรับ Selection นี้ · ไม่มีการแก้ข้อความ");
+                    }); } catch { }
+                    return;
+                }
                 try {
                     bubble.BeginInvoke((MethodInvoker)delegate {
                         if (serial != bridgeSerial || mode == "off" ||
                             GetForegroundWindow() != window || !editorBridgeEnabled) return;
-                        ShowPreview(snapshot.SelectedText, correction, window, IntPtr.Zero, true, -1, -1, snapshot);
+                        if(!ShowPreview(snapshot.SelectedText, correction, window, IntPtr.Zero, true, -1, -1, snapshot))
+                            ShowStatus("ไม่สามารถแสดงตัวอย่างได้ · ไม่มีการแก้ข้อความ");
                     });
                 } catch { }
             });
@@ -431,53 +517,75 @@ namespace ClipwarpRightLang
             worker.Start();
             return true;
         }
-        private static bool InjectBridgeSelection(string replacement) {
+        private static int InjectBridgeSelection(string replacement) {
             List<INPUT> events = new List<INPUT>();
             foreach (char ch in replacement) {
                 events.Add(Key(0, ch, KEYEVENTF_UNICODE));
                 events.Add(Key(0, ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
             }
             INPUT[] keys = events.ToArray();
-            return keys.Length > 0 &&
-                SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT))) == keys.Length;
+            return keys.Length == 0 ? 0 :
+                (int)SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT)));
         }
         private void ApplyBridgePreview(PreviewRequest p) {
             if (p == null || p.Bridge == null || Interlocked.CompareExchange(ref bridgeBusy,1,0) != 0) return;
             int serial = Interlocked.Increment(ref bridgeSerial);
             Thread worker = new Thread(delegate() {
-                bool sent = false;
+                int expectedEvents = p.Replacement.Length * 2;
+                int sentEvents = 0;
+                bool preflightPassed = false;
                 bool verified = false;
+                string preflightFailure = "Selection/context changed after preview · no text was changed";
                 try {
-                    if (DateTime.UtcNow <= p.Until && serial == bridgeSerial &&
-                        EditorBridge.SameSelection(p.Window,p.Bridge) && GetForegroundWindow() == p.Window) {
-                        sent = InjectBridgeSelection(p.Replacement);
-                        if (sent) {
-                            // Accessibility providers update asynchronously after SendInput.
-                            // Verify the editor's actual caret text before offering native Undo.
-                            Thread.Sleep(100);
-                            verified = EditorBridge.MatchesCaretTail(p.Window,p.Bridge,p.Replacement);
+                    if(DateTime.UtcNow>p.Until) preflightFailure="Preview expired · no text was changed";
+                    else if(serial!=bridgeSerial) preflightFailure=null;
+                    else if(GetForegroundWindow()!=p.Window) preflightFailure=null;
+                    else if(!EditorBridge.SameSelection(p.Window,p.Bridge)) preflightFailure="Selection/context changed after preview · no text was changed";
+                    else {
+                        preflightPassed=true;
+                        sentEvents=InjectBridgeSelection(p.Replacement);
+                        if(sentEvents==expectedEvents) {
+                            Thread.Sleep(140);
+                            verified=EditorBridge.MatchesCaretTail(p.Window,p.Bridge,p.Replacement);
                         }
                     }
                 } catch { }
                 finally { Interlocked.Exchange(ref bridgeBusy,0); }
-                if (!sent) return;
-                bool verifiedCopy = verified;
+                if(!preflightPassed) {
+                    if(!string.IsNullOrEmpty(preflightFailure)) {
+                        try { bubble.BeginInvoke((MethodInvoker)delegate {
+                            if(serial==bridgeSerial && GetForegroundWindow()==p.Window) ShowStatus(preflightFailure);
+                        }); } catch { }
+                    }
+                    return;
+                }
+                EditorTransactionResult result = EvaluateInputTransaction(expectedEvents,sentEvents,verified);
+                UndoHistoryEntry entry = sentEvents > 0 ? Remember(p.Source,p.Replacement,p.Window,true) : null;
+                if (entry != null) entry.Status = result.Status;
                 try { bubble.BeginInvoke((MethodInvoker)delegate {
-                    if (serial != bridgeSerial) return;
+                    if (serial != bridgeSerial) {
+                        if (entry != null) entry.Status = "Verification canceled because editing continued";
+                        return;
+                    }
                     token = "";
-                    lastUndo = verifiedCopy ? new UndoRequest { Window = p.Window, Focus = IntPtr.Zero,
-                        Source = p.Source, Replacement = p.Replacement, Bridge = p.Bridge,
-                        Until = DateTime.UtcNow.AddSeconds(8) } : null;
-                    UndoHistoryEntry entry = Remember(p.Source,p.Replacement,p.Window,true);
-                    if (entry != null) entry.Status = verifiedCopy ?
-                        "Inserted and caret verified; Undo eligible" :
-                        "Input sent; editor result not verified (Undo unavailable)";
-                    if (lastUndo != null) {
-                        lastUndo.History = entry;
+                    if (result.CanOfferUndo) {
+                        lastUndo = new UndoRequest { Window=p.Window, Focus=IntPtr.Zero,
+                            Source=p.Source, Replacement=p.Replacement, Bridge=p.Bridge,
+                            History=entry, Until=DateTime.UtcNow.AddSeconds(8) };
                         bubble.Present(p.Source,p.Replacement,true);
-                    } else bubble.Dismiss();
-                    if (learnAccepted && verifiedCopy && CorrectionAccepted != null) {
-                        try { CorrectionAccepted(p.Source,p.Replacement); } catch { }
+                        if (learnAccepted && CorrectionAccepted != null) {
+                            try { CorrectionAccepted(p.Source,p.Replacement); } catch { }
+                        }
+                    } else {
+                        lastUndo = null;
+                        if (result.RequiresRecovery) {
+                            string recovery = result.State == EditorTransactionState.PartialInput
+                                ? "ส่งข้อความได้เพียงบางส่วน · ตรวจข้อความด้วยตนเองก่อนใช้ Undo"
+                                : "ตรวจผลการแก้ไขไม่ได้ · ตรวจข้อความก่อนทำต่อ (ปิด Undo เพื่อความปลอดภัย)";
+                            ShowStatus(recovery);
+                        } else if (sentEvents == 0) {
+                            ShowStatus("Editor ไม่รับข้อมูล · ไม่มีการเสนอ Undo");
+                        }
                     }
                 }); } catch { }
             });
@@ -486,46 +594,78 @@ namespace ClipwarpRightLang
             worker.Start();
         }
         private void UndoBridge(UndoRequest last) {
-            if (last == null || last.Bridge == null || Interlocked.CompareExchange(ref bridgeBusy,1,0) != 0) return;
-            int serial = Interlocked.Increment(ref bridgeSerial);
-            Thread worker = new Thread(delegate() {
+            if(last==null || last.Bridge==null || Interlocked.CompareExchange(ref bridgeBusy,1,0)!=0) return;
+            int serial=Interlocked.Increment(ref bridgeSerial);
+            Thread worker=new Thread(delegate() {
+                int sentEvents=0; bool preflight=false; bool restored=false;
                 try {
-                    if (serial != bridgeSerial || GetForegroundWindow() != last.Window ||
-                        !EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Replacement)) return;
-                    INPUT[] undo = new INPUT[] { Key(VK_CONTROL,(char)0,0), Key(VK_Z,(char)0,0),
-                        Key(VK_Z,(char)0,KEYEVENTF_KEYUP), Key(VK_CONTROL,(char)0,KEYEVENTF_KEYUP) };
-                    bool sent = SendInput((uint)undo.Length,undo,Marshal.SizeOf(typeof(INPUT))) == undo.Length;
-                    bool restored = false;
-                    if (sent) {
-                        Thread.Sleep(100);
-                        restored = EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Source);
+                    if(serial==bridgeSerial && GetForegroundWindow()==last.Window &&
+                       EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Replacement)) {
+                        preflight=true;
+                        INPUT[] undo=new INPUT[] { Key(VK_CONTROL,(char)0,0), Key(VK_Z,(char)0,0),
+                            Key(VK_Z,(char)0,KEYEVENTF_KEYUP), Key(VK_CONTROL,(char)0,KEYEVENTF_KEYUP) };
+                        sentEvents=(int)SendInput((uint)undo.Length,undo,Marshal.SizeOf(typeof(INPUT)));
+                        if(sentEvents==undo.Length) {
+                            Thread.Sleep(140);
+                            restored=EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Source);
+                        }
                     }
-                    if (last.History != null)
-                        last.History.Status = !sent ? "Native Ctrl+Z rejected" :
-                            restored ? "Restored (UI Automation caret verified)" :
-                                       "Native Ctrl+Z sent; restore not verified";
                 } catch { }
                 finally { Interlocked.Exchange(ref bridgeBusy,0); }
+                if(!preflight) {
+                    if(last.History!=null) last.History.Status="Undo precondition changed; no Ctrl+Z sent";
+                    try { bubble.BeginInvoke((MethodInvoker)delegate {
+                        if(serial==bridgeSerial && GetForegroundWindow()==last.Window)
+                            ShowStatus("ข้อความหรือบริบทเปลี่ยน · ไม่ส่ง Ctrl+Z เพื่อป้องกันการย้อนงานอื่น");
+                    }); } catch { }
+                    return;
+                }
+                EditorTransactionResult result=EvaluateUndoInputTransaction(4,sentEvents,restored);
+                if(last.History!=null) last.History.Status=result.Status;
+                try { bubble.BeginInvoke((MethodInvoker)delegate {
+                    if(serial!=bridgeSerial || GetForegroundWindow()!=last.Window) return;
+                    string message=result.State==EditorTransactionState.Restored
+                        ? "ย้อนกลับแล้ว · UI Automation ยืนยันข้อความเดิม"
+                        : result.State==EditorTransactionState.UndoPartialInput
+                            ? "ส่งคีย์ Ctrl+Z ได้บางส่วน · ตรวจข้อความ ห้ามกดซ้ำทันที"
+                            : result.State==EditorTransactionState.UndoRejected
+                                ? "Undo ไม่ถูกส่ง · ตรวจข้อความด้วยตนเองก่อนทำต่อ"
+                                : "ส่ง Ctrl+Z แล้วแต่ยืนยันผลไม่ได้ · ตรวจข้อความด้วยตนเอง";
+                    ShowStatus(message);
+                }); } catch { }
             });
             worker.IsBackground=true;
             worker.SetApartmentState(System.Threading.ApartmentState.STA);
             worker.Start();
         }
         private bool ApplyPreview() {
-            PreviewRequest p = pending; pending = null;
-            bubble.Dismiss();
-            if (p == null || DateTime.UtcNow > p.Until || GetForegroundWindow() != p.Window) return false;
-            if (p.Bridge != null) { ApplyBridgePreview(p); return true; }
-            EditorState check;
-            if (!TryReadEditor(p.Window, out check) || check.Focus != p.Focus) return false;
-            if (p.IsSelection) {
-                if (check.Start != p.SelectionStart || check.End != p.SelectionEnd
-                    || check.Text.Substring(check.Start, check.End - check.Start) != p.Source) return false;
-                return ReplaceText(p.Source, p.Replacement, p.Window, p.Focus, true);
+            PreviewRequest p=pending; pending=null; bubble.Dismiss();
+            if(p==null) return false;
+            if(DateTime.UtcNow>p.Until) {
+                if(GetForegroundWindow()==p.Window) ShowStatus("ตัวอย่างหมดอายุ · ไม่มีการแก้ข้อความ");
+                return false;
             }
-            // The original token must still appear immediately before the caret.
-            if (!IsUndoCandidate(check.Text, check.Start, check.End, p.Source)) return false;
-            return ReplaceText(p.Source, p.Replacement, p.Window, p.Focus, false);
+            if(GetForegroundWindow()!=p.Window) return false;
+            if(p.Bridge!=null) { ApplyBridgePreview(p); return true; }
+            EditorState check;
+            if(!TryReadEditor(p.Window,out check) || check.Focus!=p.Focus) {
+                ShowStatus("Editor หรือโฟกัสเปลี่ยนหลังตัวอย่าง · ยกเลิกโดยไม่แก้ข้อความ");
+                return false;
+            }
+            if(p.IsSelection) {
+                if(check.Start!=p.SelectionStart || check.End!=p.SelectionEnd ||
+                   check.Start<0 || check.End>check.Text.Length || check.End<check.Start ||
+                   !string.Equals(check.Text.Substring(check.Start,check.End-check.Start),p.Source,StringComparison.Ordinal)) {
+                    ShowStatus("Selection เปลี่ยนหลังตัวอย่าง · ยกเลิกโดยไม่แก้ข้อความ");
+                    return false;
+                }
+                return ReplaceText(p.Source,p.Replacement,p.Window,p.Focus,true);
+            }
+            if(!IsUndoCandidate(check.Text,check.Start,check.End,p.Source)) {
+                ShowStatus("ข้อความต้นทางหรือ Caret เปลี่ยน · ยกเลิกโดยไม่แก้ข้อความ");
+                return false;
+            }
+            return ReplaceText(p.Source,p.Replacement,p.Window,p.Focus,false);
         }
 
         private sealed class EditorState {
@@ -583,15 +723,29 @@ namespace ClipwarpRightLang
         }
         private bool ShowSelectionPreview(IntPtr window, string processName) {
             EditorState e;
-            if (!TryReadEditor(window, out e)) {
-                if (!EditorBridge.ShouldProbe(editorBridgeEnabled, processName, allowed, excluded)) return false;
-                return QueueBridgeSelection(window, processName);
+            if(!TryReadEditor(window,out e)) {
+                if(!EditorBridge.ShouldProbe(editorBridgeEnabled,processName,allowed,excluded)) {
+                    ShowStatus("Editor นี้ยังไม่รองรับ หรือยังไม่ได้เปิดใช้ Editor Bridge · ไม่มีการแก้ข้อความ");
+                    return true;
+                }
+                if(!QueueBridgeSelection(window,processName))
+                    ShowStatus("กำลังตรวจ Editor อยู่ · ลองใหม่อีกครั้ง");
+                return true;
             }
-            int count = e.End - e.Start;
-            if (count < 2 || count > MaxToken) return false;
-            string source = e.Text.Substring(e.Start, count);
-            string correction = ReplacementFor(source, true);
-            return correction != null && ShowPreview(source, correction, window, e.Focus, true, e.Start, e.End);
+            int count=e.End-e.Start;
+            if(count<2 || count>MaxToken) {
+                ShowStatus("เลือกข้อความอย่างน้อย 2 ตัวอักษรก่อนใช้คำสั่งนี้");
+                return true;
+            }
+            string source=e.Text.Substring(e.Start,count);
+            string correction=ReplacementFor(source,true);
+            if(correction==null) {
+                ShowStatus("ไม่พบกฎแก้ไขสำหรับข้อความที่เลือก · ข้อความเดิมคงอยู่");
+                return true;
+            }
+            if(!ShowPreview(source,correction,window,e.Focus,true,e.Start,e.End))
+                ShowStatus("ไม่สามารถแสดงตัวอย่างได้ · ข้อความเดิมคงอยู่");
+            return true;
         }
         private bool ShowTokenPreview(IntPtr window) {
             string correction = ReplacementFor(token, true);
@@ -603,7 +757,34 @@ namespace ClipwarpRightLang
         public event Action<string, string> CorrectionAccepted;
         private bool ReplaceText(string source, string replacement, IntPtr window, IntPtr focus,
                                  bool selection, bool trailingSpace = false, EditorSnapshot bridge = null) {
-            if (GetForegroundWindow() != window) return false;
+            if (GetForegroundWindow() != window || string.IsNullOrEmpty(source) ||
+                string.IsNullOrEmpty(replacement)) return false;
+            EditorState before;
+            if(!TryReadEditor(window,out before) || before.Focus!=focus) {
+                if(GetForegroundWindow()==window) ShowStatus("Editor/Focus เปลี่ยน · ยกเลิกโดยไม่แก้ข้อความ");
+                return false;
+            }
+            int start,end;
+            if(selection) {
+                start=before.Start; end=before.End;
+                if(start<0 || end<start || end>before.Text.Length || end-start!=source.Length ||
+                   !string.Equals(before.Text.Substring(start,end-start),source,StringComparison.Ordinal)) {
+                    ShowStatus("Selection เปลี่ยนก่อนเริ่มธุรกรรม · ไม่มีการแก้ข้อความ");
+                    return false;
+                }
+            } else {
+                if(before.Start!=before.End || before.Start<source.Length) {
+                    ShowStatus("Caret เปลี่ยนก่อนเริ่มธุรกรรม · ไม่มีการแก้ข้อความ");
+                    return false;
+                }
+                start=before.Start-source.Length; end=before.Start;
+                if(!string.Equals(before.Text.Substring(start,source.Length),source,StringComparison.Ordinal)) {
+                    ShowStatus("ข้อความต้นทางเปลี่ยนก่อนเริ่มธุรกรรม · ไม่มีการแก้ข้อความ");
+                    return false;
+                }
+            }
+            string expectedText=before.Text.Substring(0,start)+replacement+
+                (trailingSpace ? " " : "")+before.Text.Substring(end);
             List<INPUT> events = new List<INPUT>();
             if (!selection)
                 for (int i = 0; i < source.Length; i++) {
@@ -613,25 +794,59 @@ namespace ClipwarpRightLang
                 events.Add(Key(0, c, KEYEVENTF_UNICODE));
                 events.Add(Key(0, c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
             }
-            INPUT[] keys = events.ToArray();
-            if (SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT))) != keys.Length) {
-                token = ""; lastUndo = null; return false;
+            INPUT[] keys=events.ToArray();
+            int sent=(int)SendInput((uint)keys.Length,keys,Marshal.SizeOf(typeof(INPUT)));
+            token=""; lastUndo=null;
+            if (sent != keys.Length) {
+                EditorTransactionResult failed=EvaluateInputTransaction(keys.Length,sent,false);
+                UndoHistoryEntry failedEntry=sent>0 ? Remember(source,replacement,window,false) : null;
+                if (failedEntry!=null) failedEntry.Status=failed.Status;
+                Interlocked.Increment(ref bridgeSerial);
+                if (GetForegroundWindow()==window) {
+                    ShowStatus(sent>0
+                        ? "ส่งข้อความได้บางส่วน · ตรวจข้อความด้วยตนเองก่อนทำต่อ"
+                        : "Editor ไม่รับข้อมูล · ไม่สามารถยืนยันการแก้ไขได้");
+                }
+                return false;
             }
-            token = "";
-            lastUndo = new UndoRequest { Window = window, Focus = focus, Source = source,
-                Replacement = replacement, HasTrailingSpace = trailingSpace, Bridge = bridge,
-                Until = DateTime.UtcNow.AddSeconds(8) };
-            bubble.Present(source, replacement, true);
-            lastUndo.History = Remember(source,replacement,window,false);
-            if (learnAccepted && !trailingSpace && CorrectionAccepted != null) {
-                // Persist accepted words after returning from the global keyboard hook.
-                string savedSource = source, savedReplacement = replacement;
+            int serial=Interlocked.Increment(ref bridgeSerial);
+            UndoHistoryEntry entry=Remember(source,replacement,window,false);
+            if (entry!=null) entry.Status="Input sent; awaiting full-document verification";
+            Thread worker=new Thread(delegate() {
+                Thread.Sleep(140);
+                bool verified=false;
+                try {
+                    EditorState after;
+                    verified=serial==bridgeSerial && GetForegroundWindow()==window &&
+                        TryReadEditor(window,out after) && after.Focus==focus &&
+                        string.Equals(after.Text,expectedText,StringComparison.Ordinal);
+                } catch { }
+                if (entry!=null) entry.Status=verified
+                    ? "Committed; full document verified; Undo eligible"
+                    : "Input sent; full-document verification failed (Undo unavailable)";
                 try { bubble.BeginInvoke((MethodInvoker)delegate {
-                    if (CorrectionAccepted != null) {
-                        try { CorrectionAccepted(savedSource, savedReplacement); } catch { }
+                    if (serial!=bridgeSerial) {
+                        if(entry!=null) entry.Status="Verification canceled because editing continued";
+                        return;
+                    }
+                    if (verified) {
+                        lastUndo=new UndoRequest { Window=window, Focus=focus, Source=source,
+                            Replacement=replacement, HasTrailingSpace=trailingSpace, Bridge=bridge,
+                            History=entry, Until=DateTime.UtcNow.AddSeconds(8) };
+                        bubble.Present(source,replacement,true);
+                        if (learnAccepted && !trailingSpace && CorrectionAccepted!=null) {
+                            try { CorrectionAccepted(source,replacement); } catch { }
+                        }
+                    } else {
+                        lastUndo=null;
+                        if (GetForegroundWindow()==window)
+                            ShowStatus("ตรวจข้อความหลังแก้ไขไม่ได้ · ตรวจเนื้อหาเองก่อนใช้ Undo");
                     }
                 }); } catch { }
-            }
+            });
+            worker.IsBackground=true;
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
             return true;
         }
         public static bool IsUndoCandidate(string text, int selectionStart, int selectionEnd, string replacement) {
@@ -642,49 +857,91 @@ namespace ClipwarpRightLang
                               replacement, StringComparison.Ordinal);
         }
         private bool UndoLast(IntPtr window) {
-            UndoRequest last = lastUndo;
-            if (last == null || DateTime.UtcNow > last.Until || last.Window != window) return false;
-            if (last.Bridge != null) {
+            UndoRequest last=lastUndo;
+            if(last==null || DateTime.UtcNow>last.Until || last.Window!=window) return false;
+            if(last.Bridge!=null) {
                 // UI Automation is cross-process: never query providers inside the keyboard hook.
-                lastUndo = null; bubble.Dismiss(); token = "";
+                lastUndo=null; bubble.Dismiss(); token="";
                 UndoBridge(last);
                 return true;
             }
             EditorState e;
-            if (!TryReadEditor(window, out e) || e.Focus != last.Focus || e.Start != e.End) {
-                lastUndo = null; bubble.Dismiss(); return false;
+            if(!TryReadEditor(window,out e) || e.Focus!=last.Focus || e.Start!=e.End) {
+                lastUndo=null; bubble.Dismiss();
+                if(GetForegroundWindow()==window) ShowStatus("ตำแหน่งข้อความเปลี่ยน · ยกเลิก Undo เพื่อความปลอดภัย");
+                return true;
             }
-            int effectiveCaret = e.Start;
-            if (last.HasTrailingSpace) {
-                if (effectiveCaret < 1 || e.Text[effectiveCaret - 1] != ' ') {
-                    lastUndo = null; bubble.Dismiss(); return false;
+            int effectiveCaret=e.Start;
+            if(last.HasTrailingSpace) {
+                if(effectiveCaret<1 || e.Text[effectiveCaret-1]!=' ') {
+                    lastUndo=null; bubble.Dismiss(); ShowStatus("ช่องว่างหลังคำเปลี่ยน · ยกเลิก Undo เพื่อความปลอดภัย");
+                    return true;
                 }
                 effectiveCaret--;
             }
-            if (!IsUndoCandidate(e.Text, effectiveCaret, effectiveCaret, last.Replacement)) {
-                lastUndo = null; bubble.Dismiss(); return false;
+            if(!IsUndoCandidate(e.Text,effectiveCaret,effectiveCaret,last.Replacement)) {
+                lastUndo=null; bubble.Dismiss(); ShowStatus("ข้อความหรือ Caret เปลี่ยน · ไม่ส่งคำสั่ง Undo");
+                return true;
             }
-            lastUndo = null;
-            bubble.Dismiss();
-            List<INPUT> events = new List<INPUT>();
-            if (last.HasTrailingSpace) {
-                events.Add(Key(VK_LEFT, (char)0, 0)); events.Add(Key(VK_LEFT, (char)0, KEYEVENTF_KEYUP));
+            int replaceStart=effectiveCaret-last.Replacement.Length;
+            string expectedRestored=e.Text.Substring(0,replaceStart)+last.Source+e.Text.Substring(effectiveCaret);
+            lastUndo=null; bubble.Dismiss(); token="";
+            List<INPUT> events=new List<INPUT>();
+            if(last.HasTrailingSpace) {
+                events.Add(Key(VK_LEFT,(char)0,0)); events.Add(Key(VK_LEFT,(char)0,KEYEVENTF_KEYUP));
             }
-            for (int i = 0; i < last.Replacement.Length; i++) {
-                events.Add(Key(VK_BACK, (char)0, 0)); events.Add(Key(VK_BACK, (char)0, KEYEVENTF_KEYUP));
+            for(int i=0;i<last.Replacement.Length;i++) {
+                events.Add(Key(VK_BACK,(char)0,0)); events.Add(Key(VK_BACK,(char)0,KEYEVENTF_KEYUP));
             }
-            foreach (char c in last.Source) {
-                events.Add(Key(0, c, KEYEVENTF_UNICODE));
-                events.Add(Key(0, c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+            foreach(char c in last.Source) {
+                events.Add(Key(0,c,KEYEVENTF_UNICODE));
+                events.Add(Key(0,c,KEYEVENTF_UNICODE|KEYEVENTF_KEYUP));
             }
-            if (last.HasTrailingSpace) {
-                events.Add(Key(VK_RIGHT, (char)0, 0)); events.Add(Key(VK_RIGHT, (char)0, KEYEVENTF_KEYUP));
+            if(last.HasTrailingSpace) {
+                events.Add(Key(VK_RIGHT,(char)0,0)); events.Add(Key(VK_RIGHT,(char)0,KEYEVENTF_KEYUP));
             }
-            INPUT[] keys = events.ToArray();
-            token = "";
-            bool success = SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT))) == keys.Length;
-            if (last.History != null) last.History.Status = success ? "Undo input sent" : "Undo input failed";
-            return success;
+            INPUT[] keys=events.ToArray();
+            int sent=(int)SendInput((uint)keys.Length,keys,Marshal.SizeOf(typeof(INPUT)));
+            EditorTransactionResult immediate=EvaluateUndoTransaction(sent==keys.Length,false);
+            if(last.History!=null) last.History.Status=sent!=keys.Length
+                ? "Undo input incomplete; inspect text; do not repeat blindly"
+                : "Undo sent; verifying full-document restoration";
+            int serial=Interlocked.Increment(ref bridgeSerial);
+            Thread worker=new Thread(delegate() {
+                bool restored=false;
+                if(sent==keys.Length) {
+                    Thread.Sleep(140);
+                    try {
+                        EditorState after;
+                        restored=serial==bridgeSerial && GetForegroundWindow()==window &&
+                            TryReadEditor(window,out after) && after.Focus==last.Focus &&
+                            string.Equals(after.Text,expectedRestored,StringComparison.Ordinal);
+                    } catch { }
+                }
+                EditorTransactionResult result=EvaluateUndoInputTransaction(keys.Length,sent,restored);
+                if(last.History!=null) last.History.Status=result.Status;
+                try { bubble.BeginInvoke((MethodInvoker)delegate {
+                    if(serial!=bridgeSerial) {
+                        if(last.History!=null) last.History.Status="Undo verification canceled because editing continued";
+                        return;
+                    }
+                    if(GetForegroundWindow()==window) {
+                        string message=result.State==EditorTransactionState.Restored
+                            ? "ย้อนกลับแล้ว · ตรวจยืนยันข้อความทั้งช่องแล้ว"
+                            : result.State==EditorTransactionState.UndoPartialInput
+                                ? "ส่งคีย์ Undo ได้บางส่วน · ตรวจข้อความด้วยตนเอง ห้ามกดซ้ำทันที"
+                                : result.State==EditorTransactionState.UndoRejected
+                                    ? "Editor ไม่รับคำสั่ง Undo · ตรวจข้อความด้วยตนเอง"
+                                    : "ส่ง Undo แล้วแต่ยืนยันผลไม่ได้ · ตรวจข้อความด้วยตนเอง";
+                        ShowStatus(message);
+                    }
+                }); } catch { }
+            });
+            worker.IsBackground=true;
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
+            // Consume F8 once a valid Undo attempt has begun; never leak it to the editor.
+            return true;
         }
 
         private IntPtr OnMouse(int code, IntPtr message, IntPtr data)

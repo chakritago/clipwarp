@@ -326,64 +326,286 @@ $ignoredEditor.BringToFront()
 # Per-app policy never grants monitoring permission: allowlist and global Off always win.
 # Portable dictionary tools operate on a versioned JSON format and never
 # change the security allow/block lists, keyboard mode or Windows autostart.
+# Dictionary Manager 3.0: editable table, live duplicate detection and safe import preview.
 $archivePage = New-Object Windows.Forms.TabPage
-$archivePage.Text = 'นำเข้า / สำรองคำ'
-$archivePage.Padding = New-Object Windows.Forms.Padding(16)
+$archivePage.Text = 'พจนานุกรม 3.0'
+$archivePage.Padding = New-Object Windows.Forms.Padding(10)
 $archiveLayout = New-Object Windows.Forms.TableLayoutPanel
-$archiveLayout.Dock='Fill'; $archiveLayout.ColumnCount=1; $archiveLayout.RowCount=5
-[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',72)))
-[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',58)))
-[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',58)))
-[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',58)))
+$archiveLayout.Dock='Fill';$archiveLayout.ColumnCount=1;$archiveLayout.RowCount=5
+[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',38)))
 [void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
-$archiveInfo=New-Label 'JSON พกพา · เฉพาะพจนานุกรม ไม่ส่งข้อมูลออนไลน์ และไม่เปลี่ยนสิทธิ์แอป'
-$archiveInfo.Dock='Fill';$archiveInfo.AutoEllipsis=$true
-$archiveLayout.Controls.Add($archiveInfo,0,0)
-$exportDictionary=New-Object Windows.Forms.Button
-$exportDictionary.Text='ส่งออกพจนานุกรม (JSON)';$exportDictionary.Dock='Fill'
-$archiveLayout.Controls.Add($exportDictionary,0,1)
-$importDictionary=New-Object Windows.Forms.Button
-$importDictionary.Text='นำเข้าพจนานุกรม (รวมกับข้อมูลเดิม)';$importDictionary.Dock='Fill'
-$archiveLayout.Controls.Add($importDictionary,0,2)
-$backupLearned=New-Object Windows.Forms.Button
-$backupLearned.Text='สำรองเฉพาะคำที่เรียนรู้';$backupLearned.Dock='Fill'
-$archiveLayout.Controls.Add($backupLearned,0,3)
-$archiveStatus=New-Label 'ไฟล์ JSON เป็นข้อความธรรมดา โปรดเก็บในพื้นที่ที่ปลอดภัย'
+[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',32)))
+[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',44)))
+[void]$archiveLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',44)))
+$dictionaryToolbar=New-Object Windows.Forms.FlowLayoutPanel
+$dictionaryToolbar.Dock='Fill';$dictionaryToolbar.WrapContents=$false
+$dictionaryToolbar.AutoScroll=$true
+$dictionarySearch=New-Object Windows.Forms.TextBox
+$dictionarySearch.Width=245;$dictionarySearch.Height=29
+$dictionarySearch.AccessibleName='ค้นหาพจนานุกรม'
+$dictionarySearch.AccessibleDescription='ค้นหาคำ / คำแก้ / กลุ่ม'
+$dictionaryToolbar.Controls.Add($dictionarySearch)
+$dictionaryGroupFilter=New-Object Windows.Forms.ComboBox
+$dictionaryGroupFilter.DropDownStyle='DropDownList';$dictionaryGroupFilter.Width=150
+$dictionaryGroupFilter.AccessibleName='กรองกลุ่มพจนานุกรม'
+$dictionaryToolbar.Controls.Add($dictionaryGroupFilter)
+$dictionaryCount=New-Label '0 รายการ';$dictionaryCount.Width=100
+$dictionaryToolbar.Controls.Add($dictionaryCount)
+$archiveLayout.Controls.Add($dictionaryToolbar,0,0)
+
+$dictionaryTable=New-Object System.Data.DataTable
+foreach($columnName in @('Kind','Source','Replacement','Group','Origin','Status','OriginalSource','OriginalReplacement')){
+    [void]$dictionaryTable.Columns.Add($columnName,[string])
+}
+$dictionaryGrid=New-Object Windows.Forms.DataGridView
+$dictionaryGrid.Dock='Fill';$dictionaryGrid.AutoGenerateColumns=$false
+$dictionaryGrid.AllowUserToAddRows=$false;$dictionaryGrid.AllowUserToDeleteRows=$false
+$dictionaryGrid.MultiSelect=$true;$dictionaryGrid.SelectionMode='FullRowSelect'
+$dictionaryGrid.AutoSizeColumnsMode='Fill';$dictionaryGrid.RowHeadersVisible=$false
+$dictionaryGrid.EditMode='EditOnKeystrokeOrF2';$dictionaryGrid.BackgroundColor=[Drawing.SystemColors]::Window
+$dictionaryGrid.AccessibleName='ตารางจัดการพจนานุกรม'
+$kindColumn=New-Object Windows.Forms.DataGridViewComboBoxColumn
+$kindColumn.Name='Kind';$kindColumn.HeaderText='ชนิด';$kindColumn.DataPropertyName='Kind'
+[void]$kindColumn.Items.Add('Rule');[void]$kindColumn.Items.Add('Word')
+$kindColumn.FillWeight=55;$kindColumn.FlatStyle='Flat'
+[void]$dictionaryGrid.Columns.Add($kindColumn)
+foreach($definition in @(
+    @('Source','คำต้นทาง',125,$false),
+    @('Replacement','คำแก้ไข',125,$false),
+    @('Group','กลุ่ม',85,$false),
+    @('Origin','ที่มา',65,$true),
+    @('Status','ตรวจสอบ',105,$true),
+    @('OriginalSource','OriginalSource',1,$true),
+    @('OriginalReplacement','OriginalReplacement',1,$true)
+)){
+    $column=New-Object Windows.Forms.DataGridViewTextBoxColumn
+    $column.Name=$definition[0];$column.HeaderText=$definition[1]
+    $column.DataPropertyName=$definition[0];$column.FillWeight=[float]$definition[2]
+    $column.ReadOnly=[bool]$definition[3]
+    if($definition[0] -like 'Original*'){$column.Visible=$false}
+    [void]$dictionaryGrid.Columns.Add($column)
+}
+$dictionaryGrid.DataSource=$dictionaryTable.DefaultView
+$archiveLayout.Controls.Add($dictionaryGrid,0,1)
+$archiveStatus=New-Label 'แก้ไขในตารางได้ · ตรวจคำซ้ำก่อนบันทึก · กลุ่มและพจนานุกรมเก็บในเครื่อง'
 $archiveStatus.Dock='Fill';$archiveStatus.AutoEllipsis=$true
-$archiveLayout.Controls.Add($archiveStatus,0,4)
+$archiveLayout.Controls.Add($archiveStatus,0,2)
+$dictionaryActions1=New-Object Windows.Forms.FlowLayoutPanel
+$dictionaryActions1.Dock='Fill';$dictionaryActions1.WrapContents=$false;$dictionaryActions1.AutoScroll=$true
+$addRuleRow=New-Object Windows.Forms.Button;$addRuleRow.Text='เพิ่มกฎ';$addRuleRow.Width=105;$addRuleRow.Height=34
+$addWordRow=New-Object Windows.Forms.Button;$addWordRow.Text='เพิ่มคำ';$addWordRow.Width=105;$addWordRow.Height=34
+$removeDictionaryRows=New-Object Windows.Forms.Button;$removeDictionaryRows.Text='ลบแถวที่เลือก';$removeDictionaryRows.Width=130;$removeDictionaryRows.Height=34
+$saveDictionaryRows=New-Object Windows.Forms.Button;$saveDictionaryRows.Text='ตรวจและบันทึก';$saveDictionaryRows.Width=150;$saveDictionaryRows.Height=34
+foreach($button in @($addRuleRow,$addWordRow,$removeDictionaryRows,$saveDictionaryRows)){[void]$dictionaryActions1.Controls.Add($button)}
+$archiveLayout.Controls.Add($dictionaryActions1,0,3)
+$dictionaryActions2=New-Object Windows.Forms.FlowLayoutPanel
+$dictionaryActions2.Dock='Fill';$dictionaryActions2.WrapContents=$false;$dictionaryActions2.AutoScroll=$true
+$previewImport=New-Object Windows.Forms.Button;$previewImport.Text='ดูตัวอย่าง Import';$previewImport.Width=145;$previewImport.Height=34
+$exportDictionary=New-Object Windows.Forms.Button;$exportDictionary.Text='ส่งออก JSON';$exportDictionary.Width=120;$exportDictionary.Height=34
+$backupLearned=New-Object Windows.Forms.Button;$backupLearned.Text='สำรองคำเรียนรู้';$backupLearned.Width=145;$backupLearned.Height=34
+foreach($button in @($previewImport,$exportDictionary,$backupLearned)){[void]$dictionaryActions2.Controls.Add($button)}
+$archiveLayout.Controls.Add($dictionaryActions2,0,4)
 $archivePage.Controls.Add($archiveLayout)
 [void]$tabs.TabPages.Add($archivePage)
 
-$exportDictionary.Add_Click({
-    $dialog=New-Object Windows.Forms.SaveFileDialog
+function Get-DictionaryManagerRows {
+    $rows=New-Object 'System.Collections.Generic.List[object]'
+    foreach($dataRow in $dictionaryTable.Rows){
+        $rows.Add([pscustomobject]@{
+            Kind=[string]$dataRow['Kind'];Source=[string]$dataRow['Source']
+            Replacement=[string]$dataRow['Replacement'];Group=[string]$dataRow['Group']
+            Origin=[string]$dataRow['Origin'];Status=[string]$dataRow['Status']
+            OriginalSource=[string]$dataRow['OriginalSource'];OriginalReplacement=[string]$dataRow['OriginalReplacement']
+        })
+    }
+    return @($rows.ToArray())
+}
+function Refresh-DictionaryGroupFilter {
+    $previous=[string]$dictionaryGroupFilter.SelectedItem
+    $dictionaryGroupFilter.BeginUpdate()
     try {
-        $dialog.Filter='JSON (*.json)|*.json';$dialog.DefaultExt='json'
-        $dialog.FileName='clipwarp-dictionary.json'
-        $dialog.OverwritePrompt=$true
-        if($dialog.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK){return}
-        $result=Export-ClipwarpRightLangDictionary -Path $dialog.FileName -Force
-        $archiveStatus.Text="ส่งออก $($result.Rules) กฎ · คำที่เรียนรู้ $($result.Learned) คำ"
-    } catch {
-        [Windows.Forms.MessageBox]::Show($_.Exception.Message,'ส่งออกไม่สำเร็จ') | Out-Null
-    } finally { $dialog.Dispose() }
+        $dictionaryGroupFilter.Items.Clear()
+        [void]$dictionaryGroupFilter.Items.Add('ทั้งหมด')
+        $groups=@($dictionaryTable.Rows | ForEach-Object { ([string]$_['Group']).Trim() } |
+            Where-Object { $_ } | Sort-Object -Unique)
+        foreach($group in $groups){[void]$dictionaryGroupFilter.Items.Add($group)}
+        if($dictionaryGroupFilter.Items.Contains($previous)){$dictionaryGroupFilter.SelectedItem=$previous}
+        else{$dictionaryGroupFilter.SelectedIndex=0}
+    } finally {$dictionaryGroupFilter.EndUpdate()}
+}
+$script:dictionaryRefreshing=$false
+function Refresh-DictionaryStatuses {
+    if($script:dictionaryRefreshing){return}
+    $script:dictionaryRefreshing=$true
+    try {
+        $ruleBuckets=@{};$wordBuckets=@{}
+        foreach($dataRow in $dictionaryTable.Rows){
+            if(-not ([string]$dataRow['Group']).Trim()){$dataRow['Group']='ทั่วไป'}
+            $source=([string]$dataRow['Source']).Trim()
+            if(-not $source){$dataRow['Status']='ต้องระบุคำ';continue}
+            $key=$source.ToLowerInvariant()
+            if([string]$dataRow['Kind'] -eq 'Rule'){
+                if(-not $ruleBuckets.ContainsKey($key)){$ruleBuckets[$key]=New-Object 'System.Collections.Generic.List[object]'}
+                $ruleBuckets[$key].Add($dataRow)
+            } elseif([string]$dataRow['Kind'] -eq 'Word'){
+                if(-not $wordBuckets.ContainsKey($key)){$wordBuckets[$key]=New-Object 'System.Collections.Generic.List[object]'}
+                $wordBuckets[$key].Add($dataRow)
+            } else {$dataRow['Status']='ชนิดไม่ถูกต้อง'}
+        }
+        foreach($dataRow in $dictionaryTable.Rows){
+            $source=([string]$dataRow['Source']).Trim()
+            if(-not $source){continue}
+            $key=$source.ToLowerInvariant()
+            if([string]$dataRow['Kind'] -eq 'Rule' -and $ruleBuckets[$key].Count -gt 1){$dataRow['Status']='ซ้ำ · ต้องแก้ก่อนบันทึก'}
+            elseif([string]$dataRow['Kind'] -eq 'Word' -and $wordBuckets[$key].Count -gt 1){$dataRow['Status']='ซ้ำ · ต้องแก้ก่อนบันทึก'}
+            elseif([string]$dataRow['Kind'] -eq 'Rule' -and -not ([string]$dataRow['Replacement']).Trim()){$dataRow['Status']='ต้องระบุคำแก้'}
+            elseif(([string]$dataRow['Group']).Length -gt 40){$dataRow['Status']='ชื่อกลุ่มยาวเกินไป'}
+            else{$dataRow['Status']='พร้อมตรวจบันทึก'}
+        }
+        Refresh-DictionaryGroupFilter
+        Refresh-DictionaryGridFilter
+    } finally { $script:dictionaryRefreshing=$false }
+}
+function Refresh-DictionaryGridFilter {
+    if(-not $dictionaryGrid){return}
+    $query=([string]$dictionarySearch.Text).Trim()
+    $group=[string]$dictionaryGroupFilter.SelectedItem
+    $visible=0
+    foreach($gridRow in $dictionaryGrid.Rows){
+        if($gridRow.IsNewRow){continue}
+        $dataRow=$gridRow.DataBoundItem.Row
+        $text=([string]$dataRow['Source'])+' '+([string]$dataRow['Replacement'])+' '+([string]$dataRow['Group'])+' '+([string]$dataRow['Origin'])
+        $matchesText=(-not $query) -or ($text.IndexOf($query,[StringComparison]::OrdinalIgnoreCase) -ge 0)
+        $matchesGroup=($group -eq 'ทั้งหมด') -or ([string]$dataRow['Group'] -eq $group)
+        $shouldShow=$matchesText -and $matchesGroup
+        if(-not $shouldShow -and $dictionaryGrid.CurrentCell -and
+           $dictionaryGrid.CurrentCell.RowIndex -eq $gridRow.Index){$dictionaryGrid.CurrentCell=$null}
+        $gridRow.Visible=$shouldShow
+        if($gridRow.Visible){$visible++}
+    }
+    $dictionaryCount.Text="$visible / $($dictionaryTable.Rows.Count) รายการ"
+}
+function Reload-DictionaryManager {
+    $dictionaryGrid.DataSource=$null
+    $dictionaryTable.Rows.Clear()
+    foreach($item in @(Get-ClipwarpRightLangDictionaryRows)){
+        $row=$dictionaryTable.NewRow()
+        foreach($columnName in @('Kind','Source','Replacement','Group','Origin','Status','OriginalSource','OriginalReplacement')){
+            $row[$columnName]=[string]$item.$columnName
+        }
+        [void]$dictionaryTable.Rows.Add($row)
+    }
+    $dictionaryGrid.DataSource=$dictionaryTable.DefaultView
+    Refresh-DictionaryStatuses
+}
+function Add-DictionaryManagerRow([string]$kind){
+    $dictionarySearch.Clear()
+    if($dictionaryGroupFilter.Items.Contains('ทั้งหมด')){$dictionaryGroupFilter.SelectedItem='ทั้งหมด'}
+    $row=$dictionaryTable.NewRow()
+    $row['Kind']=$kind;$row['Source']='';$row['Replacement']=''
+    $row['Group']='ทั่วไป';$row['Origin']=if($kind -eq 'Word'){'คำกำหนดเอง'}else{'กำหนดเอง'}
+    $row['Status']='ใหม่';$row['OriginalSource']='';$row['OriginalReplacement']=''
+    [void]$dictionaryTable.Rows.Add($row)
+    Refresh-DictionaryStatuses
+    $index=$dictionaryGrid.Rows.Count-1
+    if($index -ge 0){$dictionaryGrid.ClearSelection();$dictionaryGrid.Rows[$index].Selected=$true;$dictionaryGrid.CurrentCell=$dictionaryGrid.Rows[$index].Cells['Source'];$dictionaryGrid.BeginEdit($true)}
+}
+$dictionarySearch.Add_TextChanged({Refresh-DictionaryGridFilter})
+$dictionaryGroupFilter.Add_SelectedIndexChanged({Refresh-DictionaryGridFilter})
+$dictionaryGrid.Add_CurrentCellDirtyStateChanged({if($dictionaryGrid.IsCurrentCellDirty){[void]$dictionaryGrid.CommitEdit([Windows.Forms.DataGridViewDataErrorContexts]::Commit)}})
+$dictionaryGrid.Add_CellValueChanged({Refresh-DictionaryStatuses})
+$dictionaryGrid.Add_CellEndEdit({Refresh-DictionaryStatuses})
+$dictionaryGrid.Add_DataError({$_.ThrowException=$false})
+$addRuleRow.Add_Click({Add-DictionaryManagerRow 'Rule'})
+$addWordRow.Add_Click({Add-DictionaryManagerRow 'Word'})
+$removeDictionaryRows.Add_Click({
+    $selected=@($dictionaryGrid.SelectedRows | ForEach-Object { $_.DataBoundItem.Row } | Where-Object { $_ -ne $null } | Select-Object -Unique)
+    if($selected.Count -eq 0 -and $dictionaryGrid.CurrentRow -and $dictionaryGrid.CurrentRow.DataBoundItem){$selected=@($dictionaryGrid.CurrentRow.DataBoundItem.Row)}
+    foreach($dataRow in $selected){if($dataRow.RowState -ne [System.Data.DataRowState]::Detached){$dictionaryTable.Rows.Remove($dataRow)}}
+    Refresh-DictionaryStatuses
 })
-$importDictionary.Add_Click({
+$saveDictionaryRows.Add_Click({
+    try {
+        $dictionaryGrid.EndEdit()
+        $rows=@(Get-DictionaryManagerRows)
+        $check=Test-ClipwarpRightLangDictionaryRows -Rows $rows
+        if(-not $check.Valid){
+            $archiveStatus.Text="บันทึกไม่ได้: $($check.Errors.Count) ปัญหา"
+            [Windows.Forms.MessageBox]::Show(($check.Errors -join [Environment]::NewLine),'ตรวจพจนานุกรมไม่ผ่าน',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Warning)|Out-Null
+            Refresh-DictionaryStatuses;return
+        }
+        $saved=Save-ClipwarpRightLangDictionaryRows -Rows $rows
+        Reload-DictionaryManager
+        $archiveStatus.Text="บันทึกแล้ว · $($saved.Rules) กฎ · $($saved.Words) คำ · $($saved.Groups) กลุ่ม · เรียนรู้ $($saved.Learned)"
+    } catch {
+        $archiveStatus.Text='บันทึกไม่สำเร็จ'
+        [Windows.Forms.MessageBox]::Show($_.Exception.Message,'บันทึกพจนานุกรมไม่สำเร็จ')|Out-Null
+    }
+})
+$previewImport.Add_Click({
     $dialog=New-Object Windows.Forms.OpenFileDialog
     try {
         $dialog.Filter='JSON (*.json)|*.json';$dialog.CheckFileExists=$true
         if($dialog.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK){return}
-        $answer=[Windows.Forms.MessageBox]::Show(
-            'นำเข้าจากไฟล์ที่เชื่อถือได้เท่านั้น ระบบจะข้ามกฎที่ซ้ำ ไม่แก้สิทธิ์แอป และปิดหน้าต่างตั้งค่าโดยไม่บันทึกค่าอื่นที่ยังไม่ได้กดบันทึก ยืนยันหรือไม่?',
-            'ยืนยันการนำเข้า',[Windows.Forms.MessageBoxButtons]::YesNo,[Windows.Forms.MessageBoxIcon]::Warning)
-        if($answer -ne [Windows.Forms.DialogResult]::Yes){return}
-        $result=Import-ClipwarpRightLangDictionary -Path $dialog.FileName
-        [Windows.Forms.MessageBox]::Show(
-            "นำเข้าเพิ่ม $($result.Added) กฎ, ข้าม $($result.Skipped) กฎ การตั้งค่าความปลอดภัยไม่เปลี่ยน เปิดหน้าต่างตั้งค่าใหม่เพื่อดูผล",
-            'ClipWarp') | Out-Null
-        $form.Close()
+        $preview=Get-ClipwarpRightLangDictionaryPreview -Path $dialog.FileName
+        $previewForm=New-Object Windows.Forms.Form
+        $previewForm.Text='ClipWarp · ตรวจสอบ Import ก่อนบันทึก'
+        $previewForm.Size=New-Object Drawing.Size(820,590);$previewForm.MinimumSize=New-Object Drawing.Size(680,480)
+        $previewForm.StartPosition='CenterParent';$previewForm.AutoScaleMode='Dpi'
+        $previewInfo=New-Label ("กฎใหม่ $($preview.NewRules) · กฎซ้ำ $($preview.DuplicateRules) · ชนกับกฎเดิม $($preview.ConflictingRules) · คำใหม่ $($preview.NewWords) · คำซ้ำ $($preview.DuplicateWords)")
+        $previewInfo.Dock='Top';$previewInfo.Height=48;$previewInfo.AutoEllipsis=$true
+        $previewForm.Controls.Add($previewInfo)
+        $previewGrid=New-Object Windows.Forms.DataGridView
+        $previewGrid.Dock='Fill';$previewGrid.ReadOnly=$true;$previewGrid.AllowUserToAddRows=$false
+        $previewGrid.AllowUserToDeleteRows=$false;$previewGrid.AutoGenerateColumns=$true
+        $previewGrid.AutoSizeColumnsMode='Fill';$previewGrid.RowHeadersVisible=$false
+        $previewTable=New-Object System.Data.DataTable
+        foreach($name in @('Kind','Source','Replacement','Group','Status')){[void]$previewTable.Columns.Add($name,[string])}
+        foreach($item in $preview.Rows){
+            $row=$previewTable.NewRow()
+            foreach($name in @('Kind','Source','Replacement','Group','Status')){$row[$name]=[string]$item.$name}
+            [void]$previewTable.Rows.Add($row)
+        }
+        $previewGrid.DataSource=$previewTable.DefaultView
+        $previewForm.Controls.Add($previewGrid);$previewGrid.BringToFront()
+        $previewButtons=New-Object Windows.Forms.FlowLayoutPanel
+        $previewButtons.Dock='Bottom';$previewButtons.Height=48
+        $doImport=New-Object Windows.Forms.Button;$doImport.Text='นำเข้ารายการใหม่';$doImport.Width=160;$doImport.Height=34
+        $doImport.Enabled=[bool]$preview.CanImport
+        $cancelImport=New-Object Windows.Forms.Button;$cancelImport.Text='ยกเลิก';$cancelImport.Width=100;$cancelImport.Height=34
+        [void]$previewButtons.Controls.Add($doImport);[void]$previewButtons.Controls.Add($cancelImport)
+        $previewForm.Controls.Add($previewButtons);$previewButtons.BringToFront()
+        $doImport.Add_Click({
+            $answer=[Windows.Forms.MessageBox]::Show(
+                'ยืนยันนำเข้าเฉพาะรายการใหม่ รายการซ้ำหรือชนกับกฎเดิมจะไม่เขียนทับ และสิทธิ์แอปจะไม่เปลี่ยน',
+                'ยืนยัน Import',[Windows.Forms.MessageBoxButtons]::YesNo,[Windows.Forms.MessageBoxIcon]::Question)
+            if($answer -ne [Windows.Forms.DialogResult]::Yes){return}
+            try {
+                $result=Import-ClipwarpRightLangDictionary -Path $preview.Path
+                Reload-DictionaryManager
+                $archiveStatus.Text="Import เสร็จ · เพิ่มกฎ $($result.Added) · เพิ่มคำ $($result.CustomWords) · ข้าม $($result.Skipped)"
+                $previewForm.DialogResult=[Windows.Forms.DialogResult]::OK;$previewForm.Close()
+            } catch {[Windows.Forms.MessageBox]::Show($_.Exception.Message,'Import ไม่สำเร็จ')|Out-Null}
+        })
+        $cancelImport.Add_Click({$previewForm.DialogResult=[Windows.Forms.DialogResult]::Cancel;$previewForm.Close()})
+        [void]$previewForm.ShowDialog($form)
+        $previewForm.Dispose()
     } catch {
-        [Windows.Forms.MessageBox]::Show($_.Exception.Message,'นำเข้าไม่สำเร็จ') | Out-Null
-    } finally { $dialog.Dispose() }
+        [Windows.Forms.MessageBox]::Show($_.Exception.Message,'อ่านตัวอย่าง Import ไม่สำเร็จ')|Out-Null
+    } finally {$dialog.Dispose()}
+})
+$exportDictionary.Add_Click({
+    $dialog=New-Object Windows.Forms.SaveFileDialog
+    try {
+        $dialog.Filter='JSON (*.json)|*.json';$dialog.DefaultExt='json'
+        $dialog.FileName='clipwarp-dictionary.json';$dialog.OverwritePrompt=$true
+        if($dialog.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK){return}
+        $dictionaryGrid.EndEdit()
+        $saveRows=Save-ClipwarpRightLangDictionaryRows -Rows @(Get-DictionaryManagerRows)
+        $result=Export-ClipwarpRightLangDictionary -Path $dialog.FileName -Force
+        $archiveStatus.Text="ส่งออก $($result.Rules) กฎ · $($result.Groups) กลุ่ม · คำเรียนรู้ $($result.Learned)"
+    } catch {[Windows.Forms.MessageBox]::Show($_.Exception.Message,'ส่งออกไม่สำเร็จ')|Out-Null}
+    finally {$dialog.Dispose()}
 })
 $backupLearned.Add_Click({
     $dialog=New-Object Windows.Forms.FolderBrowserDialog
@@ -392,10 +614,10 @@ $backupLearned.Add_Click({
         if($dialog.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK){return}
         $result=Backup-ClipwarpRightLangLearnedWords -Directory $dialog.SelectedPath
         $archiveStatus.Text="สำรอง $($result.Learned) คำ · $($result.Path)"
-    } catch {
-        [Windows.Forms.MessageBox]::Show($_.Exception.Message,'สำรองคำไม่สำเร็จ') | Out-Null
-    } finally { $dialog.Dispose() }
+    } catch {[Windows.Forms.MessageBox]::Show($_.Exception.Message,'สำรองคำไม่สำเร็จ')|Out-Null}
+    finally {$dialog.Dispose()}
 })
+Reload-DictionaryManager
 
 $appPage=New-Tab 'การทำงานรายแอป' 'หนึ่งบรรทัด: process=inherit|manual|auto|off,inherit|on|off เช่น notepad=manual,off' (($config.appPolicies.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join [Environment]::NewLine)
 [void]$tabs.TabPages.Add($appPage.Page)
@@ -496,6 +718,16 @@ function Set-Colors([Windows.Forms.Control]$node,[bool]$dark,[bool]$contrast) {
     $foreground=if($contrast){[Drawing.SystemColors]::WindowText}elseif($dark){[Drawing.Color]::FromArgb(238,242,247)}else{[Drawing.Color]::FromArgb(30,41,57)}
     $inputBg=if($contrast){[Drawing.SystemColors]::Window}elseif($dark){[Drawing.Color]::FromArgb(41,48,59)}else{[Drawing.Color]::White}
     $node.BackColor=$background;$node.ForeColor=$foreground
+    if($node -is [Windows.Forms.DataGridView]){
+        $node.BackgroundColor=$inputBg
+        $node.DefaultCellStyle.BackColor=$inputBg
+        $node.DefaultCellStyle.ForeColor=$foreground
+        $node.AlternatingRowsDefaultCellStyle.BackColor=$background
+        $node.AlternatingRowsDefaultCellStyle.ForeColor=$foreground
+        $node.ColumnHeadersDefaultCellStyle.BackColor=$background
+        $node.ColumnHeadersDefaultCellStyle.ForeColor=$foreground
+        $node.EnableHeadersVisualStyles=$false
+    }
     if($node -is [Windows.Forms.TextBox] -or $node -is [Windows.Forms.ComboBox] -or
        $node -is [Windows.Forms.NumericUpDown] -or $node -is [Windows.Forms.ListBox]){
         $node.BackColor=$inputBg;$node.ForeColor=$foreground
@@ -523,7 +755,7 @@ $applyFont = {
     $heading.Font=New-Object Drawing.Font('Leelawadee UI',($size + $(if($hc){2}else{5})),[Drawing.FontStyle]::Bold)
     $langBadge.Font=New-Object Drawing.Font('Leelawadee UI',$size,[Drawing.FontStyle]::Bold)
     $editorSize=[float]$editorFontPicker.Value
-    foreach($editor in @($instantPage.Editor,$wordPage.Editor,$allowPage.Editor,$blockPage.Editor,$ignoredEditor,$appPage.Editor)) {
+    foreach($editor in @($instantPage.Editor,$wordPage.Editor,$allowPage.Editor,$blockPage.Editor,$ignoredEditor,$appPage.Editor,$dictionaryGrid)) {
         if($editor.Font.Size -ne $editorSize){$editor.Font=New-Object Drawing.Font('Leelawadee UI',$editorSize)}
     }
     $previewSize=[float]$previewFontPicker.Value
@@ -654,7 +886,24 @@ if($SelfTest){
         if($learnedList.Items.Count -ne 0){throw "Learned search filtering failed"}
         $learnedSearch.Clear()
         if($appPage.Page.Text -ne "การทำงานรายแอป"){throw "App policy tab missing"}
-        if($archivePage.Text -ne "นำเข้า / สำรองคำ" -or -not $backupLearned.Enabled){throw "Dictionary tools unavailable"}
+        if($archivePage.Text -ne "พจนานุกรม 3.0" -or -not $backupLearned.Enabled){throw "Dictionary tools unavailable"}
+        if($dictionaryGrid.Columns.Count -ne 8 -or -not $previewImport.Enabled -or -not $saveDictionaryRows.Enabled){throw "Dictionary Manager grid/actions missing"}
+        if($dictionaryGroupFilter.Items.Count -lt 1){throw "Dictionary group filter missing"}
+        $probeRows=@()
+        foreach($probeSource in @('__clipwarp_dictionary_probe__','__CLIPWARP_DICTIONARY_PROBE__')){
+            $probe=$dictionaryTable.NewRow()
+            $probe['Kind']='Rule';$probe['Source']=$probeSource;$probe['Replacement']='probe'
+            $probe['Group']='QA';$probe['Origin']='กำหนดเอง';$probe['Status']=''
+            $probe['OriginalSource']='';$probe['OriginalReplacement']=''
+            [void]$dictionaryTable.Rows.Add($probe);$probeRows+= $probe
+        }
+        Refresh-DictionaryStatuses
+        if(@($probeRows | Where-Object { [string]$_['Status'] -notlike '*ซ้ำ*' }).Count -ne 0){throw "Dictionary duplicate detection failed"}
+        $dictionarySearch.Text='no-such-manager-row-probe'
+        if(@($dictionaryGrid.Rows | Where-Object { -not $_.IsNewRow -and $_.Visible }).Count -ne 0){throw "Dictionary search filtering failed"}
+        $dictionarySearch.Clear()
+        foreach($probe in $probeRows){$dictionaryTable.Rows.Remove($probe)}
+        Refresh-DictionaryStatuses
         $tabs.SelectedTab=$learnedPage
         if(-not $learnedSearch.TabStop){throw "Learned search keyboard focus disabled"}
         foreach ($dimensions in @(@(700,620),@(780,650),@(930,730))) {
