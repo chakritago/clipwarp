@@ -468,7 +468,7 @@ function Refresh-DictionaryGridFilter {
     foreach($gridRow in $dictionaryGrid.Rows){
         if($gridRow.IsNewRow){continue}
         $dataRow=$gridRow.DataBoundItem.Row
-        $text=(@([string]$dataRow['Source'],[string]$dataRow['Replacement'],[string]$dataRow['Group'],[string]$dataRow['Origin']) -join ' ')
+        $text=([string]$dataRow['Source'])+' '+([string]$dataRow['Replacement'])+' '+([string]$dataRow['Group'])+' '+([string]$dataRow['Origin'])
         $matchesText=(-not $query) -or ($text.IndexOf($query,[StringComparison]::OrdinalIgnoreCase) -ge 0)
         $matchesGroup=($group -eq 'ทั้งหมด') -or ([string]$dataRow['Group'] -eq $group)
         $gridRow.Visible=$matchesText -and $matchesGroup
