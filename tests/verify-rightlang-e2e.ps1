@@ -15,7 +15,7 @@ if (-not $report.RealDesktopGateSatisfied -or -not $report.EditorBridgeEnabled -
     throw 'Manual report has NOT passed physical desktop prerequisites.'
 }
 $scenarios=@($report.Scenarios)
-if ($scenarios.Count -lt 18 -or @($scenarios | Where-Object { -not $_.Confirmed }).Count -ne 0) {
+if ($scenarios.Count -lt 20 -or @($scenarios | Where-Object { -not $_.Confirmed }).Count -ne 0) {
     throw 'Some required manual scenarios are missing or not attested.'
 }
 $apps=@($report.Applications)
