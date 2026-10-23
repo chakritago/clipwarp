@@ -773,49 +773,85 @@ namespace ClipwarpRightLang
                               replacement, StringComparison.Ordinal);
         }
         private bool UndoLast(IntPtr window) {
-            UndoRequest last = lastUndo;
-            if (last == null || DateTime.UtcNow > last.Until || last.Window != window) return false;
-            if (last.Bridge != null) {
+            UndoRequest last=lastUndo;
+            if(last==null || DateTime.UtcNow>last.Until || last.Window!=window) return false;
+            if(last.Bridge!=null) {
                 // UI Automation is cross-process: never query providers inside the keyboard hook.
-                lastUndo = null; bubble.Dismiss(); token = "";
+                lastUndo=null; bubble.Dismiss(); token="";
                 UndoBridge(last);
                 return true;
             }
             EditorState e;
-            if (!TryReadEditor(window, out e) || e.Focus != last.Focus || e.Start != e.End) {
-                lastUndo = null; bubble.Dismiss(); return false;
+            if(!TryReadEditor(window,out e) || e.Focus!=last.Focus || e.Start!=e.End) {
+                lastUndo=null; bubble.Dismiss(); return false;
             }
-            int effectiveCaret = e.Start;
-            if (last.HasTrailingSpace) {
-                if (effectiveCaret < 1 || e.Text[effectiveCaret - 1] != ' ') {
-                    lastUndo = null; bubble.Dismiss(); return false;
+            int effectiveCaret=e.Start;
+            if(last.HasTrailingSpace) {
+                if(effectiveCaret<1 || e.Text[effectiveCaret-1]!=' ') {
+                    lastUndo=null; bubble.Dismiss(); return false;
                 }
                 effectiveCaret--;
             }
-            if (!IsUndoCandidate(e.Text, effectiveCaret, effectiveCaret, last.Replacement)) {
-                lastUndo = null; bubble.Dismiss(); return false;
+            if(!IsUndoCandidate(e.Text,effectiveCaret,effectiveCaret,last.Replacement)) {
+                lastUndo=null; bubble.Dismiss(); return false;
             }
-            lastUndo = null;
-            bubble.Dismiss();
-            List<INPUT> events = new List<INPUT>();
-            if (last.HasTrailingSpace) {
-                events.Add(Key(VK_LEFT, (char)0, 0)); events.Add(Key(VK_LEFT, (char)0, KEYEVENTF_KEYUP));
+            int replaceStart=effectiveCaret-last.Replacement.Length;
+            string expectedRestored=e.Text.Substring(0,replaceStart)+last.Source+e.Text.Substring(effectiveCaret);
+            lastUndo=null; bubble.Dismiss(); token="";
+            List<INPUT> events=new List<INPUT>();
+            if(last.HasTrailingSpace) {
+                events.Add(Key(VK_LEFT,(char)0,0)); events.Add(Key(VK_LEFT,(char)0,KEYEVENTF_KEYUP));
             }
-            for (int i = 0; i < last.Replacement.Length; i++) {
-                events.Add(Key(VK_BACK, (char)0, 0)); events.Add(Key(VK_BACK, (char)0, KEYEVENTF_KEYUP));
+            for(int i=0;i<last.Replacement.Length;i++) {
+                events.Add(Key(VK_BACK,(char)0,0)); events.Add(Key(VK_BACK,(char)0,KEYEVENTF_KEYUP));
             }
-            foreach (char c in last.Source) {
-                events.Add(Key(0, c, KEYEVENTF_UNICODE));
-                events.Add(Key(0, c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+            foreach(char c in last.Source) {
+                events.Add(Key(0,c,KEYEVENTF_UNICODE));
+                events.Add(Key(0,c,KEYEVENTF_UNICODE|KEYEVENTF_KEYUP));
             }
-            if (last.HasTrailingSpace) {
-                events.Add(Key(VK_RIGHT, (char)0, 0)); events.Add(Key(VK_RIGHT, (char)0, KEYEVENTF_KEYUP));
+            if(last.HasTrailingSpace) {
+                events.Add(Key(VK_RIGHT,(char)0,0)); events.Add(Key(VK_RIGHT,(char)0,KEYEVENTF_KEYUP));
             }
-            INPUT[] keys = events.ToArray();
-            token = "";
-            bool success = SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT))) == keys.Length;
-            if (last.History != null) last.History.Status = success ? "Undo input sent" : "Undo input failed";
-            return success;
+            INPUT[] keys=events.ToArray();
+            int sent=(int)SendInput((uint)keys.Length,keys,Marshal.SizeOf(typeof(INPUT)));
+            EditorTransactionResult immediate=EvaluateUndoTransaction(sent==keys.Length,false);
+            if(last.History!=null) last.History.Status=sent!=keys.Length
+                ? "Undo input incomplete; inspect text; do not repeat blindly"
+                : "Undo sent; verifying full-document restoration";
+            int serial=Interlocked.Increment(ref bridgeSerial);
+            Thread worker=new Thread(delegate() {
+                bool restored=false;
+                if(sent==keys.Length) {
+                    Thread.Sleep(140);
+                    try {
+                        EditorState after;
+                        restored=serial==bridgeSerial && GetForegroundWindow()==window &&
+                            TryReadEditor(window,out after) && after.Focus==last.Focus &&
+                            string.Equals(after.Text,expectedRestored,StringComparison.Ordinal);
+                    } catch { }
+                }
+                EditorTransactionResult result=EvaluateUndoTransaction(sent==keys.Length,restored);
+                if(last.History!=null) last.History.Status=result.Status;
+                try { bubble.BeginInvoke((MethodInvoker)delegate {
+                    if(serial!=bridgeSerial) {
+                        if(last.History!=null) last.History.Status="Undo verification canceled because editing continued";
+                        return;
+                    }
+                    if(GetForegroundWindow()==window) {
+                        string message=result.State==EditorTransactionState.Restored
+                            ? "ย้อนกลับแล้ว · ตรวจยืนยันข้อความทั้งช่องแล้ว"
+                            : result.State==EditorTransactionState.UndoRejected
+                                ? "Editor ปฏิเสธคำสั่ง Undo · ตรวจข้อความด้วยตนเอง"
+                                : "ส่ง Undo แล้วแต่ยืนยันผลไม่ได้ · ตรวจข้อความด้วยตนเอง";
+                        ShowStatus(message);
+                    }
+                }); } catch { }
+            });
+            worker.IsBackground=true;
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
+            // Consume F8 once a valid Undo attempt has begun; never leak it to the editor.
+            return true;
         }
 
         private IntPtr OnMouse(int code, IntPtr message, IntPtr data)
