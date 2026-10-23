@@ -243,27 +243,40 @@ namespace ClipwarpRightLang
         // GetSelection returns a degenerate caret range after insertion in compliant
         // TextPattern providers; never guess when provider lacks character traversal.
         public static bool MatchesCaretTail(IntPtr window, EditorSnapshot prior, string replacement) {
-            if (prior == null || !Available || EndpointType == null || TextUnitType == null ||
-                string.IsNullOrEmpty(replacement) || replacement.Length > 128) return false;
-            object element, pattern; string id;
-            if (!TryFocused(window, prior.ProcessName, out element, out pattern, out id)
-                || prior.Identity != id) return false;
+            if(prior==null || !Available || EndpointType==null || TextUnitType==null ||
+               string.IsNullOrEmpty(replacement) || replacement.Length>128 ||
+               prior.BeforeContext==null || prior.AfterContext==null) return false;
+            object element,pattern; string id;
+            if(!TryFocused(window,prior.ProcessName,out element,out pattern,out id) || prior.Identity!=id) return false;
             try {
-                Array ranges = (Array)Call(pattern, "GetSelection");
-                if (ranges == null || ranges.Length != 1) return false;
-                object range = ranges.GetValue(0);
-                if (!string.IsNullOrEmpty((string)Call(range, "GetText", 1))) return false;
-                object copy = Call(range, "Clone");
-                object start = Enum.Parse(EndpointType, "Start");
-                object unit = Enum.Parse(TextUnitType, "Character");
-                // Move a bounded number of characters backwards from the caret.
-                // Some providers do not support character movement; fail closed.
-                object[] arguments = new object[]{start, unit, -replacement.Length};
-                MethodInfo move = copy.GetType().GetMethod("MoveEndpointByUnit");
-                int moved = (int)move.Invoke(copy, arguments);
-                if (moved != -replacement.Length) return false;
-                string actual = (string)Call(copy, "GetText", replacement.Length + 1);
-                return string.Equals(actual, replacement, StringComparison.Ordinal);
+                Array ranges=(Array)Call(pattern,"GetSelection");
+                if(ranges==null || ranges.Length!=1) return false;
+                object range=ranges.GetValue(0);
+                if(!string.IsNullOrEmpty((string)Call(range,"GetText",1))) return false;
+                object start=Enum.Parse(EndpointType,"Start");
+                object end=Enum.Parse(EndpointType,"End");
+                object unit=Enum.Parse(TextUnitType,"Character");
+                // Verify replacement AND its original prefix. Matching the word
+                // alone can accidentally validate a duplicate occurrence nearby.
+                int prefixLength=prior.BeforeContext.Length;
+                int backLength=prefixLength+replacement.Length;
+                object left=Call(range,"Clone");
+                MethodInfo move=left.GetType().GetMethod("MoveEndpointByUnit");
+                int moved=(int)move.Invoke(left,new object[]{start,unit,-backLength});
+                if(moved!=-backLength) return false;
+                string actual=(string)Call(left,"GetText",backLength+1);
+                if(!string.Equals(actual,prior.BeforeContext+replacement,StringComparison.Ordinal)) return false;
+                // Also require the original following context at the caret.
+                int suffixLength=prior.AfterContext.Length;
+                if(suffixLength>0) {
+                    object right=Call(range,"Clone");
+                    int movedRight=(int)right.GetType().GetMethod("MoveEndpointByUnit")
+                        .Invoke(right,new object[]{end,unit,suffixLength});
+                    if(movedRight!=suffixLength) return false;
+                    string after=(string)Call(right,"GetText",suffixLength+1);
+                    if(!string.Equals(after,prior.AfterContext,StringComparison.Ordinal)) return false;
+                }
+                return true;
             } catch { return false; }
         }
     }
