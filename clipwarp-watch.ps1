@@ -1711,10 +1711,10 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
     $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
     $references += @([AppContext]::GetData('TRUSTED_PLATFORM_ASSEMBLIES') -split [IO.Path]::PathSeparator)
     $references += [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object Location | ForEach-Object Location
-    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs'))) -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
+    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-editor-bridge.cs'))) -ReferencedAssemblies ($references | Group-Object { [IO.Path]::GetFileName($_) } | ForEach-Object { $_.Group[0] })
 }
 else {
-    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs'))) -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
+    Add-Type -TypeDefinition ($src + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-clipboard.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-rightlang.cs')) + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'clipwarp-editor-bridge.cs'))) -ReferencedAssemblies @('System', 'System.Windows.Forms', 'System.Drawing')
 }
 
 $watcher = New-Object ClipwarpWatch.Watcher($clipwarpPath, $calendarPopupPath, $configPath, $logFile)
@@ -1729,8 +1729,14 @@ $rightlangReload = {
         $rules = [System.Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($entry in $cfg.instant.GetEnumerator()) { $rules[[string]$entry.Key] = [string]$entry.Value }
         $effectiveMode = if (Get-ClipwarpPaused) { 'off' } else { [string]$cfg.mode }
+        $policies = [System.Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($key in $cfg.appPolicies.Keys) { $policies[[string]$key] = [string]$cfg.appPolicies[$key] }
         $rightlang.Configure($effectiveMode, $rules,
-            [string[]]@($cfg.words), [string[]]@($cfg.allowedApps), [string[]]@($cfg.blockedApps))
+            [string[]]@($cfg.words), [string[]]@($cfg.allowedApps), [string[]]@($cfg.blockedApps),
+            [bool]$cfg.editorBridgeEnabled, [bool]$cfg.learnAccepted,
+            [bool]$cfg.smartSuggestions, [bool]$cfg.undoHistory,
+            [int]$cfg.suggestionDelayMs, [int]$cfg.suggestionCooldownMs,
+            [string[]]@($cfg.ignoredSuggestions), $policies)
     } catch {
         # No fallback to arbitrary global correction on invalid config.
         $rightlang.Configure('off', $null, $null, $null, $null)
@@ -1740,6 +1746,14 @@ $rightlangReload = {
 $rightlang.add_ModeToggled({
     param($newMode)
     try { [void](Set-ClipwarpRightLangMode -Mode $newMode) } catch {}
+})
+$rightlang.add_SuggestionIgnored({
+    param($word)
+    try { [void](Add-ClipwarpRightLangIgnoredSuggestion -Word ([string]$word)) } catch {}
+})
+$rightlang.add_CorrectionAccepted({
+    param($original, $confirmed)
+    try { [void](Add-ClipwarpRightLangLearnedWord -Typed $original -Corrected $confirmed) } catch {}
 })
 $rightlang.Start()
 $rightlangTimer = New-Object System.Windows.Forms.Timer
@@ -1874,6 +1888,34 @@ Start-Sleep -Milliseconds 250
     [void]$langMenu.DropDownItems.Add($langOff)
     [void]$langMenu.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator))
     [void]$langMenu.DropDownItems.Add($langSettings)
+    $recentMenu = New-Object System.Windows.Forms.ToolStripMenuItem("ประวัติการแก้ไข (เฉพาะในหน่วยความจำ)")
+    $recentMenu.add_DropDownOpening({
+        $recentMenu.DropDownItems.Clear()
+        try {
+            $recent = @($rightlang.RecentUndoDetails)
+            if ($recent.Count -eq 0) {
+                $none = New-Object System.Windows.Forms.ToolStripMenuItem('ไม่มีประวัติหรือยังไม่เปิดใช้')
+                $none.Enabled = $false
+                [void]$recentMenu.DropDownItems.Add($none)
+            } else {
+                foreach ($entry in $recent) {
+                    $short = '[{0:HH:mm:ss}] {1} | {2}: {3} → {4}' -f
+                        $entry.WhenUtc.ToLocalTime(), $entry.Application, $entry.EditorKind,
+                        $entry.Source, $entry.Replacement
+                    if ($short.Length -gt 100) { $short = $short.Substring(0,100) + '…' }
+                    $item = New-Object System.Windows.Forms.ToolStripMenuItem($short)
+                    $item.ToolTipText = [string]$entry.Status
+                    $item.Enabled = $false
+                    [void]$recentMenu.DropDownItems.Add($item)
+                }
+                [void]$recentMenu.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+                $clearRecent = New-Object System.Windows.Forms.ToolStripMenuItem('ล้างประวัติ')
+                $clearRecent.add_Click({ $rightlang.ClearRecentCorrections() })
+                [void]$recentMenu.DropDownItems.Add($clearRecent)
+            }
+        } catch {}
+    })
+    [void]$langMenu.DropDownItems.Add($recentMenu)
     [void]$contextMenu.Items.Add($langMenu)
 
     $versionItem = New-Object System.Windows.Forms.ToolStripMenuItem("Version")

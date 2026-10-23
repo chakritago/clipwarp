@@ -20,6 +20,7 @@ function Get-HereStringValue([string]$Path, [string]$Contains) {
 $watchSource = Get-HereStringValue (Join-Path $root 'clipwarp-watch.ps1') 'namespace ClipwarpWatch'
 $watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-clipboard.cs'))
 $watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-rightlang.cs'))
+$watchSource += [IO.File]::ReadAllText((Join-Path $root 'clipwarp-editor-bridge.cs'))
 if ($PSVersionTable.PSEdition -eq 'Core') {
     # Prefer compilation contracts over runtime facades (notably System.Collections).
     $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
@@ -72,6 +73,46 @@ Assert-True ([ClipwarpRightLang.Engine]::IsSupportedEditorClass('WindowsForms10.
 Assert-True (-not [ClipwarpRightLang.Engine]::IsSupportedEditorClass('Chrome_RenderWidgetHostHWND')) 'browser editor rejected'
 Assert-True (-not [ClipwarpRightLang.Engine]::IsSupportedEditorClass('RichEditD2DPT')) 'unverified modern editors rejected'
 Write-Host 'PASS: RightLang compatibility allowlist policy'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsProfile('notepad')) 'modern Notepad has an explicit UIA profile'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsProfile('WINWORD')) 'Microsoft Word has an explicit UIA profile'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsProfile('Code')) 'VS Code has an explicit UIA profile'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsProfile('chrome')) 'generic browsers denied by UIA adapter'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::ShouldProbe($false,'notepad',$allowedApps,$blockedApps)) 'no UIA probing without opt-in'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::ShouldProbe($true,'powershell',$allowedApps,$blockedApps)) 'blocklist excludes UIA even when enabled'
+Write-Host 'PASS: UIA opt-in policy and editor profiles'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsSingleLineSelection('l;ylfu')) 'bounded English correction selection permitted'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsSingleLineSelection('สวัสดี')) 'bounded Thai correction selection permitted'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection("hello`nworld")) 'multiline rich selection rejected'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection(('a'*65))) 'oversized UIA selection rejected'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection('')) 'empty UIA selection rejected'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsSingleLineSelection('a')) 'single-character UIA selection rejected'
+Write-Host 'PASS: UIA bounded selection guards for Word, VS Code and Notepad'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsWordStyleSafe($false,$false,$true,$true)) 'plain editor selection is not blocked by Word policy'
+Assert-True ([ClipwarpRightLang.EditorBridge]::IsWordStyleSafe($true,$true,$false,$false)) 'uniform Word formatting qualifies'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsWordStyleSafe($true,$true,$true,$false)) 'mixed Word runs are rejected'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsWordStyleSafe($true,$false,$false,$false)) 'unknown Word formatting fails closed'
+Assert-True (-not [ClipwarpRightLang.EditorBridge]::IsWordStyleSafe($true,$true,$false,$true)) 'embedded rich object is rejected'
+Write-Host 'PASS: Word format protection policy'
+Assert-True ([ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$true,$false,650,700,12000)) 'idle known word may suggest'
+Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$true,$false,1200,700,12000)) 'sensitivity delay respected'
+Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$true,$true,650,700,12000)) 'ignored suggestion rejected'
+Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$false,$false,650,700,12000)) 'disabled suggestion remains off'
+Assert-True (-not [ClipwarpRightLang.Engine]::ShouldSuggest('l;ylfu',$true,$false,650,700,200)) 'repeat debounce respected'
+Write-Host 'PASS: passive suggestion and duplicate suppression policy'
+$policy=[System.Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+$policy['notepad']='manual,off'
+$policy['winword']='off,inherit'
+$policy['code']='auto,on'
+Assert-True ([ClipwarpRightLang.Engine]::IsValidPolicy('auto,off')) 'valid per-app policy accepted'
+Assert-True (-not [ClipwarpRightLang.Engine]::IsValidPolicy('admin,on')) 'unknown app mode rejected'
+Assert-True ([ClipwarpRightLang.Engine]::ResolveAppMode('manual','code',$policy) -eq 'auto') 'allowed editor can opt into automatic mode'
+Assert-True ([ClipwarpRightLang.Engine]::ResolveAppMode('manual','winword',$policy) -eq 'off') 'Word policy can disable correction'
+Assert-True ([ClipwarpRightLang.Engine]::ResolveAppMode('off','code',$policy) -eq 'off') 'global Off always overrides app policy'
+Assert-True (-not [ClipwarpRightLang.Engine]::ResolveAppHints($false,'code',$policy)) 'global hint opt-out always wins'
+Assert-True (-not [ClipwarpRightLang.Engine]::ResolveAppHints($true,'notepad',$policy)) 'app hint opt-out respected'
+Assert-True ([ClipwarpRightLang.Engine]::ResolveAppHints($true,'code',$policy)) 'per-app hint setting supported'
+Write-Host 'PASS: per-app modes and global privacy precedence'
+
 $t = New-Object ClipwarpWatch.OverlayTargetTracker
 $now = [datetime]'2026-09-08T12:00:00Z'
 $t.OnForegroundChanged('pwsh','Terminal','ConsoleWindowClass',$now)
