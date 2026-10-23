@@ -685,7 +685,22 @@ namespace ClipwarpRightLang
         public event Action<string, string> CorrectionAccepted;
         private bool ReplaceText(string source, string replacement, IntPtr window, IntPtr focus,
                                  bool selection, bool trailingSpace = false, EditorSnapshot bridge = null) {
-            if (GetForegroundWindow() != window) return false;
+            if (GetForegroundWindow() != window || string.IsNullOrEmpty(source) ||
+                string.IsNullOrEmpty(replacement)) return false;
+            EditorState before;
+            if (!TryReadEditor(window,out before) || before.Focus != focus) return false;
+            int start, end;
+            if (selection) {
+                start=before.Start; end=before.End;
+                if (end-start != source.Length ||
+                    !string.Equals(before.Text.Substring(start,end-start),source,StringComparison.Ordinal)) return false;
+            } else {
+                if (before.Start != before.End || before.Start < source.Length) return false;
+                start=before.Start-source.Length; end=before.Start;
+                if (!string.Equals(before.Text.Substring(start,source.Length),source,StringComparison.Ordinal)) return false;
+            }
+            string expectedText=before.Text.Substring(0,start)+replacement+
+                (trailingSpace ? " " : "")+before.Text.Substring(end);
             List<INPUT> events = new List<INPUT>();
             if (!selection)
                 for (int i = 0; i < source.Length; i++) {
@@ -695,25 +710,59 @@ namespace ClipwarpRightLang
                 events.Add(Key(0, c, KEYEVENTF_UNICODE));
                 events.Add(Key(0, c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
             }
-            INPUT[] keys = events.ToArray();
-            if (SendInput((uint)keys.Length, keys, Marshal.SizeOf(typeof(INPUT))) != keys.Length) {
-                token = ""; lastUndo = null; return false;
+            INPUT[] keys=events.ToArray();
+            int sent=(int)SendInput((uint)keys.Length,keys,Marshal.SizeOf(typeof(INPUT)));
+            token=""; lastUndo=null;
+            if (sent != keys.Length) {
+                EditorTransactionResult failed=EvaluateInputTransaction(keys.Length,sent,false);
+                UndoHistoryEntry failedEntry=sent>0 ? Remember(source,replacement,window,false) : null;
+                if (failedEntry!=null) failedEntry.Status=failed.Status;
+                Interlocked.Increment(ref bridgeSerial);
+                if (GetForegroundWindow()==window) {
+                    ShowStatus(sent>0
+                        ? "ส่งข้อความได้บางส่วน · ตรวจข้อความด้วยตนเองก่อนทำต่อ"
+                        : "Editor ไม่รับข้อมูล · ไม่สามารถยืนยันการแก้ไขได้");
+                }
+                return false;
             }
-            token = "";
-            lastUndo = new UndoRequest { Window = window, Focus = focus, Source = source,
-                Replacement = replacement, HasTrailingSpace = trailingSpace, Bridge = bridge,
-                Until = DateTime.UtcNow.AddSeconds(8) };
-            bubble.Present(source, replacement, true);
-            lastUndo.History = Remember(source,replacement,window,false);
-            if (learnAccepted && !trailingSpace && CorrectionAccepted != null) {
-                // Persist accepted words after returning from the global keyboard hook.
-                string savedSource = source, savedReplacement = replacement;
+            int serial=Interlocked.Increment(ref bridgeSerial);
+            UndoHistoryEntry entry=Remember(source,replacement,window,false);
+            if (entry!=null) entry.Status="Input sent; awaiting full-document verification";
+            Thread worker=new Thread(delegate() {
+                Thread.Sleep(140);
+                bool verified=false;
+                try {
+                    EditorState after;
+                    verified=serial==bridgeSerial && GetForegroundWindow()==window &&
+                        TryReadEditor(window,out after) && after.Focus==focus &&
+                        string.Equals(after.Text,expectedText,StringComparison.Ordinal);
+                } catch { }
+                if (entry!=null) entry.Status=verified
+                    ? "Committed; full document verified; Undo eligible"
+                    : "Input sent; full-document verification failed (Undo unavailable)";
                 try { bubble.BeginInvoke((MethodInvoker)delegate {
-                    if (CorrectionAccepted != null) {
-                        try { CorrectionAccepted(savedSource, savedReplacement); } catch { }
+                    if (serial!=bridgeSerial) {
+                        if(entry!=null) entry.Status="Verification canceled because editing continued";
+                        return;
+                    }
+                    if (verified) {
+                        lastUndo=new UndoRequest { Window=window, Focus=focus, Source=source,
+                            Replacement=replacement, HasTrailingSpace=trailingSpace, Bridge=bridge,
+                            History=entry, Until=DateTime.UtcNow.AddSeconds(8) };
+                        bubble.Present(source,replacement,true);
+                        if (learnAccepted && !trailingSpace && CorrectionAccepted!=null) {
+                            try { CorrectionAccepted(source,replacement); } catch { }
+                        }
+                    } else {
+                        lastUndo=null;
+                        if (GetForegroundWindow()==window)
+                            ShowStatus("ตรวจข้อความหลังแก้ไขไม่ได้ · ตรวจเนื้อหาเองก่อนใช้ Undo");
                     }
                 }); } catch { }
-            }
+            });
+            worker.IsBackground=true;
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
             return true;
         }
         public static bool IsUndoCandidate(string text, int selectionStart, int selectionEnd, string replacement) {
