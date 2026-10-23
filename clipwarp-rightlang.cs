@@ -488,12 +488,21 @@ namespace ClipwarpRightLang
                         correction = ReplacementFor(snapshot.SelectedText, true);
                 } catch { }
                 finally { Interlocked.Exchange(ref bridgeBusy, 0); }
-                if (snapshot == null || correction == null) return;
+                if (snapshot == null || correction == null) {
+                    try { bubble.BeginInvoke((MethodInvoker)delegate {
+                        if(serial!=bridgeSerial || mode=="off" || GetForegroundWindow()!=window) return;
+                        ShowStatus(snapshot==null
+                            ? "Editor ไม่เปิดเผย Selection ที่รองรับ · ไม่มีการแก้ข้อความ"
+                            : "ไม่พบกฎแก้ไขสำหรับ Selection นี้ · ไม่มีการแก้ข้อความ");
+                    }); } catch { }
+                    return;
+                }
                 try {
                     bubble.BeginInvoke((MethodInvoker)delegate {
                         if (serial != bridgeSerial || mode == "off" ||
                             GetForegroundWindow() != window || !editorBridgeEnabled) return;
-                        ShowPreview(snapshot.SelectedText, correction, window, IntPtr.Zero, true, -1, -1, snapshot);
+                        if(!ShowPreview(snapshot.SelectedText, correction, window, IntPtr.Zero, true, -1, -1, snapshot))
+                            ShowStatus("ไม่สามารถแสดงตัวอย่างได้ · ไม่มีการแก้ข้อความ");
                     });
                 } catch { }
             });
@@ -610,20 +619,33 @@ namespace ClipwarpRightLang
             worker.Start();
         }
         private bool ApplyPreview() {
-            PreviewRequest p = pending; pending = null;
-            bubble.Dismiss();
-            if (p == null || DateTime.UtcNow > p.Until || GetForegroundWindow() != p.Window) return false;
-            if (p.Bridge != null) { ApplyBridgePreview(p); return true; }
-            EditorState check;
-            if (!TryReadEditor(p.Window, out check) || check.Focus != p.Focus) return false;
-            if (p.IsSelection) {
-                if (check.Start != p.SelectionStart || check.End != p.SelectionEnd
-                    || check.Text.Substring(check.Start, check.End - check.Start) != p.Source) return false;
-                return ReplaceText(p.Source, p.Replacement, p.Window, p.Focus, true);
+            PreviewRequest p=pending; pending=null; bubble.Dismiss();
+            if(p==null) return false;
+            if(DateTime.UtcNow>p.Until) {
+                if(GetForegroundWindow()==p.Window) ShowStatus("ตัวอย่างหมดอายุ · ไม่มีการแก้ข้อความ");
+                return false;
             }
-            // The original token must still appear immediately before the caret.
-            if (!IsUndoCandidate(check.Text, check.Start, check.End, p.Source)) return false;
-            return ReplaceText(p.Source, p.Replacement, p.Window, p.Focus, false);
+            if(GetForegroundWindow()!=p.Window) return false;
+            if(p.Bridge!=null) { ApplyBridgePreview(p); return true; }
+            EditorState check;
+            if(!TryReadEditor(p.Window,out check) || check.Focus!=p.Focus) {
+                ShowStatus("Editor หรือโฟกัสเปลี่ยนหลังตัวอย่าง · ยกเลิกโดยไม่แก้ข้อความ");
+                return false;
+            }
+            if(p.IsSelection) {
+                if(check.Start!=p.SelectionStart || check.End!=p.SelectionEnd ||
+                   check.Start<0 || check.End>check.Text.Length || check.End<check.Start ||
+                   !string.Equals(check.Text.Substring(check.Start,check.End-check.Start),p.Source,StringComparison.Ordinal)) {
+                    ShowStatus("Selection เปลี่ยนหลังตัวอย่าง · ยกเลิกโดยไม่แก้ข้อความ");
+                    return false;
+                }
+                return ReplaceText(p.Source,p.Replacement,p.Window,p.Focus,true);
+            }
+            if(!IsUndoCandidate(check.Text,check.Start,check.End,p.Source)) {
+                ShowStatus("ข้อความต้นทางหรือ Caret เปลี่ยน · ยกเลิกโดยไม่แก้ข้อความ");
+                return false;
+            }
+            return ReplaceText(p.Source,p.Replacement,p.Window,p.Focus,false);
         }
 
         private sealed class EditorState {
@@ -681,15 +703,29 @@ namespace ClipwarpRightLang
         }
         private bool ShowSelectionPreview(IntPtr window, string processName) {
             EditorState e;
-            if (!TryReadEditor(window, out e)) {
-                if (!EditorBridge.ShouldProbe(editorBridgeEnabled, processName, allowed, excluded)) return false;
-                return QueueBridgeSelection(window, processName);
+            if(!TryReadEditor(window,out e)) {
+                if(!EditorBridge.ShouldProbe(editorBridgeEnabled,processName,allowed,excluded)) {
+                    ShowStatus("Editor นี้ยังไม่รองรับ หรือยังไม่ได้เปิดใช้ Editor Bridge · ไม่มีการแก้ข้อความ");
+                    return true;
+                }
+                if(!QueueBridgeSelection(window,processName))
+                    ShowStatus("กำลังตรวจ Editor อยู่ · ลองใหม่อีกครั้ง");
+                return true;
             }
-            int count = e.End - e.Start;
-            if (count < 2 || count > MaxToken) return false;
-            string source = e.Text.Substring(e.Start, count);
-            string correction = ReplacementFor(source, true);
-            return correction != null && ShowPreview(source, correction, window, e.Focus, true, e.Start, e.End);
+            int count=e.End-e.Start;
+            if(count<2 || count>MaxToken) {
+                ShowStatus("เลือกข้อความอย่างน้อย 2 ตัวอักษรก่อนใช้คำสั่งนี้");
+                return true;
+            }
+            string source=e.Text.Substring(e.Start,count);
+            string correction=ReplacementFor(source,true);
+            if(correction==null) {
+                ShowStatus("ไม่พบกฎแก้ไขสำหรับข้อความที่เลือก · ข้อความเดิมคงอยู่");
+                return true;
+            }
+            if(!ShowPreview(source,correction,window,e.Focus,true,e.Start,e.End))
+                ShowStatus("ไม่สามารถแสดงตัวอย่างได้ · ข้อความเดิมคงอยู่");
+            return true;
         }
         private bool ShowTokenPreview(IntPtr window) {
             string correction = ReplacementFor(token, true);
