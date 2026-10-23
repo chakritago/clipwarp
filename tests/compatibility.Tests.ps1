@@ -58,6 +58,8 @@ Write-Host 'PASS: compiled conversion helper C#'
 # Exercise embedded helpers without constructing a watcher or opening the clipboard.
 function Assert-True([bool]$Value, [string]$Name) {
     if (-not $Value) { throw $Name }
+    Write-Host "PASS: $Name"
+}
 
 Assert-True ([ClipwarpRightLang.Engine]::EvaluateInputTransaction(6,0,$false).State -eq [ClipwarpRightLang.EditorTransactionState]::NoInput) 'transaction distinguishes no accepted input'
 $partial=[ClipwarpRightLang.Engine]::EvaluateInputTransaction(6,4,$false)
@@ -76,8 +78,7 @@ Assert-True ([ClipwarpRightLang.Engine]::IsExpectedTextAfterReplacement('hello w
 Assert-True (-not [ClipwarpRightLang.Engine]::IsExpectedTextAfterReplacement('hello world','world','โลก',6,11,$false,'hello xโลก')) 'unexpected editor content fails transaction postcondition'
 Assert-True ([ClipwarpRightLang.Engine]::IsExpectedTextAfterReplacement('hello world','world','โลก',6,11,$true,'hello โลก ')) 'automatic correction verifies the expected trailing space'
 Write-Host 'PASS: editor transaction and recovery state machine'
-    Write-Host "PASS: $Name"
-}
+
 $allowedApps = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 [void]$allowedApps.Add('notepad')
 [void]$allowedApps.Add('powershell')
