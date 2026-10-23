@@ -67,7 +67,7 @@ $evidenceScript = [IO.File]::ReadAllText((Join-Path $root 'tests\verify-rightlan
 Assert-Release ($bridge.Contains('TrySelectionContext') -and $bridge.Contains('BeforeContext') -and
     $bridge.Contains('AfterContext') -and $bridge.Contains('StyleFingerprint')) 'rich editor selection context is revalidated'
 Assert-Release ($engine.Contains('RecentUndoDetails') -and $engine.Contains('WhenUtc') -and
-    $engine.Contains('Application') -and $engine.Contains('Native Ctrl+Z sent; restore not verified') -and
+    $engine.Contains('Application') -and $engine.Contains('Undo sent; restoration could not be verified') -and
     $engine.Contains('EditorBridge.MatchesCaretTail')) 'Undo state is context-checked and reports uncertain native results'
 Assert-Release ($dictionaryModule.Contains('Export-ClipwarpRightLangDictionary') -and
     $dictionaryModule.Contains('Import-ClipwarpRightLangDictionary') -and
