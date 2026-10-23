@@ -858,17 +858,21 @@ namespace ClipwarpRightLang
             }
             EditorState e;
             if(!TryReadEditor(window,out e) || e.Focus!=last.Focus || e.Start!=e.End) {
-                lastUndo=null; bubble.Dismiss(); return false;
+                lastUndo=null; bubble.Dismiss();
+                if(GetForegroundWindow()==window) ShowStatus("ตำแหน่งข้อความเปลี่ยน · ยกเลิก Undo เพื่อความปลอดภัย");
+                return true;
             }
             int effectiveCaret=e.Start;
             if(last.HasTrailingSpace) {
                 if(effectiveCaret<1 || e.Text[effectiveCaret-1]!=' ') {
-                    lastUndo=null; bubble.Dismiss(); return false;
+                    lastUndo=null; bubble.Dismiss(); ShowStatus("ช่องว่างหลังคำเปลี่ยน · ยกเลิก Undo เพื่อความปลอดภัย");
+                    return true;
                 }
                 effectiveCaret--;
             }
             if(!IsUndoCandidate(e.Text,effectiveCaret,effectiveCaret,last.Replacement)) {
-                lastUndo=null; bubble.Dismiss(); return false;
+                lastUndo=null; bubble.Dismiss(); ShowStatus("ข้อความหรือ Caret เปลี่ยน · ไม่ส่งคำสั่ง Undo");
+                return true;
             }
             int replaceStart=effectiveCaret-last.Replacement.Length;
             string expectedRestored=e.Text.Substring(0,replaceStart)+last.Source+e.Text.Substring(effectiveCaret);
