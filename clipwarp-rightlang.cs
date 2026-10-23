@@ -529,19 +529,30 @@ namespace ClipwarpRightLang
                 int sentEvents = 0;
                 bool preflightPassed = false;
                 bool verified = false;
+                string preflightFailure = "Selection/context changed after preview · no text was changed";
                 try {
-                    if (DateTime.UtcNow <= p.Until && serial == bridgeSerial &&
-                        EditorBridge.SameSelection(p.Window,p.Bridge) && GetForegroundWindow() == p.Window) {
-                        preflightPassed = true;
-                        sentEvents = InjectBridgeSelection(p.Replacement);
-                        if (sentEvents == expectedEvents) {
+                    if(DateTime.UtcNow>p.Until) preflightFailure="Preview expired · no text was changed";
+                    else if(serial!=bridgeSerial) preflightFailure=null;
+                    else if(GetForegroundWindow()!=p.Window) preflightFailure=null;
+                    else if(!EditorBridge.SameSelection(p.Window,p.Bridge)) preflightFailure="Selection/context changed after preview · no text was changed";
+                    else {
+                        preflightPassed=true;
+                        sentEvents=InjectBridgeSelection(p.Replacement);
+                        if(sentEvents==expectedEvents) {
                             Thread.Sleep(140);
-                            verified = EditorBridge.MatchesCaretTail(p.Window,p.Bridge,p.Replacement);
+                            verified=EditorBridge.MatchesCaretTail(p.Window,p.Bridge,p.Replacement);
                         }
                     }
                 } catch { }
                 finally { Interlocked.Exchange(ref bridgeBusy,0); }
-                if (!preflightPassed) return;
+                if(!preflightPassed) {
+                    if(!string.IsNullOrEmpty(preflightFailure)) {
+                        try { bubble.BeginInvoke((MethodInvoker)delegate {
+                            if(serial==bridgeSerial && GetForegroundWindow()==p.Window) ShowStatus(preflightFailure);
+                        }); } catch { }
+                    }
+                    return;
+                }
                 EditorTransactionResult result = EvaluateInputTransaction(expectedEvents,sentEvents,verified);
                 UndoHistoryEntry entry = sentEvents > 0 ? Remember(p.Source,p.Replacement,p.Window,true) : null;
                 if (entry != null) entry.Status = result.Status;
@@ -740,16 +751,28 @@ namespace ClipwarpRightLang
             if (GetForegroundWindow() != window || string.IsNullOrEmpty(source) ||
                 string.IsNullOrEmpty(replacement)) return false;
             EditorState before;
-            if (!TryReadEditor(window,out before) || before.Focus != focus) return false;
-            int start, end;
-            if (selection) {
+            if(!TryReadEditor(window,out before) || before.Focus!=focus) {
+                if(GetForegroundWindow()==window) ShowStatus("Editor/Focus เปลี่ยน · ยกเลิกโดยไม่แก้ข้อความ");
+                return false;
+            }
+            int start,end;
+            if(selection) {
                 start=before.Start; end=before.End;
-                if (end-start != source.Length ||
-                    !string.Equals(before.Text.Substring(start,end-start),source,StringComparison.Ordinal)) return false;
+                if(start<0 || end<start || end>before.Text.Length || end-start!=source.Length ||
+                   !string.Equals(before.Text.Substring(start,end-start),source,StringComparison.Ordinal)) {
+                    ShowStatus("Selection เปลี่ยนก่อนเริ่มธุรกรรม · ไม่มีการแก้ข้อความ");
+                    return false;
+                }
             } else {
-                if (before.Start != before.End || before.Start < source.Length) return false;
+                if(before.Start!=before.End || before.Start<source.Length) {
+                    ShowStatus("Caret เปลี่ยนก่อนเริ่มธุรกรรม · ไม่มีการแก้ข้อความ");
+                    return false;
+                }
                 start=before.Start-source.Length; end=before.Start;
-                if (!string.Equals(before.Text.Substring(start,source.Length),source,StringComparison.Ordinal)) return false;
+                if(!string.Equals(before.Text.Substring(start,source.Length),source,StringComparison.Ordinal)) {
+                    ShowStatus("ข้อความต้นทางเปลี่ยนก่อนเริ่มธุรกรรม · ไม่มีการแก้ข้อความ");
+                    return false;
+                }
             }
             string expectedText=before.Text.Substring(0,start)+replacement+
                 (trailingSpace ? " " : "")+before.Text.Substring(end);
