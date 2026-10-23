@@ -200,7 +200,7 @@ function Get-ClipwarpRightLangDictionaryRows {
 }
 function Test-ClipwarpRightLangDictionaryRows {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][object[]]$Rows)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Rows)
     $errors=New-Object 'System.Collections.Generic.List[string]'
     $normalized=New-Object 'System.Collections.Generic.List[object]'
     $seenRules=New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -234,7 +234,7 @@ function Test-ClipwarpRightLangDictionaryRows {
 }
 function Save-ClipwarpRightLangDictionaryRows {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][object[]]$Rows,[string]$ConfigPath=(Get-ClipwarpDefaultConfigPath))
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Rows,[string]$ConfigPath=(Get-ClipwarpDefaultConfigPath))
     $check=Test-ClipwarpRightLangDictionaryRows -Rows $Rows
     if (-not $check.Valid) { throw ('ตรวจพจนานุกรมไม่ผ่าน: '+($check.Errors -join '; ')) }
     $cfg=Get-ClipwarpRightLangConfig -ConfigPath $ConfigPath
