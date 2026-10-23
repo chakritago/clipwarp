@@ -3,6 +3,23 @@
 // It processes only a bounded in-memory token in explicitly allowed desktop apps.
 namespace ClipwarpRightLang
 {
+    public enum EditorTransactionState {
+        PreflightRejected, NoInput, PartialInput, InputSentUnverified, Committed,
+        UndoRejected, UndoSentUnverified, Restored
+    }
+    public sealed class EditorTransactionResult {
+        public EditorTransactionState State { get; private set; }
+        public int ExpectedInputEvents { get; private set; }
+        public int SentInputEvents { get; private set; }
+        public bool CanOfferUndo { get; private set; }
+        public bool RequiresRecovery { get; private set; }
+        public string Status { get; private set; }
+        public EditorTransactionResult(EditorTransactionState state, int expected, int sent,
+                                       bool canUndo, bool recovery, string status) {
+            State=state; ExpectedInputEvents=expected; SentInputEvents=sent;
+            CanOfferUndo=canUndo; RequiresRecovery=recovery; Status=status;
+        }
+    }
     using System;
     using System.Collections.Generic;
     using System.Diagnostics;
@@ -130,6 +147,15 @@ namespace ClipwarpRightLang
                     BackColor = Color.FromArgb(48, 69, 96), ForeColor = Color.White };
                 button.FlatAppearance.BorderSize = 0; Controls.Add(button); return button;
             }
+            public void PresentStatus(string message) {
+                label.Text = message;
+                apply.Visible = cancel.Visible = undo.Visible = ignore.Visible = false;
+                Point pos = Cursor.Position;
+                Rectangle work = Screen.FromPoint(pos).WorkingArea;
+                Location = new Point(Math.Min(work.Right - Width, Math.Max(work.Left, pos.X + 12)),
+                                     Math.Min(work.Bottom - Height, Math.Max(work.Top, pos.Y + 18)));
+                if (!Visible) Show(); else { TopMost = true; Invalidate(); }
+            }
             public void Present(string source, string corrected, bool isUndo, bool passive = false) {
                 label.Text = source + "  →  " + corrected +
                     Environment.NewLine + (isUndo ? "F8 / คลิกเพื่อย้อนกลับ (8 วินาที)" :
@@ -151,7 +177,43 @@ namespace ClipwarpRightLang
         private HashSet<string> words = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private DateTime statusUntil = DateTime.MinValue;
         public bool Installed { get { return hook != IntPtr.Zero; } }
+
+        public static EditorTransactionResult EvaluateInputTransaction(int expectedEvents, int sentEvents, bool postconditionVerified) {
+            if (expectedEvents <= 0 || sentEvents <= 0)
+                return new EditorTransactionResult(EditorTransactionState.NoInput, expectedEvents, Math.Max(0,sentEvents),
+                    false, false, "No input events accepted");
+            if (sentEvents != expectedEvents)
+                return new EditorTransactionResult(EditorTransactionState.PartialInput, expectedEvents, sentEvents,
+                    false, true, "Partial input; inspect the editor before continuing");
+            if (!postconditionVerified)
+                return new EditorTransactionResult(EditorTransactionState.InputSentUnverified, expectedEvents, sentEvents,
+                    false, true, "Input sent; editor result could not be verified");
+            return new EditorTransactionResult(EditorTransactionState.Committed, expectedEvents, sentEvents,
+                true, false, "Committed; editor content verified");
+        }
+        public static EditorTransactionResult EvaluateUndoTransaction(bool inputSent, bool restoredVerified) {
+            if (!inputSent)
+                return new EditorTransactionResult(EditorTransactionState.UndoRejected, 1, 0,
+                    false, true, "Undo input was rejected; inspect the editor");
+            if (!restoredVerified)
+                return new EditorTransactionResult(EditorTransactionState.UndoSentUnverified, 1, 1,
+                    false, true, "Undo sent; restoration could not be verified");
+            return new EditorTransactionResult(EditorTransactionState.Restored, 1, 1,
+                false, false, "Undo completed; editor content verified");
+        }
+        public static bool IsExpectedTextAfterReplacement(string original, string source, string replacement,
+                                                          int start, int end, bool trailingSpace, string actual) {
+            if (original == null || actual == null || string.IsNullOrEmpty(source) ||
+                string.IsNullOrEmpty(replacement) || start < 0 || end < start || end > original.Length ||
+                start > original.Length - source.Length || end - start != source.Length ||
+                !string.Equals(original.Substring(start, source.Length), source, StringComparison.Ordinal))
+                return false;
+            string expected = original.Substring(0,start) + replacement +
+                (trailingSpace ? " " : "") + original.Substring(end);
+            return string.Equals(expected,actual,StringComparison.Ordinal);
+        }
 
         public Engine() {
             proc = OnKeyboard; mouseProc = OnMouse;
@@ -165,6 +227,10 @@ namespace ClipwarpRightLang
             bubbleTimer = new System.Windows.Forms.Timer();
             bubbleTimer.Interval = 250;
             bubbleTimer.Tick += delegate {
+                if (statusUntil != DateTime.MinValue && DateTime.UtcNow > statusUntil) {
+                    statusUntil = DateTime.MinValue;
+                    if (pending == null && lastUndo == null) bubble.Dismiss();
+                }
                 if (pending != null && DateTime.UtcNow > pending.Until) CancelPreview();
                 if (lastUndo != null && DateTime.UtcNow > lastUndo.Until) {
                     lastUndo = null;
@@ -395,6 +461,10 @@ namespace ClipwarpRightLang
                         editor.Start, editor.End, null, true);
         }
 
+        private void ShowStatus(string message, int durationMs = 4500) {
+            statusUntil = DateTime.UtcNow.AddMilliseconds(Math.Max(1500,Math.Min(8000,durationMs)));
+            bubble.PresentStatus(message);
+        }
         private bool ShowPreview(string source, string corrected, IntPtr window, IntPtr focus,
                                  bool selection, int start, int end, EditorSnapshot bridge = null, bool passive = false) {
             if (!CanCorrect(source, corrected, true, false, false)) return false;
