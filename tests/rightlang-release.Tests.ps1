@@ -81,7 +81,7 @@ Assert-Release ($settings.Contains('พจนานุกรม 3.0') -and
 Assert-Release ($evidenceScript.Contains('RealDesktopGateSatisfied') -and
     $evidenceScript.Contains('StableReleaseApproved=$false') -and
     $evidenceScript.Contains('GITHUB_ACTIONS')) 'physical E2E attestation cannot promote a CI run to Stable'
-Assert-Release ($engine.Contains('EvaluateInputTransaction') -and $engine.Contains('EvaluateUndoTransaction') -and
+Assert-Release ($engine.Contains('EvaluateInputTransaction') -and $engine.Contains('EvaluateUndoTransaction') -and $engine.Contains('UndoPartialInput') -and
     $engine.Contains('IsExpectedTextAfterReplacement') -and $engine.Contains('Partial input; inspect the editor')) 'editor changes use explicit transaction states and exact postconditions'
 Assert-Release ($bridge.Contains('prior.BeforeContext+replacement') -and
     $bridge.Contains('prior.AfterContext') -and $bridge.Contains('MatchesCaretTail')) 'native Undo checks selection prefix, replacement and suffix context'
