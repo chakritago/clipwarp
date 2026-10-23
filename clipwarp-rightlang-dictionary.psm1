@@ -52,14 +52,16 @@ function Read-ClipwarpRightLangDictionaryPayload {
     }
     $words=@()
     if ($json.kind -eq 'dictionary') {
-        $words=@($json.words)
+        if ($null -eq $json.words) { $words=@() } else { $words=@($json.words) }
         if ($words.Count -gt 2000) { throw 'Too many custom words.' }
         foreach ($word in $words) {
             if ($word -isnot [string] -or [string]::IsNullOrWhiteSpace($word) -or $word.Length -gt 128) {
                 throw 'Invalid custom word in imported dictionary.'
             }
         }
-    } elseif (@($json.words).Count -gt 0) { throw 'Learned-only backup must not contain custom words.' }
+    } elseif ($null -ne $json.words -and @($json.words).Count -gt 0) {
+        throw 'Learned-only backup must not contain custom words.'
+    }
     $groups=Get-ClipwarpRightLangDictionaryGroups $json.groups
     foreach ($groupKey in $groups.Keys) {
         $kind=[string]$groupKey.Substring(0,4)
