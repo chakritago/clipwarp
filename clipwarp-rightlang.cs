@@ -608,6 +608,10 @@ namespace ClipwarpRightLang
                 finally { Interlocked.Exchange(ref bridgeBusy,0); }
                 if(!preflight) {
                     if(last.History!=null) last.History.Status="Undo precondition changed; no Ctrl+Z sent";
+                    try { bubble.BeginInvoke((MethodInvoker)delegate {
+                        if(serial==bridgeSerial && GetForegroundWindow()==last.Window)
+                            ShowStatus("ข้อความหรือบริบทเปลี่ยน · ไม่ส่ง Ctrl+Z เพื่อป้องกันการย้อนงานอื่น");
+                    }); } catch { }
                     return;
                 }
                 EditorTransactionResult result=EvaluateUndoTransaction(sentEvents==4,restored);
