@@ -210,20 +210,20 @@ function Test-ClipwarpRightLangDictionaryRows {
         $index++; $kind=([string]$row.Kind).Trim(); $source=([string]$row.Source).Trim()
         $replacement=([string]$row.Replacement).Trim(); $group=([string]$row.Group).Trim()
         if (-not $group) { $group='ทั่วไป' }
-        if ($kind -notin @('Rule','Word')) { $errors.Add("แถว $index: ประเภทต้องเป็น Rule หรือ Word"); continue }
-        if ($group.Length -gt 40 -or $group -match '[\r\n\t]') { $errors.Add("แถว $index: ชื่อกลุ่มต้องไม่เกิน 40 ตัวอักษร"); continue }
+        if ($kind -notin @('Rule','Word')) { $errors.Add("แถว ${index}: ประเภทต้องเป็น Rule หรือ Word"); continue }
+        if ($group.Length -gt 40 -or $group -match '[\r\n\t]') { $errors.Add("แถว ${index}: ชื่อกลุ่มต้องไม่เกิน 40 ตัวอักษร"); continue }
         if ($kind -eq 'Rule') {
             if ($source.Length -lt 2 -or $source.Length -gt 64 -or [string]::IsNullOrWhiteSpace($replacement) -or $replacement.Length -gt 128) {
-                $errors.Add("แถว $index: กฎต้องมีคำต้นทาง 2–64 ตัวและคำแก้ไข 1–128 ตัว"); continue
+                $errors.Add("แถว ${index}: กฎต้องมีคำต้นทาง 2–64 ตัวและคำแก้ไข 1–128 ตัว"); continue
             }
-            if ($seenRules.ContainsKey($source)) { $errors.Add("แถว $index: คำต้นทางซ้ำกับแถวก่อนหน้า ($source)"); continue }
+            if ($seenRules.ContainsKey($source)) { $errors.Add("แถว ${index}: คำต้นทางซ้ำกับแถวก่อนหน้า ($source)"); continue }
             $seenRules[$source]=$replacement
             $origin=if(([string]$row.Origin -eq 'เรียนรู้') -and ([string]$row.OriginalSource -ceq $source) -and ([string]$row.OriginalReplacement -ceq $replacement)){'เรียนรู้'}else{'กำหนดเอง'}
         } else {
             if ([string]::IsNullOrWhiteSpace($source) -or $source.Length -gt 128 -or $replacement) {
-                $errors.Add("แถว $index: คำกำหนดเองต้องมีคำ 1–128 ตัวและช่องคำแก้ไขต้องว่าง"); continue
+                $errors.Add("แถว ${index}: คำกำหนดเองต้องมีคำ 1–128 ตัวและช่องคำแก้ไขต้องว่าง"); continue
             }
-            if (-not $seenWords.Add($source)) { $errors.Add("แถว $index: คำกำหนดเองซ้ำ ($source)"); continue }
+            if (-not $seenWords.Add($source)) { $errors.Add("แถว ${index}: คำกำหนดเองซ้ำ ($source)"); continue }
             $origin='คำกำหนดเอง'
         }
         $normalized.Add([pscustomobject]@{Kind=$kind;Source=$source;Replacement=$replacement;Group=$group;Origin=$origin;Status='พร้อมบันทึก';OriginalSource=[string]$row.OriginalSource;OriginalReplacement=[string]$row.OriginalReplacement})
