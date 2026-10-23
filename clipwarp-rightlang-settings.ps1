@@ -898,7 +898,7 @@ if($SelfTest){
             [void]$dictionaryTable.Rows.Add($probe);$probeRows+= $probe
         }
         Refresh-DictionaryStatuses
-        if(@($probeRows | Where-Object { [string]$_.Item('Status') -notlike '*ซ้ำ*' }).Count -ne 0){throw "Dictionary duplicate detection failed"}
+        if(@($probeRows | Where-Object { [string]$_['Status'] -notlike '*ซ้ำ*' }).Count -ne 0){throw "Dictionary duplicate detection failed"}
         $dictionarySearch.Text='no-such-manager-row-probe'
         if(@($dictionaryGrid.Rows | Where-Object { -not $_.IsNewRow -and $_.Visible }).Count -ne 0){throw "Dictionary search filtering failed"}
         $dictionarySearch.Clear()
