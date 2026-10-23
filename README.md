@@ -454,7 +454,46 @@ a real interactive Windows desktop and then independently verify the
 manually collected evidence with `tests/verify-rightlang-e2e.ps1` (five
 privacy-reviewed benign PNGs named notepad.png, word.png, vscode.png,
 clipboard.png and undo.png). This records hashes, **not** automatic proof
-of genuine keyboard input. Keep PR #2 in Draft until that review is complete.
+of genuine keyboard input. Keep the follow-up transaction/dictionary PR in Draft until that review is complete.
+
+#### Editor Transaction Safety 3.0 & Dictionary Manager 3.0 (v1.19 preview)
+
+**Preview branch only; not Stable.** Native Edit corrections now re-check focus,
+selection/caret and exact source text immediately before sending input. The
+transaction records the expected SendInput event count and then compares the
+**entire editor text** against the expected postcondition after the editor has
+had time to process input. F8 Undo is offered only after that full-document
+check passes. Partial input, changed text or an unverified postcondition never
+produces a success/Undo state; ClipWarp instead shows a short, non-interactive
+recovery status and asks the user to inspect the editor. It does not automatically
+send a second destructive operation when the outcome is uncertain.
+
+The UI Automation path also checks selection identity, Word style fingerprint,
+and prefix/suffix context. Native Ctrl+Z is reported as **sent** versus
+**restoration verified**; these are not interchangeable. This remains
+conservative best-effort protection: it cannot guarantee preservation of every
+Word run property or atomicity inside arbitrary editor providers.
+
+The **พจนานุกรม 3.0** Settings tab provides:
+
+- An editable table for correction rules and custom words, including group,
+  origin and validation status.
+- Search across source, replacement and group, plus a group filter.
+- Add/delete rows, duplicate-key detection and validation before saving.
+- **ดูตัวอย่าง Import** to review new entries, duplicates and conflicting rules
+  before confirming. Existing mappings are never overwritten by import.
+- Group-aware schema-v2 JSON export/import; schema-v1 dictionaries remain
+  readable. Dictionary groups are persisted locally with the RightLang settings.
+- Import/export/learned-word backup stays local. JSON remains plaintext.
+
+Version 1.19.0 is a development candidate only. The Windows CI regression
+suite checks the transaction state machine, exact text postconditions, manager
+validation and import preview. It cannot prove physical keystrokes, live
+Clipboard behavior, actual Word formatting or VS Code TextPattern support.
+The updated [20-scenario physical Windows release gate](docs/rightlang-e2e-release-gate.md)
+must be completed on a real interactive desktop, with privacy-reviewed
+screenshots and a human review, before merging the follow-up PR or calling
+the build Stable.
 
 ### Tray icon menu
 
