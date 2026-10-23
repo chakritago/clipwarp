@@ -92,6 +92,41 @@ Stable merge. Do not manufacture a pass if any app is not available.
 | Privacy | Learning off and ignored suggestions | No new learned words saved to disk |
 | Privacy | Disable feature and privacy pause | No automatic correction or hotkey processing |
 
+## v1.19 Editor Transaction Safety & Dictionary Manager 3.0
+
+Run all **20 manual scenarios** in tests/rightlang-interactive.ps1 -EditorBridge.
+The two new scenarios are mandatory:
+- **Stale-selection transaction:** open a correction preview, change focus or the
+  selection before accepting, and verify the old preview cannot edit the new
+  selection or another window.
+- **Undo/recovery + Dictionary Manager:** after a verified correction, change
+  the caret or edit adjacent text; F8/Undo must refuse a stale target and must
+  not report success. Open a test JSON dictionary, inspect the import preview,
+  verify duplicate and conflicting rules are marked, cancel without changes,
+  then import a fresh test dictionary and verify groups and Thai text roundtrip.
+
+In each app, check that successful input is followed by full-document
+verification before Undo becomes available. If the UI Automation provider cannot
+verify the caret and surrounding context, ClipWarp must fail closed and show
+recovery guidance instead of guessing or automatically undoing unrelated text.
+For a partial/uncertain input, inspect the test document manually; **never repeat
+Undo blindly**. Confirm Undo status distinguishes a sent command from a verified
+restoration.
+
+Dictionary Manager checks:
+- Edit a rule, custom word and group; save, restart Settings and verify persistence.
+- Create a duplicate rule differing only in letter case. Save must be blocked
+  without modifying the saved configuration.
+- Preview schema-v1 and schema-v2 JSON. Confirm new, duplicate and conflicting
+  entries are distinguishable; conflicts do not overwrite existing rules.
+- Confirm imported group metadata roundtrips and invalid JSON does not partially
+  save. Verify the import path leaves global mode, allow/block lists and privacy
+  opt-ins unchanged.
+
+The automated transaction classifier tests are not a substitute for these
+interactive tests. This PR remains **NOT READY FOR STABLE** until a reviewer
+records actual results for Notepad, Word, VS Code, Clipboard and native Undo.
+
 ## Evidence to attach to PR
 
 - CI run URL for latest commit and counts for PowerShell 5.1 and PowerShell 7.
