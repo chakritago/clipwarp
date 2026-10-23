@@ -568,26 +568,42 @@ namespace ClipwarpRightLang
             worker.Start();
         }
         private void UndoBridge(UndoRequest last) {
-            if (last == null || last.Bridge == null || Interlocked.CompareExchange(ref bridgeBusy,1,0) != 0) return;
-            int serial = Interlocked.Increment(ref bridgeSerial);
-            Thread worker = new Thread(delegate() {
+            if(last==null || last.Bridge==null || Interlocked.CompareExchange(ref bridgeBusy,1,0)!=0) return;
+            int serial=Interlocked.Increment(ref bridgeSerial);
+            Thread worker=new Thread(delegate() {
+                int sentEvents=0; bool preflight=false; bool restored=false;
                 try {
-                    if (serial != bridgeSerial || GetForegroundWindow() != last.Window ||
-                        !EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Replacement)) return;
-                    INPUT[] undo = new INPUT[] { Key(VK_CONTROL,(char)0,0), Key(VK_Z,(char)0,0),
-                        Key(VK_Z,(char)0,KEYEVENTF_KEYUP), Key(VK_CONTROL,(char)0,KEYEVENTF_KEYUP) };
-                    bool sent = SendInput((uint)undo.Length,undo,Marshal.SizeOf(typeof(INPUT))) == undo.Length;
-                    bool restored = false;
-                    if (sent) {
-                        Thread.Sleep(100);
-                        restored = EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Source);
+                    if(serial==bridgeSerial && GetForegroundWindow()==last.Window &&
+                       EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Replacement)) {
+                        preflight=true;
+                        INPUT[] undo=new INPUT[] { Key(VK_CONTROL,(char)0,0), Key(VK_Z,(char)0,0),
+                            Key(VK_Z,(char)0,KEYEVENTF_KEYUP), Key(VK_CONTROL,(char)0,KEYEVENTF_KEYUP) };
+                        sentEvents=(int)SendInput((uint)undo.Length,undo,Marshal.SizeOf(typeof(INPUT)));
+                        if(sentEvents==undo.Length) {
+                            Thread.Sleep(140);
+                            restored=EditorBridge.MatchesCaretTail(last.Window,last.Bridge,last.Source);
+                        }
                     }
-                    if (last.History != null)
-                        last.History.Status = !sent ? "Native Ctrl+Z rejected" :
-                            restored ? "Restored (UI Automation caret verified)" :
-                                       "Native Ctrl+Z sent; restore not verified";
                 } catch { }
                 finally { Interlocked.Exchange(ref bridgeBusy,0); }
+                if(!preflight) {
+                    if(last.History!=null) last.History.Status="Undo precondition changed; no Ctrl+Z sent";
+                    return;
+                }
+                EditorTransactionResult result=EvaluateUndoTransaction(sentEvents==4,restored);
+                if(sentEvents>0 && sentEvents<4) result=new EditorTransactionResult(
+                    EditorTransactionState.UndoRejected,4,sentEvents,false,true,
+                    "Partial Ctrl+Z input; inspect editor and do not repeat blindly");
+                if(last.History!=null) last.History.Status=result.Status;
+                try { bubble.BeginInvoke((MethodInvoker)delegate {
+                    if(serial!=bridgeSerial || GetForegroundWindow()!=last.Window) return;
+                    string message=result.State==EditorTransactionState.Restored
+                        ? "ย้อนกลับแล้ว · UI Automation ยืนยันข้อความเดิม"
+                        : result.State==EditorTransactionState.UndoRejected
+                            ? "คำสั่งย้อนกลับไม่ครบ · ตรวจข้อความด้วยตนเองก่อนทำต่อ"
+                            : "ส่ง Ctrl+Z แล้วแต่ยืนยันผลไม่ได้ · ตรวจข้อความด้วยตนเอง";
+                    ShowStatus(message);
+                }); } catch { }
             });
             worker.IsBackground=true;
             worker.SetApartmentState(System.Threading.ApartmentState.STA);
