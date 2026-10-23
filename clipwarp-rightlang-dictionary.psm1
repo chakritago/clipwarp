@@ -116,7 +116,7 @@ function Export-ClipwarpRightLangDictionary {
         format='clipwarp-rightlang-dictionary'; schema=2
         kind=if($LearnedOnly){'learned'}else{'dictionary'}
         exportedAt=(Get-Date).ToUniversalTime().ToString('o')
-        instant=$rules; words=if($LearnedOnly){@()}else{@($cfg.words)}
+        instant=$rules; words=if($LearnedOnly){$null}else{@($cfg.words)}
         learnedKeys=@($learned); groups=$groups
     }
     $text=ConvertTo-Json -InputObject $payload -Depth 6
