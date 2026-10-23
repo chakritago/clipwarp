@@ -889,6 +889,21 @@ if($SelfTest){
         if($archivePage.Text -ne "พจนานุกรม 3.0" -or -not $backupLearned.Enabled){throw "Dictionary tools unavailable"}
         if($dictionaryGrid.Columns.Count -ne 8 -or -not $previewImport.Enabled -or -not $saveDictionaryRows.Enabled){throw "Dictionary Manager grid/actions missing"}
         if($dictionaryGroupFilter.Items.Count -lt 1){throw "Dictionary group filter missing"}
+        $probeRows=@()
+        foreach($probeSource in @('__clipwarp_dictionary_probe__','__CLIPWARP_DICTIONARY_PROBE__')){
+            $probe=$dictionaryTable.NewRow()
+            $probe['Kind']='Rule';$probe['Source']=$probeSource;$probe['Replacement']='probe'
+            $probe['Group']='QA';$probe['Origin']='กำหนดเอง';$probe['Status']=''
+            $probe['OriginalSource']='';$probe['OriginalReplacement']=''
+            [void]$dictionaryTable.Rows.Add($probe);$probeRows+= $probe
+        }
+        Refresh-DictionaryStatuses
+        if(@($probeRows | Where-Object { [string]$_.Item('Status') -notlike '*ซ้ำ*' }).Count -ne 0){throw "Dictionary duplicate detection failed"}
+        $dictionarySearch.Text='no-such-manager-row-probe'
+        if(@($dictionaryGrid.Rows | Where-Object { -not $_.IsNewRow -and $_.Visible }).Count -ne 0){throw "Dictionary search filtering failed"}
+        $dictionarySearch.Clear()
+        foreach($probe in $probeRows){$dictionaryTable.Rows.Remove($probe)}
+        Refresh-DictionaryStatuses
         $tabs.SelectedTab=$learnedPage
         if(-not $learnedSearch.TabStop){throw "Learned search keyboard focus disabled"}
         foreach ($dimensions in @(@(700,620),@(780,650),@(930,730))) {
