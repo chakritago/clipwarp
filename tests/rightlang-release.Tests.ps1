@@ -75,7 +75,7 @@ Assert-Release ($dictionaryModule.Contains('Export-ClipwarpRightLangDictionary')
     -not $dictionaryModule.Contains('Invoke-WebRequest')) 'portable dictionary and backup never upload data'
 Assert-Release ($installer.Contains('clipwarp-rightlang-dictionary.psm1') -and
     $uninstall.Contains('clipwarp-rightlang-dictionary.psm1')) 'dictionary tools packaged and removed symmetrically'
-Assert-Release ($settings.Contains('นำเข้า / สำรองคำ') -and
+Assert-Release ($settings.Contains('พจนานุกรม 3.0') -and
     $settings.Contains('Export-ClipwarpRightLangDictionary') -and
     $settings.Contains('Import-ClipwarpRightLangDictionary')) 'dictionary UI provides explicit import and export actions'
 Assert-Release ($evidenceScript.Contains('RealDesktopGateSatisfied') -and
