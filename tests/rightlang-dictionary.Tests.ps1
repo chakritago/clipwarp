@@ -29,7 +29,7 @@ try {
     Assert-Dict (Test-Path -LiteralPath $export) 'dictionary JSON exported'
     Assert-Dict ($result.Rules -gt 1 -and $result.Learned -eq 1) 'full dictionary exported with learned metadata'
     $doc = Get-Content -LiteralPath $export -Encoding UTF8 -Raw | ConvertFrom-Json
-    Assert-Dict ($doc.format -eq 'clipwarp-rightlang-dictionary' -and $doc.schema -eq 1) 'versioned export schema'
+    Assert-Dict ($doc.format -eq 'clipwarp-rightlang-dictionary' -and $doc.schema -eq 2) 'versioned export schema'
     Assert-Dict ($null -eq $doc.allowedApps -and $null -eq $doc.appPolicies -and $null -eq $doc.password) 'dictionary export never includes app permissions or secrets'
     $protected = Get-ClipwarpRightLangConfig -ConfigPath $targetCfg
     $protected.mode = 'off'
