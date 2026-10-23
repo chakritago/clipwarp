@@ -433,33 +433,38 @@ function Refresh-DictionaryGroupFilter {
         else{$dictionaryGroupFilter.SelectedIndex=0}
     } finally {$dictionaryGroupFilter.EndUpdate()}
 }
+$script:dictionaryRefreshing=$false
 function Refresh-DictionaryStatuses {
-    $ruleBuckets=@{};$wordBuckets=@{}
-    foreach($dataRow in $dictionaryTable.Rows){
-        if(-not ([string]$dataRow['Group']).Trim()){$dataRow['Group']='ทั่วไป'}
-        $source=([string]$dataRow['Source']).Trim()
-        if(-not $source){$dataRow['Status']='ต้องระบุคำ';continue}
-        $key=$source.ToLowerInvariant()
-        if([string]$dataRow['Kind'] -eq 'Rule'){
-            if(-not $ruleBuckets.ContainsKey($key)){$ruleBuckets[$key]=New-Object 'System.Collections.Generic.List[object]'}
-            $ruleBuckets[$key].Add($dataRow)
-        } elseif([string]$dataRow['Kind'] -eq 'Word'){
-            if(-not $wordBuckets.ContainsKey($key)){$wordBuckets[$key]=New-Object 'System.Collections.Generic.List[object]'}
-            $wordBuckets[$key].Add($dataRow)
-        } else {$dataRow['Status']='ชนิดไม่ถูกต้อง'}
-    }
-    foreach($dataRow in $dictionaryTable.Rows){
-        $source=([string]$dataRow['Source']).Trim()
-        if(-not $source){continue}
-        $key=$source.ToLowerInvariant()
-        if([string]$dataRow['Kind'] -eq 'Rule' -and $ruleBuckets[$key].Count -gt 1){$dataRow['Status']='ซ้ำ · ต้องแก้ก่อนบันทึก'}
-        elseif([string]$dataRow['Kind'] -eq 'Word' -and $wordBuckets[$key].Count -gt 1){$dataRow['Status']='ซ้ำ · ต้องแก้ก่อนบันทึก'}
-        elseif([string]$dataRow['Kind'] -eq 'Rule' -and -not ([string]$dataRow['Replacement']).Trim()){$dataRow['Status']='ต้องระบุคำแก้'}
-        elseif(([string]$dataRow['Group']).Length -gt 40){$dataRow['Status']='ชื่อกลุ่มยาวเกินไป'}
-        else{$dataRow['Status']='พร้อมตรวจบันทึก'}
-    }
-    Refresh-DictionaryGroupFilter
-    Refresh-DictionaryGridFilter
+    if($script:dictionaryRefreshing){return}
+    $script:dictionaryRefreshing=$true
+    try {
+        $ruleBuckets=@{};$wordBuckets=@{}
+        foreach($dataRow in $dictionaryTable.Rows){
+            if(-not ([string]$dataRow['Group']).Trim()){$dataRow['Group']='ทั่วไป'}
+            $source=([string]$dataRow['Source']).Trim()
+            if(-not $source){$dataRow['Status']='ต้องระบุคำ';continue}
+            $key=$source.ToLowerInvariant()
+            if([string]$dataRow['Kind'] -eq 'Rule'){
+                if(-not $ruleBuckets.ContainsKey($key)){$ruleBuckets[$key]=New-Object 'System.Collections.Generic.List[object]'}
+                $ruleBuckets[$key].Add($dataRow)
+            } elseif([string]$dataRow['Kind'] -eq 'Word'){
+                if(-not $wordBuckets.ContainsKey($key)){$wordBuckets[$key]=New-Object 'System.Collections.Generic.List[object]'}
+                $wordBuckets[$key].Add($dataRow)
+            } else {$dataRow['Status']='ชนิดไม่ถูกต้อง'}
+        }
+        foreach($dataRow in $dictionaryTable.Rows){
+            $source=([string]$dataRow['Source']).Trim()
+            if(-not $source){continue}
+            $key=$source.ToLowerInvariant()
+            if([string]$dataRow['Kind'] -eq 'Rule' -and $ruleBuckets[$key].Count -gt 1){$dataRow['Status']='ซ้ำ · ต้องแก้ก่อนบันทึก'}
+            elseif([string]$dataRow['Kind'] -eq 'Word' -and $wordBuckets[$key].Count -gt 1){$dataRow['Status']='ซ้ำ · ต้องแก้ก่อนบันทึก'}
+            elseif([string]$dataRow['Kind'] -eq 'Rule' -and -not ([string]$dataRow['Replacement']).Trim()){$dataRow['Status']='ต้องระบุคำแก้'}
+            elseif(([string]$dataRow['Group']).Length -gt 40){$dataRow['Status']='ชื่อกลุ่มยาวเกินไป'}
+            else{$dataRow['Status']='พร้อมตรวจบันทึก'}
+        }
+        Refresh-DictionaryGroupFilter
+        Refresh-DictionaryGridFilter
+    } finally { $script:dictionaryRefreshing=$false }
 }
 function Refresh-DictionaryGridFilter {
     if(-not $dictionaryGrid){return}
@@ -494,6 +499,8 @@ function Reload-DictionaryManager {
     Refresh-DictionaryStatuses
 }
 function Add-DictionaryManagerRow([string]$kind){
+    $dictionarySearch.Clear()
+    if($dictionaryGroupFilter.Items.Contains('ทั้งหมด')){$dictionaryGroupFilter.SelectedItem='ทั้งหมด'}
     $row=$dictionaryTable.NewRow()
     $row['Kind']=$kind;$row['Source']='';$row['Replacement']=''
     $row['Group']='ทั่วไป';$row['Origin']=if($kind -eq 'Word'){'คำกำหนดเอง'}else{'กำหนดเอง'}
