@@ -52,15 +52,32 @@ function Read-ClipwarpRightLangDictionaryPayload {
     }
     $words=@()
     if ($json.kind -eq 'dictionary') {
-        if ($null -eq $json.words) { $words=@() } else { $words=@($json.words) }
+        $wordValue=$json.words
+        if($null -eq $wordValue -or ($wordValue -is [string] -and $wordValue.Length -eq 0)) { $words=@() }
+        elseif($wordValue -is [System.Array]) {
+            $words=@($wordValue)
+            if($words.Count -eq 0 -or ($words.Count -eq 1 -and $null -eq $words[0])){$words=@()}
+        } else { $words=@($wordValue) }
         if ($words.Count -gt 2000) { throw 'Too many custom words.' }
         foreach ($word in $words) {
             if ($word -isnot [string] -or [string]::IsNullOrWhiteSpace($word) -or $word.Length -gt 128) {
                 throw 'Invalid custom word in imported dictionary.'
             }
         }
-    } elseif ($null -ne $json.words -and @($json.words).Count -gt 0) {
-        throw 'Learned-only backup must not contain custom words.'
+    } else {
+        $wordValue=$json.words
+        if($null -ne $wordValue) {
+            if($wordValue -is [string]) {
+                if(-not [string]::IsNullOrEmpty($wordValue)){throw 'Learned-only backup must not contain custom words.'}
+            } elseif($wordValue -is [System.Array]) {
+                foreach($word in $wordValue) {
+                    if($null -ne $word -and -not ($word -is [string] -and [string]::IsNullOrEmpty($word))) {
+                        throw 'Learned-only backup must not contain custom words.'
+                    }
+                }
+            } else { throw 'Learned-only backup must not contain custom words.' }
+        }
+        $words=@()
     }
     $groups=Get-ClipwarpRightLangDictionaryGroups $json.groups
     foreach ($groupKey in $groups.Keys) {
