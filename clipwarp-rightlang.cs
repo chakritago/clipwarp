@@ -14,7 +14,7 @@ namespace ClipwarpRightLang
 
     public enum EditorTransactionState {
         PreflightRejected, NoInput, PartialInput, InputSentUnverified, Committed,
-        UndoRejected, UndoSentUnverified, Restored
+        UndoRejected, UndoPartialInput, UndoSentUnverified, Restored
     }
     public sealed class EditorTransactionResult {
         public EditorTransactionState State { get; private set; }
@@ -195,14 +195,20 @@ namespace ClipwarpRightLang
                 true, false, "Committed; editor content verified");
         }
         public static EditorTransactionResult EvaluateUndoTransaction(bool inputSent, bool restoredVerified) {
-            if (!inputSent)
-                return new EditorTransactionResult(EditorTransactionState.UndoRejected, 1, 0,
-                    false, true, "Undo input was rejected; inspect the editor");
-            if (!restoredVerified)
-                return new EditorTransactionResult(EditorTransactionState.UndoSentUnverified, 1, 1,
-                    false, true, "Undo sent; restoration could not be verified");
-            return new EditorTransactionResult(EditorTransactionState.Restored, 1, 1,
-                false, false, "Undo completed; editor content verified");
+            return EvaluateUndoInputTransaction(1,inputSent ? 1 : 0,restoredVerified);
+        }
+        public static EditorTransactionResult EvaluateUndoInputTransaction(int expectedEvents, int sentEvents, bool restoredVerified) {
+            if(expectedEvents<=0 || sentEvents<=0)
+                return new EditorTransactionResult(EditorTransactionState.UndoRejected,Math.Max(1,expectedEvents),Math.Max(0,sentEvents),
+                    false,true,"Undo input was rejected; inspect the editor");
+            if(sentEvents!=expectedEvents)
+                return new EditorTransactionResult(EditorTransactionState.UndoPartialInput,expectedEvents,sentEvents,
+                    false,true,"Partial Undo input; inspect editor and do not repeat blindly");
+            if(!restoredVerified)
+                return new EditorTransactionResult(EditorTransactionState.UndoSentUnverified,expectedEvents,sentEvents,
+                    false,true,"Undo sent; restoration could not be verified");
+            return new EditorTransactionResult(EditorTransactionState.Restored,expectedEvents,sentEvents,
+                false,false,"Undo completed; editor content verified");
         }
         public static bool IsExpectedTextAfterReplacement(string original, string source, string replacement,
                                                           int start, int end, bool trailingSpace, string actual) {
@@ -614,18 +620,17 @@ namespace ClipwarpRightLang
                     }); } catch { }
                     return;
                 }
-                EditorTransactionResult result=EvaluateUndoTransaction(sentEvents==4,restored);
-                if(sentEvents>0 && sentEvents<4) result=new EditorTransactionResult(
-                    EditorTransactionState.UndoRejected,4,sentEvents,false,true,
-                    "Partial Ctrl+Z input; inspect editor and do not repeat blindly");
+                EditorTransactionResult result=EvaluateUndoInputTransaction(4,sentEvents,restored);
                 if(last.History!=null) last.History.Status=result.Status;
                 try { bubble.BeginInvoke((MethodInvoker)delegate {
                     if(serial!=bridgeSerial || GetForegroundWindow()!=last.Window) return;
                     string message=result.State==EditorTransactionState.Restored
                         ? "ย้อนกลับแล้ว · UI Automation ยืนยันข้อความเดิม"
-                        : result.State==EditorTransactionState.UndoRejected
-                            ? "คำสั่งย้อนกลับไม่ครบ · ตรวจข้อความด้วยตนเองก่อนทำต่อ"
-                            : "ส่ง Ctrl+Z แล้วแต่ยืนยันผลไม่ได้ · ตรวจข้อความด้วยตนเอง";
+                        : result.State==EditorTransactionState.UndoPartialInput
+                            ? "ส่งคีย์ Ctrl+Z ได้บางส่วน · ตรวจข้อความ ห้ามกดซ้ำทันที"
+                            : result.State==EditorTransactionState.UndoRejected
+                                ? "Undo ไม่ถูกส่ง · ตรวจข้อความด้วยตนเองก่อนทำต่อ"
+                                : "ส่ง Ctrl+Z แล้วแต่ยืนยันผลไม่ได้ · ตรวจข้อความด้วยตนเอง";
                     ShowStatus(message);
                 }); } catch { }
             });
@@ -913,7 +918,7 @@ namespace ClipwarpRightLang
                             string.Equals(after.Text,expectedRestored,StringComparison.Ordinal);
                     } catch { }
                 }
-                EditorTransactionResult result=EvaluateUndoTransaction(sent==keys.Length,restored);
+                EditorTransactionResult result=EvaluateUndoInputTransaction(keys.Length,sent,restored);
                 if(last.History!=null) last.History.Status=result.Status;
                 try { bubble.BeginInvoke((MethodInvoker)delegate {
                     if(serial!=bridgeSerial) {
@@ -923,9 +928,11 @@ namespace ClipwarpRightLang
                     if(GetForegroundWindow()==window) {
                         string message=result.State==EditorTransactionState.Restored
                             ? "ย้อนกลับแล้ว · ตรวจยืนยันข้อความทั้งช่องแล้ว"
-                            : result.State==EditorTransactionState.UndoRejected
-                                ? "Editor ปฏิเสธคำสั่ง Undo · ตรวจข้อความด้วยตนเอง"
-                                : "ส่ง Undo แล้วแต่ยืนยันผลไม่ได้ · ตรวจข้อความด้วยตนเอง";
+                            : result.State==EditorTransactionState.UndoPartialInput
+                                ? "ส่งคีย์ Undo ได้บางส่วน · ตรวจข้อความด้วยตนเอง ห้ามกดซ้ำทันที"
+                                : result.State==EditorTransactionState.UndoRejected
+                                    ? "Editor ไม่รับคำสั่ง Undo · ตรวจข้อความด้วยตนเอง"
+                                    : "ส่ง Undo แล้วแต่ยืนยันผลไม่ได้ · ตรวจข้อความด้วยตนเอง";
                         ShowStatus(message);
                     }
                 }); } catch { }
