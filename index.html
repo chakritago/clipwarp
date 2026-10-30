@@ -105,6 +105,10 @@
   .cmd .copy{flex:none;background:var(--ink);color:#fff;border:none;cursor:pointer;font-family:inherit;font-weight:800;
              border-radius:11px;padding:11px 18px;font-size:.92rem;transition:background .16s}
   .cmd .copy:hover{background:#2a211c}.cmd .copy.done{background:var(--ok)}
+  .cmd .copy.failed{background:#9b342d;color:#fff}
+  .cmd .copy:focus-visible{outline:3px solid var(--coral-text);outline-offset:3px}
+  .copy-help{margin-top:10px;text-align:center;font-weight:800;color:#9b342d}
+  [hidden]{display:none!important}
   .install .hint{text-align:center;margin-top:12px;color:var(--muted);font-weight:700;font-size:.92rem}
   .install .hint code{font-family:ui-monospace,Consolas,monospace;color:var(--coral-text);font-weight:800}
 
@@ -229,8 +233,9 @@
     <div class="cmd">
       <span class="ps">PS&gt;</span>
       <code id="cmd">irm https://raw.githubusercontent.com/chakritago/clipwarp/main/install.ps1 | iex</code>
-      <button class="copy" id="copyBtn" type="button"><span id="copyLabel"><span data-lang-en>Copy</span><span data-lang-th>คัดลอก</span></span></button>
+      <button class="copy" id="copyBtn" type="button" aria-describedby="copyHelp"><span id="copyLabel"><span data-lang-en>Copy</span><span data-lang-th>คัดลอก</span></span></button>
     </div>
+    <p class="copy-help" id="copyHelp" role="status" hidden><span data-lang-en>Automatic copy is blocked. The command is selected—press Ctrl+C, then paste it in PowerShell.</span><span data-lang-th>เบราว์เซอร์บล็อกการคัดลอก เลือกคำสั่งให้แล้ว กด Ctrl+C แล้ววางใน PowerShell</span></p>
     <p class="hint"><span data-lang-en>The watcher starts immediately with Windows logon autostart enabled.</span><span data-lang-th>watcher เริ่มทำงานทันทีพร้อมเปิดอัตโนมัติตอนล็อกอิน Windows</span></p>
   </div>
 </section>
@@ -346,13 +351,89 @@
     document.querySelectorAll('.rise').forEach(function(el){io.observe(el);});
   } else { document.querySelectorAll('.rise').forEach(function(el){el.classList.add('in');}); }
 
-  var btn=document.getElementById('copyBtn'), live=document.getElementById('live');
-  function lbl(ok){var th=document.documentElement.getAttribute('data-lang')==='th';return ok?(th?'คัดลอกแล้ว':'Copied'):(th?'ไม่สำเร็จ':'Failed');}
-  function flash(ok){ btn.classList.toggle('done',ok); document.getElementById('copyLabel').textContent=lbl(ok); live.textContent=lbl(ok);
-    setTimeout(function(){ btn.classList.remove('done'); document.getElementById('copyLabel').innerHTML='<span data-lang-en>Copy</span><span data-lang-th>คัดลอก</span>'; },1900); }
-  btn.addEventListener('click',function(){ var t=document.getElementById('cmd').textContent.trim();
-    if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(t).then(function(){flash(true);},function(){flash(false);}); }
-    else { var ok=false; try{ var r=document.createRange(); r.selectNode(document.getElementById('cmd')); var s=getSelection(); s.removeAllRanges(); s.addRange(r); ok=document.execCommand('copy'); s.removeAllRanges(); }catch(e){} flash(ok); } });
+  // Prefer the native Clipboard API, but handle browsers that expose it and
+  // reject permissions. A legacy textarea copy and selectable manual fallback
+  // ensure that the Copy button never fails silently.
+  var copyButton=document.getElementById('copyBtn');
+  var copyLabel=document.getElementById('copyLabel');
+  var copyLive=document.getElementById('live');
+  var copyHelp=document.getElementById('copyHelp');
+  var commandNode=document.getElementById('cmd');
+  var copyResetTimer=null;
+  function isThai(){return document.documentElement.getAttribute('data-lang')==='th';}
+  function showCopyResult(kind){
+    if(copyResetTimer!==null)clearTimeout(copyResetTimer);
+    copyButton.classList.toggle('done',kind==='success');
+    copyButton.classList.toggle('failed',kind==='manual');
+    copyHelp.hidden=kind!=='manual';
+    var message=kind==='success'?(isThai()?'คัดลอกแล้ว':'Copied'):
+      (isThai()?'กด Ctrl+C เพื่อคัดลอก':'Press Ctrl+C to copy');
+    copyLabel.textContent=message;
+    copyLive.textContent=kind==='success'?message:
+      (isThai()?'เบราว์เซอร์บล็อกการคัดลอก เลือกคำสั่งให้แล้ว กด Ctrl+C':
+        'Automatic copy was blocked. The command is selected. Press Ctrl+C.');
+    copyResetTimer=setTimeout(function(){
+      copyButton.classList.remove('done','failed');
+      copyLabel.innerHTML='<span data-lang-en>Copy</span><span data-lang-th>คัดลอก</span>';
+      copyHelp.hidden=true;
+      copyResetTimer=null;
+    },kind==='manual'?10000:2500);
+  }
+  function legacyCopyCommand(text){
+    var field=document.createElement('textarea');
+    field.value=text;
+    field.setAttribute('readonly','');
+    field.style.position='fixed';
+    field.style.left='-9999px';
+    field.style.top='0';
+    document.body.appendChild(field);
+    var copied=false;
+    try{
+      field.focus();
+      field.select();
+      copied=document.execCommand('copy')===true;
+    }catch(err){
+      copied=false;
+    }finally{
+      document.body.removeChild(field);
+    }
+    return copied;
+  }
+  function selectCommandForManualCopy(){
+    try{
+      var selection=window.getSelection();
+      var range=document.createRange();
+      range.selectNodeContents(commandNode);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }catch(err){
+      // The complete command remains readable in the code element.
+    }
+    showCopyResult('manual');
+  }
+  async function copyInstallerCommand(){
+    var text=commandNode.textContent.trim();
+    if(!text){selectCommandForManualCopy();return false;}
+    try{
+      if(navigator.clipboard&&typeof navigator.clipboard.writeText==='function'){
+        await navigator.clipboard.writeText(text);
+        showCopyResult('success');
+        return true;
+      }
+    }catch(err){
+      // Permission denied, cross-origin iframe or clipboard API unavailable.
+      // Some browsers expose writeText but still reject calls on user clicks.
+    }
+    if(legacyCopyCommand(text)){
+      showCopyResult('success');
+      return true;
+    }
+    selectCommandForManualCopy();
+    return false;
+  }
+  copyButton.addEventListener('click',function(){
+    copyInstallerCommand().catch(function(){selectCommandForManualCopy();});
+  });
 </script>
 </body>
 </html>
