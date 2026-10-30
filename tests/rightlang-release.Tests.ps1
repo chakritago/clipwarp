@@ -13,7 +13,7 @@ $installer = [IO.File]::ReadAllText((Join-Path $root 'install.ps1'))
 $uninstall = [IO.File]::ReadAllText((Join-Path $root 'uninstall.ps1'))
 $interactive = [IO.File]::ReadAllText((Join-Path $root 'tests\rightlang-interactive.ps1'))
 $version = Get-Content -LiteralPath (Join-Path $root 'version.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-Assert-Release ($version.version -eq '1.18.0') 'release candidate version is 1.18.0'
+Assert-Release ($version.version -eq '1.18.1') 'release candidate version is 1.18.1'
 Assert-Release ($module.Contains('editorBridgeEnabled = $false') -and
     $module.Contains('learnAccepted = $false') -and
     $module.Contains('smartSuggestions = $false') -and
