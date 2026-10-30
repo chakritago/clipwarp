@@ -9,8 +9,23 @@ param(
     [string]$ImagePathBase64,
     [Nullable[int]]$PointerX,
     [Nullable[int]]$PointerY,
-    [int]$TimeoutSeconds = 3
+    [int]$TimeoutSeconds = 12
 )
+
+# A child launched with -WindowStyle Hidden can fail before a GUI is visible.
+# Record only error type and script line, never clipboard title, image path or content.
+$ErrorActionPreference = 'Stop'
+trap {
+    try {
+        $diag = Join-Path $env:USERPROFILE '.claude\scripts\clipwarp-popup-error.log'
+        $dir = Split-Path -Parent $diag
+        if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Force -Path $dir) }
+        $errorType = if ($_.Exception) { $_.Exception.GetType().Name } else { 'UnknownError' }
+        $line = [int]$_.InvocationInfo.ScriptLineNumber
+        [IO.File]::AppendAllText($diag, ('{0:u} popup error {1} at line {2}' -f (Get-Date),$errorType,$line) + [Environment]::NewLine)
+    } catch {}
+    exit 1
+}
 
 if ($TitleFileBase64) { $TitleFile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($TitleFileBase64)) }
 if ($TitleFile) {
@@ -24,7 +39,8 @@ Import-Module (Join-Path $PSScriptRoot 'clipwarp-calendar.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'clipwarp-support.psm1') -Force
 $popupMutex = New-Object Threading.Mutex($false, 'Local\clipwarp-calendar-popup')
 $ownsPopupMutex = $false
-try { $ownsPopupMutex = $popupMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $ownsPopupMutex = $true }
+# Wait briefly for a previous popup that the watcher has just closed.
+try { $ownsPopupMutex = $popupMutex.WaitOne(1500) } catch [Threading.AbandonedMutexException] { $ownsPopupMutex = $true }
 if (-not $ownsPopupMutex) { $popupMutex.Dispose(); exit 0 }
 Add-Type -TypeDefinition @'
 using System;
