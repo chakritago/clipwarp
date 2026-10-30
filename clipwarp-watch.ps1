@@ -779,7 +779,9 @@ namespace ClipwarpWatch
         // fingerprint may be null when the content could not be read (clipboard
         // busy): a null fingerprint only feeds the storm counter, never the
         // burst table.
-        public Verdict Observe(string fingerprint, long nowMs)
+        // Count one clipboard event once. Inspecting its contents must not
+        // double-count the same WM_CLIPBOARDUPDATE toward the storm limit.
+        public Verdict ObserveEvent(long nowMs)
         {
             Trim(events, nowMs, StormWindowMs);
             events.Enqueue(nowMs);
@@ -789,6 +791,20 @@ namespace ClipwarpWatch
                 stormPausedUntil = nowMs + StormCooldownMs;
                 return Verdict.PauseStorm;
             }
+            return Verdict.Allow;
+        }
+        public int StormRemainingMs(long nowMs)
+        {
+            return (int)Math.Min(StormCooldownMs, Math.Max(0,stormPausedUntil - nowMs));
+        }
+        public Verdict Observe(string fingerprint, long nowMs)
+        {
+            if (ObserveEvent(nowMs) == Verdict.PauseStorm) return Verdict.PauseStorm;
+            return ObserveContent(fingerprint,nowMs);
+        }
+        public Verdict ObserveContent(string fingerprint, long nowMs)
+        {
+            if (nowMs < stormPausedUntil) return Verdict.PauseStorm;
             if (string.IsNullOrEmpty(fingerprint)) return Verdict.Allow;
             long until;
             if (suppressedUntil.TryGetValue(fingerprint, out until))
@@ -988,13 +1004,16 @@ namespace ClipwarpWatch
                 // burst table.)
                 long nowMs = DateTime.UtcNow.Ticks / 10000;
                 if (BurstGuardEnabled() &&
-                    burstGuard.Observe(null, nowMs) == ClipboardBurstGuard.Verdict.PauseStorm)
+                    burstGuard.ObserveEvent(nowMs) == ClipboardBurstGuard.Verdict.PauseStorm)
                 {
                     if (!stormLogged)
                     {
                         stormLogged = true;
-                        Log("clipboard storm detected - pausing clipboard handling for 30s");
+                        Log("clipboard storm detected - retry latest copy after cooldown");
                     }
+                    debounce.Stop();
+                    debounce.Interval = Math.Max(200,Math.Min(32000,burstGuard.StormRemainingMs(nowMs)+150));
+                    debounce.Start();
                 }
                 else
                 {
@@ -1396,7 +1415,7 @@ namespace ClipwarpWatch
                 string contentFp = FingerprintClipboard(dObj);
                 if (contentFp != lastContentFingerprint) { convFails = 0; lastContentFingerprint = contentFp; }
                 long nowMs = DateTime.UtcNow.Ticks / 10000;
-                ClipboardBurstGuard.Verdict burstVerdict = burstGuard.Observe(contentFp, nowMs);
+                ClipboardBurstGuard.Verdict burstVerdict = burstGuard.ObserveContent(contentFp, nowMs);
                 if (burstVerdict == ClipboardBurstGuard.Verdict.SuppressBurst)
                 {
                     if (burstLoggedFingerprint != contentFp)
