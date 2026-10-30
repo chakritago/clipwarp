@@ -107,10 +107,15 @@ if ($NoAutostart) {
 if ($Status) {
     $st = Get-WatchState
     $auto = 'off'
+    $popupStatus = 'unknown'
+    $pauseStatus = 'unknown'
     try {
         Import-Module (Join-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) 'clipwarp-support.psm1') -Force -ErrorAction Stop
         if (Get-ClipwarpAutostartEnabled) { $auto = 'on' }
+        $popupStatus = if (Get-ClipwarpCalendarEnabled) { 'enabled' } else { 'disabled' }
+        $pauseStatus = if (Get-ClipwarpPaused) { 'paused' } else { 'active' }
     } catch { }
+    Write-Host "clipwarp popup: $popupStatus; clipboard watcher: $pauseStatus" -ForegroundColor Cyan
     switch ($st.State) {
         'watcher' {
             $verTxt = ''
@@ -1602,6 +1607,10 @@ namespace ClipwarpWatch
         private void CloseOwnedPopup()
         {
             try { if (popupChild != null && !popupChild.HasExited) { popupChild.Kill(); popupChild.WaitForExit(1000); Log("replaced previous calendar popup"); } } catch { }
+            try {
+                if (popupChild != null && popupChild.HasExited && popupChild.ExitCode != 0)
+                    Log("popup exited with code " + popupChild.ExitCode + " (see clipwarp-popup-error.log)");
+            } catch { }
             try { if (popupChild != null) popupChild.Dispose(); } catch { }
             popupChild = null;
         }
@@ -2052,6 +2061,19 @@ Start-Sleep -Milliseconds 250
         } catch { }
     })
     [void]$contextMenu.Items.Add($targetMenu)
+
+    # Safe popup self-test: does not access or change clipboard.
+    $popupTest = New-Object System.Windows.Forms.ToolStripMenuItem("Test Clipboard Popup")
+    $popupTest.add_Click({
+        try {
+            if (-not $watcher.ShowTestPopup()) {
+                $trayIcon.ShowBalloonTip(5000, "ClipWarp Popup", "Popup disabled or failed to start. Check Calendar prompts and View Log.", [System.Windows.Forms.ToolTipIcon]::Warning)
+            }
+        } catch {
+            $trayIcon.ShowBalloonTip(5000, "ClipWarp Popup", "Popup test failed. Check clipwarp-popup-error.log.", [System.Windows.Forms.ToolTipIcon]::Warning)
+        }
+    })
+    [void]$contextMenu.Items.Add($popupTest)
 
     # Calendar prompts toggle - mirrors `clipwarp calendar enable|disable`.
     $calItem = New-Object System.Windows.Forms.ToolStripMenuItem("Calendar prompts")
