@@ -1375,14 +1375,6 @@ namespace ClipwarpWatch
 
             if (IsPaused()) { lastHandledSequence = sequence; lastManagedImagePath = null; lastManagedSequence = 0; return; }
 
-            // If the current clipboard keeps failing to convert, stop relaunching
-            // until a new copy arrives (WM_CLIPBOARDUPDATE resets convFails).
-            if (convFails >= 3)
-            {
-                if (convFails == 3) { convFails++; Log("conversion failing repeatedly - waiting for a new clipboard copy"); }
-                return;
-            }
-
             // Check for our own ClipwarpManaged payload:
             IDataObject dObj = null;
             try { dObj = Clipboard.GetDataObject(); } catch { Rearm(); return; }
@@ -1399,6 +1391,37 @@ namespace ClipwarpWatch
                     debounce.Interval = EventDelayMs;
                     currentPayloadMode = (dObj.GetDataPresent(DataFormats.UnicodeText) || dObj.GetDataPresent(DataFormats.Text)) ? "dual" : "image-only";
                     OnForegroundWindowChanged(); // reconcile a target change during conversion
+                    return;
+                }
+            }
+
+            // Text copies are user actions; never suppress them using image
+            // conversion burst/failure budgets or a two-second duplicate timer.
+            string txt = null;
+            try { if (Clipboard.ContainsText()) txt = Clipboard.GetText(); }
+            catch { Rearm(); return; }
+            if (!string.IsNullOrEmpty(txt))
+            {
+                string p = txt.Trim().Trim('"');
+                if (ImgExt.IsMatch(p) && File.Exists(p))
+                {
+                    busyRetries=0; convFails=0;
+                    lastManagedImagePath=null; lastManagedSequence=0;
+                    lastHandledSequence=sequence;
+                    currentPayloadMode="dual";
+                    return;
+                }
+                if (!string.IsNullOrWhiteSpace(txt))
+                {
+                    if (sequence!=GetClipboardSequenceNumber()) { Rearm(); return; }
+                    bool launched = LaunchTextPopup(txt);
+                    lastTextFingerprint = ClipboardBurstGuard.FingerprintText(txt);
+                    lastTextAt=DateTime.Now;
+                    lastHandledSequence=sequence;
+                    lastManagedImagePath=null; lastManagedSequence=0;
+                    busyRetries=0; convFails=0;
+                    Log(launched ? "text copy -> popup launched" :
+                        "text copy -> popup disabled or could not launch");
                     return;
                 }
             }
@@ -1432,44 +1455,20 @@ namespace ClipwarpWatch
                     return;
                 }
                 if (burstVerdict == ClipboardBurstGuard.Verdict.Allow) burstLoggedFingerprint = null;
-                else // PauseStorm: re-armed while a storm pause is active
+                else // PauseStorm: recheck this copy after cooldown without a new event
                 {
-                    lastHandledSequence = sequence;
+                    debounce.Interval=Math.Max(200,Math.Min(32000,burstGuard.StormRemainingMs(nowMs)+150));
+                    debounce.Start();
                     return;
                 }
             }
 
-            string txt = null;
-            try { if (Clipboard.ContainsText()) txt = Clipboard.GetText(); }
-            catch { Rearm(); return; }                         // clipboard busy -> retry soon, don't drop it
-            if (!string.IsNullOrEmpty(txt))
+            // If the current clipboard keeps failing to convert, stop relaunching
+            // until a new copy arrives (WM_CLIPBOARDUPDATE resets convFails).
+            if (convFails >= 3)
             {
-                string p = txt.Trim().Trim('"');
-                if (ImgExt.IsMatch(p) && File.Exists(p)) {
-                    busyRetries = 0;
-                    debounce.Interval = EventDelayMs;
-                    lastManagedImagePath = null;
-                    lastHandledSequence = sequence;
-                    lastManagedSequence = 0;
-                    currentPayloadMode = "dual";
-                    return;
-                }  // our own write / usable path
-                string meaningful = txt.Trim();
-                if (meaningful.Length > 0)
-                {
-                    if (meaningful == lastTextFingerprint && (DateTime.Now - lastTextAt).TotalSeconds < 2)
-                    { lastHandledSequence = sequence; return; }
-                    LaunchTextPopup(txt);
-                    lastTextFingerprint = meaningful;
-                    lastTextAt = DateTime.Now;
-                    lastHandledSequence = sequence;
-                    lastManagedImagePath = null;
-                    lastManagedSequence = 0;
-                    busyRetries = 0;
-                    debounce.Interval = EventDelayMs;
-                    Log("text on clipboard -> calendar popup");
-                    return;
-                }
+                if (convFails == 3) { convFails++; Log("conversion failing repeatedly - waiting for a new clipboard copy"); }
+                return;
             }
 
             int payload = HasImagePayload();
