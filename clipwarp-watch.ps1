@@ -947,6 +947,7 @@ namespace ClipwarpWatch
         private uint lastHandledSequence;
         private string lastTextFingerprint;
         private DateTime lastTextAt;
+        private string lastImagePopupPath;
         private POINT eventPointer;
         private bool hasEventPointer;
         private IntPtr currentForegroundHwnd = IntPtr.Zero;
@@ -1384,6 +1385,7 @@ namespace ClipwarpWatch
                 if (sequence != GetClipboardSequenceNumber()) { Rearm(); return; }
                 if (!string.IsNullOrEmpty(mPath) && File.Exists(mPath))
                 {
+                    bool firstImagePopup = !string.Equals(lastImagePopupPath,mPath,StringComparison.OrdinalIgnoreCase);
                     lastManagedImagePath = mPath;
                     lastHandledSequence = sequence;
                     lastManagedSequence = sequence;
@@ -1391,6 +1393,11 @@ namespace ClipwarpWatch
                     debounce.Interval = EventDelayMs;
                     currentPayloadMode = (dObj.GetDataPresent(DataFormats.UnicodeText) || dObj.GetDataPresent(DataFormats.Text)) ? "dual" : "image-only";
                     OnForegroundWindowChanged(); // reconcile a target change during conversion
+                    if (firstImagePopup)
+                    {
+                        lastImagePopupPath=mPath;
+                        LaunchImagePopup(mPath);
+                    }
                     return;
                 }
             }
@@ -1521,31 +1528,75 @@ namespace ClipwarpWatch
             return " -ForegroundProcess \"" + safeProc + "\" -ForegroundTitle \"" + safeTitle + "\" -ForegroundClass \"" + safeCls + "\"";
         }
 
-        private void LaunchTextPopup(string title)
+        public bool ShowTestPopup()
         {
-            if (!CalendarEnabled()) return;
-            CloseOwnedPopup();
-            CleanupTitleFiles();
-            var psi = new System.Diagnostics.ProcessStartInfo();
-            psi.FileName = "powershell.exe";
-            byte[] titleBytes = Encoding.UTF8.GetBytes(title);
-            string titleFile = null;
-            if (titleBytes.Length > 6000)
+            // No clipboard mutation or exposure of copied user text.
+            return LaunchTextPopup("ClipWarp popup test (no clipboard text)");
+        }
+
+        private bool LaunchImagePopup(string imagePath)
+        {
+            if (!CalendarEnabled()) { Log("image popup disabled in settings"); return false; }
+            if (string.IsNullOrEmpty(imagePath) || !File.Exists(imagePath)) return false;
+            try
             {
-                titleFile = Path.Combine(Path.GetDirectoryName(configPath), "clipwarp-title-" + Guid.NewGuid().ToString("N") + ".txt");
-                Directory.CreateDirectory(Path.GetDirectoryName(configPath));
-                File.WriteAllText(titleFile, title);
-                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleFile \"" + titleFile + "\"" + PointerArguments();
+                CloseOwnedPopup();
+                var psi = new System.Diagnostics.ProcessStartInfo();
+                psi.FileName="powershell.exe";
+                string title=Convert.ToBase64String(Encoding.UTF8.GetBytes("Copied image"));
+                string path=Convert.ToBase64String(Encoding.UTF8.GetBytes(imagePath));
+                psi.Arguments="-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" +
+                    popupPath + "\" -Kind Image -TitleBase64 " + title +
+                    " -ImagePathBase64 " + path + PointerArguments();
+                psi.CreateNoWindow=true; psi.UseShellExecute=false;
+                popupChild=System.Diagnostics.Process.Start(psi);
+                if (popupChild==null) throw new InvalidOperationException("popup process not created");
+                Log("image conversion -> popup process launched");
+                return true;
             }
-            else
+            catch(Exception e){Log("image popup launch failed: "+e.GetType().Name);return false;}
+        }
+
+        private bool LaunchTextPopup(string title)
+        {
+            if (!CalendarEnabled()) {Log("text popup disabled in settings");return false;}
+            try
             {
-                string encoded = Convert.ToBase64String(titleBytes);
-                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleBase64 " + encoded + PointerArguments();
+                CloseOwnedPopup();
+                CleanupTitleFiles();
+                var psi=new System.Diagnostics.ProcessStartInfo();
+                psi.FileName="powershell.exe";
+                byte[] titleBytes=Encoding.UTF8.GetBytes(title);
+                string titleFile=null;
+                if(titleBytes.Length>6000)
+                {
+                    titleFile=Path.Combine(Path.GetDirectoryName(configPath),
+                        "clipwarp-title-"+Guid.NewGuid().ToString("N")+".txt");
+                    Directory.CreateDirectory(Path.GetDirectoryName(configPath));
+                    File.WriteAllText(titleFile,title);
+                    psi.Arguments="-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" +
+                        popupPath + "\" -Kind Text -TitleFile \"" + titleFile + "\"" + PointerArguments();
+                }
+                else
+                {
+                    string encoded=Convert.ToBase64String(titleBytes);
+                    psi.Arguments="-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" +
+                        popupPath + "\" -Kind Text -TitleBase64 " + encoded + PointerArguments();
+                }
+                psi.CreateNoWindow=true; psi.UseShellExecute=false;
+                try
+                {
+                    popupChild=System.Diagnostics.Process.Start(psi);
+                    if(popupChild==null) throw new InvalidOperationException("popup process not created");
+                    return true;
+                }
+                catch
+                {
+                    if(titleFile!=null){try{File.Delete(titleFile);}catch{}}
+                    throw;
+                }
             }
-            psi.CreateNoWindow = true;
-            psi.UseShellExecute = false;
-            try { popupChild = System.Diagnostics.Process.Start(psi); }
-            catch { if (titleFile != null) { try { File.Delete(titleFile); } catch { } } throw; }
+            catch(Exception e){Log("text popup launch failed: "+e.GetType().Name);return false;}
         }
 
         private void CloseOwnedPopup()
