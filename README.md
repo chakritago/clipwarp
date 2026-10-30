@@ -136,11 +136,28 @@ clipwarp target claude       # force dual format (path text + image)
 Copies that carry meaningful text alongside an image (e.g. a paragraph from Word)
 are left untouched by image conversion and use that text in the calendar prompt.
 
+### Copy popup troubleshooting (v1.18.1)
+
+When copying text shows no popup, run `clipwarp status` and check that the
+background watcher is running, Clipboard handling is not paused, and Calendar
+prompts are enabled. Use `clipwarp calendar enable`, `clipwarp privacy resume`
+and `clipwarp restart` to restore the existing watcher, when appropriate.
+
+From the ClipWarp tray icon, choose **Test Clipboard Popup**. This opens a
+harmless demonstration without reading or changing clipboard contents.
+If it fails, inspect `%USERPROFILE%\.claude\scripts\clipwarp-watch.log` and
+`clipwarp-popup-error.log` in the same folder. Diagnostics record error type
+and source line, never copied words or image content.
+
+Repeated intentional text copies now open a popup. Successful image conversions
+open an image popup; conversion does not depend on Calendar prompts. Clipboard
+storms are counted once per update and retried after the cooldown.
+
 ### Google Calendar prompt
 
 After a meaningful text copy or a successful image conversion, a topmost prompt
 appears directly below the pointer position captured when you copied, stays within
-the correct monitor's working area, and dismisses itself after 3 seconds (with countdown). Press
+the correct monitor's working area, and dismisses itself after 12 seconds (with countdown). Press
 `Enter` or click its button to open Google Calendar; press `Esc` to dismiss it.
 Copied text containing an explicit ISO local date and 24-hour time, such as
 `Review 2026-09-15 14:30`, creates a timed event; a range such as

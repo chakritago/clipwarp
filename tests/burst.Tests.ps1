@@ -40,6 +40,18 @@ Assert ($g3.Observe('anything', 20000) -eq $Pause) 'paused during the 30s cooldo
 Assert ($g3.Observe($null, 34000) -eq $Allow) 'resumes after the storm cooldown'
 $g4=New-Object ClipwarpWatch.ClipboardBurstGuard
 1..10 | ForEach-Object { Assert ($g4.Observe($null, ($_*1000)) -eq $Allow) 'null fingerprints never trip a burst' }
+# Actual watcher code counts each WM_CLIPBOARDUPDATE once, then inspects content.
+$g5=New-Object ClipwarpWatch.ClipboardBurstGuard
+1..20 | ForEach-Object {
+    $clock=$_*100
+    Assert ($g5.ObserveEvent($clock) -eq $Allow) "event $_ does not cause an early storm"
+    Assert ($g5.ObserveContent("different-$_",$clock) -eq $Allow) "content inspection $_ does not count a second event"
+}
+21..29 | ForEach-Object { Assert ($g5.ObserveEvent(($_*100)) -eq $Allow) "event $_ of 29 remains below storm threshold" }
+Assert ($g5.ObserveEvent(3000) -eq $Pause) '30th real clipboard event causes storm pause'
+Assert ($g5.StormRemainingMs(3000) -eq 30000) 'cooldown accurately reports its remaining time'
+Assert ($g5.ObserveContent('new-fingerprint',20000) -eq $Pause) 'content reads during storm cooldown remain delayed'
+Assert ($g5.ObserveContent('new-fingerprint',34000) -eq $Allow) 'content may be processed after cooldown without another event'
 $f1=[ClipwarpWatch.ClipboardBurstGuard]::FingerprintText('hello')
 $f2=[ClipwarpWatch.ClipboardBurstGuard]::FingerprintText('hello')
 Assert ($f1 -eq $f2 -and $f1.StartsWith('T:')) 'text fingerprint is deterministic'

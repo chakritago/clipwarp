@@ -107,10 +107,15 @@ if ($NoAutostart) {
 if ($Status) {
     $st = Get-WatchState
     $auto = 'off'
+    $popupStatus = 'unknown'
+    $pauseStatus = 'unknown'
     try {
         Import-Module (Join-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) 'clipwarp-support.psm1') -Force -ErrorAction Stop
         if (Get-ClipwarpAutostartEnabled) { $auto = 'on' }
+        $popupStatus = if (Get-ClipwarpCalendarEnabled) { 'enabled' } else { 'disabled' }
+        $pauseStatus = if (Get-ClipwarpPaused) { 'paused' } else { 'active' }
     } catch { }
+    Write-Host "clipwarp popup: $popupStatus; clipboard watcher: $pauseStatus" -ForegroundColor Cyan
     switch ($st.State) {
         'watcher' {
             $verTxt = ''
@@ -779,7 +784,9 @@ namespace ClipwarpWatch
         // fingerprint may be null when the content could not be read (clipboard
         // busy): a null fingerprint only feeds the storm counter, never the
         // burst table.
-        public Verdict Observe(string fingerprint, long nowMs)
+        // Count one clipboard event once. Inspecting its contents must not
+        // double-count the same WM_CLIPBOARDUPDATE toward the storm limit.
+        public Verdict ObserveEvent(long nowMs)
         {
             Trim(events, nowMs, StormWindowMs);
             events.Enqueue(nowMs);
@@ -789,6 +796,20 @@ namespace ClipwarpWatch
                 stormPausedUntil = nowMs + StormCooldownMs;
                 return Verdict.PauseStorm;
             }
+            return Verdict.Allow;
+        }
+        public int StormRemainingMs(long nowMs)
+        {
+            return (int)Math.Min(StormCooldownMs, Math.Max(0,stormPausedUntil - nowMs));
+        }
+        public Verdict Observe(string fingerprint, long nowMs)
+        {
+            if (ObserveEvent(nowMs) == Verdict.PauseStorm) return Verdict.PauseStorm;
+            return ObserveContent(fingerprint,nowMs);
+        }
+        public Verdict ObserveContent(string fingerprint, long nowMs)
+        {
+            if (nowMs < stormPausedUntil) return Verdict.PauseStorm;
             if (string.IsNullOrEmpty(fingerprint)) return Verdict.Allow;
             long until;
             if (suppressedUntil.TryGetValue(fingerprint, out until))
@@ -931,6 +952,7 @@ namespace ClipwarpWatch
         private uint lastHandledSequence;
         private string lastTextFingerprint;
         private DateTime lastTextAt;
+        private string lastImagePopupPath;
         private POINT eventPointer;
         private bool hasEventPointer;
         private IntPtr currentForegroundHwnd = IntPtr.Zero;
@@ -988,13 +1010,16 @@ namespace ClipwarpWatch
                 // burst table.)
                 long nowMs = DateTime.UtcNow.Ticks / 10000;
                 if (BurstGuardEnabled() &&
-                    burstGuard.Observe(null, nowMs) == ClipboardBurstGuard.Verdict.PauseStorm)
+                    burstGuard.ObserveEvent(nowMs) == ClipboardBurstGuard.Verdict.PauseStorm)
                 {
                     if (!stormLogged)
                     {
                         stormLogged = true;
-                        Log("clipboard storm detected - pausing clipboard handling for 30s");
+                        Log("clipboard storm detected - retry latest copy after cooldown");
                     }
+                    debounce.Stop();
+                    debounce.Interval = Math.Max(200,Math.Min(32000,burstGuard.StormRemainingMs(nowMs)+150));
+                    debounce.Start();
                 }
                 else
                 {
@@ -1356,14 +1381,6 @@ namespace ClipwarpWatch
 
             if (IsPaused()) { lastHandledSequence = sequence; lastManagedImagePath = null; lastManagedSequence = 0; return; }
 
-            // If the current clipboard keeps failing to convert, stop relaunching
-            // until a new copy arrives (WM_CLIPBOARDUPDATE resets convFails).
-            if (convFails >= 3)
-            {
-                if (convFails == 3) { convFails++; Log("conversion failing repeatedly - waiting for a new clipboard copy"); }
-                return;
-            }
-
             // Check for our own ClipwarpManaged payload:
             IDataObject dObj = null;
             try { dObj = Clipboard.GetDataObject(); } catch { Rearm(); return; }
@@ -1373,6 +1390,7 @@ namespace ClipwarpWatch
                 if (sequence != GetClipboardSequenceNumber()) { Rearm(); return; }
                 if (!string.IsNullOrEmpty(mPath) && File.Exists(mPath))
                 {
+                    bool firstImagePopup = !string.Equals(lastImagePopupPath,mPath,StringComparison.OrdinalIgnoreCase);
                     lastManagedImagePath = mPath;
                     lastHandledSequence = sequence;
                     lastManagedSequence = sequence;
@@ -1380,6 +1398,42 @@ namespace ClipwarpWatch
                     debounce.Interval = EventDelayMs;
                     currentPayloadMode = (dObj.GetDataPresent(DataFormats.UnicodeText) || dObj.GetDataPresent(DataFormats.Text)) ? "dual" : "image-only";
                     OnForegroundWindowChanged(); // reconcile a target change during conversion
+                    if (firstImagePopup)
+                    {
+                        lastImagePopupPath=mPath;
+                        LaunchImagePopup(mPath);
+                    }
+                    return;
+                }
+            }
+
+            // Text copies are user actions; never suppress them using image
+            // conversion burst/failure budgets or a two-second duplicate timer.
+            string txt = null;
+            try { if (Clipboard.ContainsText()) txt = Clipboard.GetText(); }
+            catch { Rearm(); return; }
+            if (!string.IsNullOrEmpty(txt))
+            {
+                string p = txt.Trim().Trim('"');
+                if (ImgExt.IsMatch(p) && File.Exists(p))
+                {
+                    busyRetries=0; convFails=0;
+                    lastManagedImagePath=null; lastManagedSequence=0;
+                    lastHandledSequence=sequence;
+                    currentPayloadMode="dual";
+                    return;
+                }
+                if (!string.IsNullOrWhiteSpace(txt))
+                {
+                    if (sequence!=GetClipboardSequenceNumber()) { Rearm(); return; }
+                    bool launched = LaunchTextPopup(txt);
+                    lastTextFingerprint = ClipboardBurstGuard.FingerprintText(txt);
+                    lastTextAt=DateTime.Now;
+                    lastHandledSequence=sequence;
+                    lastManagedImagePath=null; lastManagedSequence=0;
+                    busyRetries=0; convFails=0;
+                    Log(launched ? "text copy -> popup launched" :
+                        "text copy -> popup disabled or could not launch");
                     return;
                 }
             }
@@ -1396,7 +1450,7 @@ namespace ClipwarpWatch
                 string contentFp = FingerprintClipboard(dObj);
                 if (contentFp != lastContentFingerprint) { convFails = 0; lastContentFingerprint = contentFp; }
                 long nowMs = DateTime.UtcNow.Ticks / 10000;
-                ClipboardBurstGuard.Verdict burstVerdict = burstGuard.Observe(contentFp, nowMs);
+                ClipboardBurstGuard.Verdict burstVerdict = burstGuard.ObserveContent(contentFp, nowMs);
                 if (burstVerdict == ClipboardBurstGuard.Verdict.SuppressBurst)
                 {
                     if (burstLoggedFingerprint != contentFp)
@@ -1413,44 +1467,20 @@ namespace ClipwarpWatch
                     return;
                 }
                 if (burstVerdict == ClipboardBurstGuard.Verdict.Allow) burstLoggedFingerprint = null;
-                else // PauseStorm: re-armed while a storm pause is active
+                else // PauseStorm: recheck this copy after cooldown without a new event
                 {
-                    lastHandledSequence = sequence;
+                    debounce.Interval=Math.Max(200,Math.Min(32000,burstGuard.StormRemainingMs(nowMs)+150));
+                    debounce.Start();
                     return;
                 }
             }
 
-            string txt = null;
-            try { if (Clipboard.ContainsText()) txt = Clipboard.GetText(); }
-            catch { Rearm(); return; }                         // clipboard busy -> retry soon, don't drop it
-            if (!string.IsNullOrEmpty(txt))
+            // If the current clipboard keeps failing to convert, stop relaunching
+            // until a new copy arrives (WM_CLIPBOARDUPDATE resets convFails).
+            if (convFails >= 3)
             {
-                string p = txt.Trim().Trim('"');
-                if (ImgExt.IsMatch(p) && File.Exists(p)) {
-                    busyRetries = 0;
-                    debounce.Interval = EventDelayMs;
-                    lastManagedImagePath = null;
-                    lastHandledSequence = sequence;
-                    lastManagedSequence = 0;
-                    currentPayloadMode = "dual";
-                    return;
-                }  // our own write / usable path
-                string meaningful = txt.Trim();
-                if (meaningful.Length > 0)
-                {
-                    if (meaningful == lastTextFingerprint && (DateTime.Now - lastTextAt).TotalSeconds < 2)
-                    { lastHandledSequence = sequence; return; }
-                    LaunchTextPopup(txt);
-                    lastTextFingerprint = meaningful;
-                    lastTextAt = DateTime.Now;
-                    lastHandledSequence = sequence;
-                    lastManagedImagePath = null;
-                    lastManagedSequence = 0;
-                    busyRetries = 0;
-                    debounce.Interval = EventDelayMs;
-                    Log("text on clipboard -> calendar popup");
-                    return;
-                }
+                if (convFails == 3) { convFails++; Log("conversion failing repeatedly - waiting for a new clipboard copy"); }
+                return;
             }
 
             int payload = HasImagePayload();
@@ -1503,36 +1533,84 @@ namespace ClipwarpWatch
             return " -ForegroundProcess \"" + safeProc + "\" -ForegroundTitle \"" + safeTitle + "\" -ForegroundClass \"" + safeCls + "\"";
         }
 
-        private void LaunchTextPopup(string title)
+        public bool ShowTestPopup()
         {
-            if (!CalendarEnabled()) return;
-            CloseOwnedPopup();
-            CleanupTitleFiles();
-            var psi = new System.Diagnostics.ProcessStartInfo();
-            psi.FileName = "powershell.exe";
-            byte[] titleBytes = Encoding.UTF8.GetBytes(title);
-            string titleFile = null;
-            if (titleBytes.Length > 6000)
+            // No clipboard mutation or exposure of copied user text.
+            return LaunchTextPopup("ClipWarp popup test (no clipboard text)");
+        }
+
+        private bool LaunchImagePopup(string imagePath)
+        {
+            if (!CalendarEnabled()) { Log("image popup disabled in settings"); return false; }
+            if (string.IsNullOrEmpty(imagePath) || !File.Exists(imagePath)) return false;
+            try
             {
-                titleFile = Path.Combine(Path.GetDirectoryName(configPath), "clipwarp-title-" + Guid.NewGuid().ToString("N") + ".txt");
-                Directory.CreateDirectory(Path.GetDirectoryName(configPath));
-                File.WriteAllText(titleFile, title);
-                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleFile \"" + titleFile + "\"" + PointerArguments();
+                CloseOwnedPopup();
+                var psi = new System.Diagnostics.ProcessStartInfo();
+                psi.FileName="powershell.exe";
+                string title=Convert.ToBase64String(Encoding.UTF8.GetBytes("Copied image"));
+                string path=Convert.ToBase64String(Encoding.UTF8.GetBytes(imagePath));
+                psi.Arguments="-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" +
+                    popupPath + "\" -Kind Image -TitleBase64 " + title +
+                    " -ImagePathBase64 " + path + PointerArguments();
+                psi.CreateNoWindow=true; psi.UseShellExecute=false;
+                popupChild=System.Diagnostics.Process.Start(psi);
+                if (popupChild==null) throw new InvalidOperationException("popup process not created");
+                Log("image conversion -> popup process launched");
+                return true;
             }
-            else
+            catch(Exception e){Log("image popup launch failed: "+e.GetType().Name);return false;}
+        }
+
+        private bool LaunchTextPopup(string title)
+        {
+            if (!CalendarEnabled()) {Log("text popup disabled in settings");return false;}
+            try
             {
-                string encoded = Convert.ToBase64String(titleBytes);
-                psi.Arguments = "-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + popupPath + "\" -Kind Text -TitleBase64 " + encoded + PointerArguments();
+                CloseOwnedPopup();
+                CleanupTitleFiles();
+                var psi=new System.Diagnostics.ProcessStartInfo();
+                psi.FileName="powershell.exe";
+                byte[] titleBytes=Encoding.UTF8.GetBytes(title);
+                string titleFile=null;
+                if(titleBytes.Length>6000)
+                {
+                    titleFile=Path.Combine(Path.GetDirectoryName(configPath),
+                        "clipwarp-title-"+Guid.NewGuid().ToString("N")+".txt");
+                    Directory.CreateDirectory(Path.GetDirectoryName(configPath));
+                    File.WriteAllText(titleFile,title);
+                    psi.Arguments="-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" +
+                        popupPath + "\" -Kind Text -TitleFile \"" + titleFile + "\"" + PointerArguments();
+                }
+                else
+                {
+                    string encoded=Convert.ToBase64String(titleBytes);
+                    psi.Arguments="-NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" +
+                        popupPath + "\" -Kind Text -TitleBase64 " + encoded + PointerArguments();
+                }
+                psi.CreateNoWindow=true; psi.UseShellExecute=false;
+                try
+                {
+                    popupChild=System.Diagnostics.Process.Start(psi);
+                    if(popupChild==null) throw new InvalidOperationException("popup process not created");
+                    return true;
+                }
+                catch
+                {
+                    if(titleFile!=null){try{File.Delete(titleFile);}catch{}}
+                    throw;
+                }
             }
-            psi.CreateNoWindow = true;
-            psi.UseShellExecute = false;
-            try { popupChild = System.Diagnostics.Process.Start(psi); }
-            catch { if (titleFile != null) { try { File.Delete(titleFile); } catch { } } throw; }
+            catch(Exception e){Log("text popup launch failed: "+e.GetType().Name);return false;}
         }
 
         private void CloseOwnedPopup()
         {
             try { if (popupChild != null && !popupChild.HasExited) { popupChild.Kill(); popupChild.WaitForExit(1000); Log("replaced previous calendar popup"); } } catch { }
+            try {
+                if (popupChild != null && popupChild.HasExited && popupChild.ExitCode != 0)
+                    Log("popup exited with code " + popupChild.ExitCode + " (see clipwarp-popup-error.log)");
+            } catch { }
             try { if (popupChild != null) popupChild.Dispose(); } catch { }
             popupChild = null;
         }
@@ -1983,6 +2061,19 @@ Start-Sleep -Milliseconds 250
         } catch { }
     })
     [void]$contextMenu.Items.Add($targetMenu)
+
+    # Safe popup self-test: does not access or change clipboard.
+    $popupTest = New-Object System.Windows.Forms.ToolStripMenuItem("Test Clipboard Popup")
+    $popupTest.add_Click({
+        try {
+            if (-not $watcher.ShowTestPopup()) {
+                $trayIcon.ShowBalloonTip(5000, "ClipWarp Popup", "Popup disabled or failed to start. Check Calendar prompts and View Log.", [System.Windows.Forms.ToolTipIcon]::Warning)
+            }
+        } catch {
+            $trayIcon.ShowBalloonTip(5000, "ClipWarp Popup", "Popup test failed. Check clipwarp-popup-error.log.", [System.Windows.Forms.ToolTipIcon]::Warning)
+        }
+    })
+    [void]$contextMenu.Items.Add($popupTest)
 
     # Calendar prompts toggle - mirrors `clipwarp calendar enable|disable`.
     $calItem = New-Object System.Windows.Forms.ToolStripMenuItem("Calendar prompts")

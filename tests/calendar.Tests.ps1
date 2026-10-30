@@ -17,7 +17,7 @@ $popupErrors = $null
 $popupAst = [Management.Automation.Language.Parser]::ParseFile($popupPath, [ref]$popupTokens, [ref]$popupErrors)
 Assert-Equal 0 $popupErrors.Count 'calendar popup script parses without errors'
 $timeoutParameter = @($popupAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'TimeoutSeconds' })[0]
-Assert-Equal 3 ([int]$timeoutParameter.DefaultValue.SafeGetValue()) 'text and image popups default to a 3-second timeout'
+Assert-Equal 12 ([int]$timeoutParameter.DefaultValue.SafeGetValue()) 'text and image popups remain visible 12 seconds for accessibility'
 $acceptRunAssignments = @($popupAst.FindAll({ $args[0] -is [Management.Automation.Language.AssignmentStatementAst] }, $true) |
     Where-Object { $_.Left.Extent.Text -match 'AcceptButton' -and $_.Right.Extent.Text -match 'runButton' })
 Assert-Equal 0 $acceptRunAssignments.Count 'command popup source does not assign runButton as AcceptButton'
@@ -31,8 +31,8 @@ Assert-Equal 1 $runClickHandler.Count 'command popup source retains explicit run
 $date = [datetime]::new(2026, 8, 31, 22, 15, 0, [DateTimeKind]::Local)
 # Inspect source only: never start the watcher or access the system clipboard.
 $watchSource = [IO.File]::ReadAllText((Join-Path $root 'clipwarp-watch.ps1'))
-$rawTextBranch = 'string meaningful = txt\.Trim\(\);\s*if \(meaningful\.Length > 0\)\s*\{\s*if \(meaningful == lastTextFingerprint && \(DateTime\.Now - lastTextAt\)\.TotalSeconds < 2\)\s*\{ lastHandledSequence = sequence; return; \}\s*LaunchTextPopup\(txt\);\s*lastTextFingerprint = meaningful;'
-Assert-Equal $true ($watchSource -match $rawTextBranch) 'watcher passes raw txt to popup while retaining trimmed empty and fingerprint checks'
+$rawTextBranch = 'if \(!string\.IsNullOrWhiteSpace\(txt\)\)[\s\S]*?bool launched = LaunchTextPopup\(txt\);'
+Assert-Equal $true ($watchSource -match $rawTextBranch) 'watcher passes original clipboard text to popup without duplicate two-second suppression'
 Assert-Equal $false ($watchSource -match 'LaunchTextPopup\(meaningful\)') 'watcher never sends normalized text to popup'
 
 $rawCalendarText = " `t`r`nReview 2026-09-15 14:30`r`n`r`n  "
