@@ -66,6 +66,17 @@ afterwards (or run `. $PROFILE`) so the command is found.
 > No admin rights, no services, no dependencies — plain PowerShell and .NET classes
 > that ship with Windows. Everything runs **locally**; images never leave your machine.
 
+### Website installer Copy button
+
+On [ClipWarp's installation page](https://chakritago.github.io/clipwarp/),
+**Copy** copies the displayed PowerShell installer command. Browsers can deny
+clipboard write access even over HTTPS. The button first tries the Clipboard
+API, then a temporary-textarea copy if the API rejects or is unavailable.
+When both methods are blocked, the site **selects the full command** and displays
+instructions to press **Ctrl+C** (Thai and English). This never silently treats
+a denied clipboard write as success. Keyboard and screen-reader feedback
+remain available; no permission to paste or execute the command is requested.
+
 ## Quick start
 
 ### Automatic (recommended) — plain `Ctrl+C` → `Ctrl+V`
